@@ -24,7 +24,7 @@ alloy-rpc-types = "0.8"
 alloy-consensus = "0.8"
 
 # Miden client (matching agglayer-v0.1 tag)
-miden-client = { version = "0.13", features = ["tonic"] }
+miden-client = { version = "0.13", features = ["tonic", "testing"] }
 miden-client-sqlite-store = "0.13"
 miden-objects = "0.13"
 miden-lib = "0.13"
