@@ -1,0 +1,126 @@
+version: "3.8"
+
+services:
+  # PostgreSQL database for Miden client state
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: miden
+      POSTGRES_PASSWORD: miden
+      POSTGRES_DB: miden_proxy
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U miden"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Miden node (devnet mode)
+  miden-node:
+    image: ghcr.io/0xpolygonmiden/miden-node:latest
+    command: ["--dev"]
+    ports:
+      - "57291:57291"
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=:57291"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # L1 devnet (Anvil - Ethereum local chain)
+  l1-anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint: ["anvil"]
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--chain-id"
+      - "31337"
+      - "--block-time"
+      - "1"
+    ports:
+      - "8545:8545"
+    healthcheck:
+      test: ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8545"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Bridge service (AggLayer bridge interface)
+  bridge-service:
+    image: ghcr.io/0xpolygonmiden/bridge-service:latest
+    environment:
+      DATABASE_URL: postgres://miden:miden@postgres:5432/miden_proxy
+      MIDEN_RPC_URL: http://miden-node:57291
+      L1_RPC_URL: http://l1-anvil:8545
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      miden-node:
+        condition: service_healthy
+      l1-anvil:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # The proxy service
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      MIDEN_RPC_URL: http://miden-node:57291
+      BRIDGE_SERVICE_URL: http://bridge-service:8080
+      L1_RPC_URL: http://l1-anvil:8545
+      DATABASE_URL: postgres://miden:miden@postgres:5432/miden_proxy
+      RUST_LOG: info
+    ports:
+      - "8546:8546"
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      miden-node:
+        condition: service_healthy
+      bridge-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Test runner container
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      PROXY_URL: http://proxy:8546
+      MIDEN_RPC_URL: http://miden-node:57291
+      BRIDGE_SERVICE_URL: http://bridge-service:8080
+      L1_RPC_URL: http://l1-anvil:8545
+      DATABASE_URL: postgres://miden:miden@postgres:5432/miden_proxy
+      RUST_LOG: debug
+    depends_on:
+      proxy:
+        condition: service_healthy
+    profiles:
+      - test
+
+volumes:
+  postgres_data:
+
+networks:
+  default:
+    name: miden-proxy-network

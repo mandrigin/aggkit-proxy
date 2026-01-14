@@ -1,0 +1,25 @@
+# Miden RPC Proxy Configuration - Local Development
+# Use this when running services on localhost (outside Docker)
+
+[server]
+listen_port = 8546
+listen_host = "127.0.0.1"
+
+[miden]
+rpc_url = "http://localhost:57291"
+chain_id = "0x1000"
+
+[bridge]
+service_url = "http://localhost:8080"
+account_id = ""
+
+[l1]
+rpc_url = "http://localhost:8545"
+chain_id = 31337
+
+[database]
+url = "postgres://miden:miden@localhost:5432/miden_proxy"
+
+[logging]
+level = "debug"
+format = "pretty"
