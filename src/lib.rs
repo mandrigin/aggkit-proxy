@@ -5,17 +5,19 @@
 #![deny(missing_docs)]
 #![deny(clippy::all)]
 
+pub mod address_mapper;
+pub mod claim_tracker;
 pub mod client;
 pub mod config;
 pub mod decode;
 pub mod error;
 pub mod receipt;
+pub mod storage;
 pub mod types;
 
-// Note: These modules are pending merge from other branches:
-// pub mod address_mapper;  // mi-w4a (capable)
-// pub mod claim_tracker;   // mi-2iy (cheedo)
-
+// Re-exports for convenience
+pub use address_mapper::{AddressMapper, AddressMapperConfig, EthAddress, MidenAccountId};
+pub use claim_tracker::ClaimTracker;
 pub use config::{ConfigError, ProxyConfig};
 pub use decode::{
     decode_transaction, is_claim_asset, parse_claim_asset, DecodeError, DecodedTransaction,
@@ -26,4 +28,5 @@ pub use receipt::{
     miden_tx_to_eth_receipt, poll_tx_confirmation, EthReceipt, EthTxHash, MidenTxId, TxHashMap,
     TxStatus, BRIDGE_CONTRACT_ADDRESS,
 };
+pub use storage::{AddressMapping, MappingStorage};
 pub use types::ClaimAssetParams;
