@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use miden_client::Client;
-use miden_objects::{
+use miden_protocol::{
     account::AccountId,
     asset::FungibleAsset,
     note::{Note, NoteType},
@@ -142,10 +142,10 @@ pub fn create_bridge_claim_note<R>(
     rng: &mut R,
 ) -> Result<Note, ClientError>
 where
-    R: miden_client::crypto::FeltRng,
+    R: miden_protocol::crypto::rand::FeltRng,
 {
-    use miden_lib::note::create_p2id_note;
-    use miden_objects::asset::Asset;
+    use miden_standards::note::create_p2id_note;
+    use miden_protocol::asset::Asset;
 
     info!(
         sender = %params.sender_account_id,
@@ -162,15 +162,15 @@ where
         "Converted assets to Asset enum"
     );
 
-    // Create the P2ID note using miden-lib's helper
+    // Create the P2ID note using miden-standards helper
     // P2ID notes can only be consumed by the target account
-    info!("Calling miden-lib create_p2id_note...");
+    info!("Calling miden-standards create_p2id_note...");
     let note = create_p2id_note(
         params.sender_account_id,
         params.recipient_account_id,
         assets,
         params.note_type,
-        Felt::new(0), // recall height
+        Felt::new(0), // aux field
         rng,
     )
     .map_err(|e| {
@@ -252,7 +252,7 @@ pub async fn init_client(
     // Build the client using the new builder pattern
     let keystore_path = config.store_path.join("keystore");
     let keystore_path_str = keystore_path.to_string_lossy();
-    let client: Client<miden_client::keystore::FilesystemKeyStore<_>> = ClientBuilder::new()
+    let client: Client<miden_client::keystore::FilesystemKeyStore> = ClientBuilder::new()
         .grpc_client(&endpoint, Some(10_000))
         .store(Arc::new(store))
         .filesystem_keystore(&keystore_path_str)
