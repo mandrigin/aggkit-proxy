@@ -453,8 +453,6 @@ impl EthApiServer for EthApiImpl {
             }
         };
 
-        let state_clone = Arc::clone(&self.state);
-        let tx_hash_clone = tx_hash.clone();
         let bridge_faucet_id = miden_config.bridge_faucet_id;
 
         // Convert MidenAccountId ([u8; 15]) to miden_protocol::AccountId
@@ -475,106 +473,104 @@ impl EthApiServer for EthApiImpl {
             )
         })?;
 
-        // Spawn background task for Miden submission
-        tokio::spawn(async move {
-            info!(tx_hash = %tx_hash_clone, "Starting Miden submission in background task");
+        // Step 10: Submit to Miden network (inline, not background - Client is not Send)
+        info!(tx_hash = %tx_hash, "Starting Miden submission");
 
-            // Create client on-demand (Client<FilesystemKeyStore> is not Send/Sync)
-            let mut client = match init_client(&miden_config).await {
-                Ok(c) => c,
-                Err(e) => {
-                    error!(tx_hash = %tx_hash_clone, error = %e, "Failed to initialize Miden client");
-                    state_clone.record_tx(tx_hash_clone, TxStatus::Failed {
-                        reason: format!("Client initialization failed: {}", e),
-                    });
-                    return;
-                }
-            };
-
-            // Create RNG for note creation (RpoRandomCoin implements FeltRng)
-            let seed: [u32; 4] = [rand::random(), rand::random(), rand::random(), rand::random()];
-            let mut rng = RpoRandomCoin::new(Word::from(seed));
-
-            // Create bridge claim parameters
-            let asset = match FungibleAsset::new(bridge_faucet_id, amount_u64) {
-                Ok(a) => a,
-                Err(e) => {
-                    error!(tx_hash = %tx_hash_clone, error = %e, "Failed to create FungibleAsset");
-                    state_clone.record_tx(tx_hash_clone, TxStatus::Failed {
-                        reason: format!("Failed to create asset: {}", e),
-                    });
-                    return;
-                }
-            };
-
-            let bridge_params = BridgeClaimParams {
-                sender_account_id: bridge_faucet_id,
-                recipient_account_id,
-                assets: vec![asset],
-                note_type: NoteType::Public,
-            };
-
-            // Step 10.1: Create the bridge claim note
-            info!(tx_hash = %tx_hash_clone, "Creating bridge claim P2ID note...");
-            let note = match create_bridge_claim_note(bridge_params, &mut rng) {
-                Ok(n) => {
-                    info!(tx_hash = %tx_hash_clone, note_id = ?n.id(), "Note created successfully");
-                    n
-                }
-                Err(e) => {
-                    error!(tx_hash = %tx_hash_clone, error = %e, "Failed to create bridge claim note");
-                    state_clone.record_tx(tx_hash_clone, TxStatus::Failed {
-                        reason: format!("Note creation failed: {}", e),
-                    });
-                    return;
-                }
-            };
-
-            // Step 10.2: Build the transaction request
-            info!(tx_hash = %tx_hash_clone, "Building transaction request...");
-            let tx_request = match build_claim_transaction_request(bridge_faucet_id, vec![note]) {
-                Ok(req) => req,
-                Err(e) => {
-                    error!(tx_hash = %tx_hash_clone, error = %e, "Failed to build transaction request");
-                    state_clone.record_tx(tx_hash_clone, TxStatus::Failed {
-                        reason: format!("Transaction build failed: {}", e),
-                    });
-                    return;
-                }
-            };
-
-            // Step 10.3: Submit the transaction
-            info!(tx_hash = %tx_hash_clone, "Submitting transaction to Miden network...");
-            match submit_transaction(&mut client, bridge_faucet_id, tx_request).await {
-                Ok(miden_tx_id) => {
-                    info!(
-                        tx_hash = %tx_hash_clone,
-                        miden_tx_id = %miden_tx_id,
-                        "Transaction submitted successfully to Miden network"
-                    );
-
-                    // Sync state to get block number
-                    let block_number = match client.sync_state().await {
-                        Ok(sync_result) => sync_result.block_num.as_u32() as u64,
-                        Err(_) => state_clone.get_block_height(),
-                    };
-
-                    // Step 10.4: Update status to Confirmed
-                    state_clone.record_tx(tx_hash_clone.clone(), TxStatus::Confirmed { block_number });
-                    info!(
-                        tx_hash = %tx_hash_clone,
-                        block_number = block_number,
-                        "Transaction status updated to CONFIRMED"
-                    );
-                }
-                Err(e) => {
-                    error!(tx_hash = %tx_hash_clone, error = %e, "Failed to submit transaction");
-                    state_clone.record_tx(tx_hash_clone, TxStatus::Failed {
-                        reason: format!("Submission failed: {}", e),
-                    });
-                }
+        // Create client on-demand (Client<FilesystemKeyStore> is not Send/Sync)
+        let mut client = match init_client(&miden_config).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!(tx_hash = %tx_hash, error = %e, "Failed to initialize Miden client");
+                self.state.record_tx(tx_hash.clone(), TxStatus::Failed {
+                    reason: format!("Client initialization failed: {}", e),
+                });
+                return Ok(tx_hash);
             }
-        });
+        };
+
+        // Create RNG for note creation (RpoRandomCoin implements FeltRng)
+        let seed: [u32; 4] = [rand::random(), rand::random(), rand::random(), rand::random()];
+        let mut rng = RpoRandomCoin::new(Word::from(seed));
+
+        // Create bridge claim parameters
+        let asset = match FungibleAsset::new(bridge_faucet_id, amount_u64) {
+            Ok(a) => a,
+            Err(e) => {
+                error!(tx_hash = %tx_hash, error = %e, "Failed to create FungibleAsset");
+                self.state.record_tx(tx_hash.clone(), TxStatus::Failed {
+                    reason: format!("Failed to create asset: {}", e),
+                });
+                return Ok(tx_hash);
+            }
+        };
+
+        let bridge_params = BridgeClaimParams {
+            sender_account_id: bridge_faucet_id,
+            recipient_account_id,
+            assets: vec![asset],
+            note_type: NoteType::Public,
+        };
+
+        // Step 10.1: Create the bridge claim note
+        info!(tx_hash = %tx_hash, "Creating bridge claim P2ID note...");
+        let note = match create_bridge_claim_note(bridge_params, &mut rng) {
+            Ok(n) => {
+                info!(tx_hash = %tx_hash, note_id = ?n.id(), "Note created successfully");
+                n
+            }
+            Err(e) => {
+                error!(tx_hash = %tx_hash, error = %e, "Failed to create bridge claim note");
+                self.state.record_tx(tx_hash.clone(), TxStatus::Failed {
+                    reason: format!("Note creation failed: {}", e),
+                });
+                return Ok(tx_hash);
+            }
+        };
+
+        // Step 10.2: Build the transaction request
+        info!(tx_hash = %tx_hash, "Building transaction request...");
+        let tx_request = match build_claim_transaction_request(bridge_faucet_id, vec![note]) {
+            Ok(req) => req,
+            Err(e) => {
+                error!(tx_hash = %tx_hash, error = %e, "Failed to build transaction request");
+                self.state.record_tx(tx_hash.clone(), TxStatus::Failed {
+                    reason: format!("Transaction build failed: {}", e),
+                });
+                return Ok(tx_hash);
+            }
+        };
+
+        // Step 10.3: Submit the transaction
+        info!(tx_hash = %tx_hash, "Submitting transaction to Miden network...");
+        match submit_transaction(&mut client, bridge_faucet_id, tx_request).await {
+            Ok(miden_tx_id) => {
+                info!(
+                    tx_hash = %tx_hash,
+                    miden_tx_id = %miden_tx_id,
+                    "Transaction submitted successfully to Miden network"
+                );
+
+                // Sync state to get block number
+                let block_number = match client.sync_state().await {
+                    Ok(sync_result) => sync_result.block_num.as_u32() as u64,
+                    Err(_) => self.state.get_block_height(),
+                };
+
+                // Step 10.4: Update status to Confirmed
+                self.state.record_tx(tx_hash.clone(), TxStatus::Confirmed { block_number });
+                info!(
+                    tx_hash = %tx_hash,
+                    block_number = block_number,
+                    "Transaction status updated to CONFIRMED"
+                );
+            }
+            Err(e) => {
+                error!(tx_hash = %tx_hash, error = %e, "Failed to submit transaction");
+                self.state.record_tx(tx_hash.clone(), TxStatus::Failed {
+                    reason: format!("Submission failed: {}", e),
+                });
+            }
+        }
 
         Ok(tx_hash)
     }
