@@ -23,19 +23,15 @@ alloy-rlp = "0.3"
 alloy-rpc-types = "0.8"
 alloy-consensus = { version = "0.8", features = ["k256"] }
 
-# Miden client (from crates.io)
-miden-client = { version = "0.12", features = ["tonic"] }
-miden-objects = "0.12"
-miden-lib = "0.12"
-miden-tx = "0.12"
-miden-crypto = "0.13"
-miden-client-sqlite-store = "0.12"
+# Miden crates (agglayer-v0.1 tag for compatibility)
+miden-client = { git = "https://github.com/0xMiden/miden-client", tag = "agglayer-v0.1", features = ["tonic", "std"] }
+miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client", tag = "agglayer-v0.1" }
 
-# NOTE: miden-agglayer (agglayer-v0.1) uses miden-protocol 0.13/miden-crypto 0.19
-# which is incompatible with miden-client 0.12. When miden-client is updated
-# to a compatible version, add:
-# miden-agglayer = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1" }
-# For now, we use custom P2ID note creation as a bridge implementation.
+# Miden base crates
+miden-protocol = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1", features = ["std"] }
+miden-standards = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1" }
+miden-agglayer = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1" }
+miden-tx = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1" }
 
 # Additional dependencies
 sha3 = "0.10"
