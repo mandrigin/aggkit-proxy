@@ -1,11 +1,14 @@
 # Miden Integration Tests
-# Entry point: make test-phase1
+# Entry points: make test-phase1, make test-phase3
 
 SHELL := /bin/bash
 .PHONY: test test-phase1 test-phase2 test-phase3 test-all setup clean
 
-# Default Miden node endpoint (override with MIDEN_NODE_URL)
+# Service endpoints (override with environment variables)
 MIDEN_NODE_URL ?= http://localhost:57291
+PROXY_URL ?= http://localhost:8546
+BRIDGE_SERVICE_URL ?= http://localhost:8080
+L1_RPC_URL ?= http://localhost:8545
 
 # Test runner
 PYTEST := python -m pytest
@@ -32,9 +35,20 @@ test-phase2:
 	$(PYTEST) $(PYTEST_OPTS) tests/phase2/ -m "phase2"
 
 # Phase 3: Full Integration Tests
+# TC-3.1 through TC-3.15
+# Requires: L1 devnet (Anvil), Bridge service, full topology
 test-phase3:
 	@echo "=== Phase 3: Full Integration Tests ==="
+	@echo "Proxy URL: $(PROXY_URL)"
+	@echo "Miden Node: $(MIDEN_NODE_URL)"
+	@echo "Bridge Service: $(BRIDGE_SERVICE_URL)"
+	@echo "L1 RPC: $(L1_RPC_URL)"
+	PROXY_URL=$(PROXY_URL) MIDEN_NODE_URL=$(MIDEN_NODE_URL) \
+	BRIDGE_SERVICE_URL=$(BRIDGE_SERVICE_URL) L1_RPC_URL=$(L1_RPC_URL) \
 	$(PYTEST) $(PYTEST_OPTS) tests/phase3/ -m "phase3"
+
+# Alias for test-phase3
+test: test-phase3
 
 # Clean up
 clean:
