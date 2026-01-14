@@ -3,14 +3,13 @@ use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::server::Server;
 use jsonrpsee::types::ErrorObjectOwned;
 use parking_lot::RwLock;
-use rand_chacha::ChaCha20Rng;
 use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock as TokioRwLock;
 use tracing::{debug, error, info, warn};
 
 // Import library modules for claim processing
@@ -21,16 +20,10 @@ use miden_rpc_proxy::{
 
 // Import Miden client types for submission
 use miden_rpc_proxy::client::{
-    create_bridge_claim_note, build_claim_transaction_request, submit_transaction,
-    init_client, MidenClientConfig, BridgeClaimParams, ClientError,
+    build_claim_transaction_request, create_bridge_claim_note, init_client, submit_transaction,
+    BridgeClaimParams, MidenClientConfig,
 };
-use miden_protocol::{
-    account::AccountId,
-    asset::FungibleAsset,
-    note::NoteType,
-};
-use miden_client::Client;
-use miden_client::keystore::FilesystemKeyStore;
+use miden_protocol::{account::AccountId, asset::FungibleAsset, note::NoteType};
 
 /// Miden chain ID (placeholder - configure as needed)
 const MIDEN_CHAIN_ID: u64 = 0x4d494445; // "MIDE" in hex
@@ -78,10 +71,8 @@ pub struct BridgeState {
     claim_tracker: ClaimTracker,
     /// Address mapper for Eth -> Miden address resolution (wrapped in Mutex for Sync)
     address_mapper: parking_lot::Mutex<AddressMapper>,
-    /// Miden client for transaction submission
-    miden_client: TokioRwLock<Option<Client<FilesystemKeyStore>>>,
-    /// Bridge faucet account ID for asset distribution
-    bridge_faucet_id: Option<AccountId>,
+    /// Miden client config for on-demand client creation (Client is not Send/Sync)
+    miden_config: Option<MidenClientConfig>,
 }
 
 impl BridgeState {
@@ -101,21 +92,14 @@ impl BridgeState {
             block_height: RwLock::new(0),
             claim_tracker,
             address_mapper: parking_lot::Mutex::new(address_mapper),
-            miden_client: TokioRwLock::new(None),
-            bridge_faucet_id: None,
+            miden_config: None,
         }
     }
 
-    /// Initialize the Miden client for transaction submission
-    pub async fn init_miden_client(&mut self, config: MidenClientConfig) -> Result<(), ClientError> {
-        info!(rpc_endpoint = %config.rpc_endpoint, "Initializing Miden client...");
-
-        let client = init_client(&config).await?;
-        self.bridge_faucet_id = Some(config.bridge_faucet_id);
-        *self.miden_client.write().await = Some(client);
-
-        info!("Miden client initialized successfully");
-        Ok(())
+    /// Set the Miden client configuration for on-demand client creation
+    pub fn set_miden_config(&mut self, config: MidenClientConfig) {
+        info!(rpc_endpoint = %config.rpc_endpoint, "Miden client config set");
+        self.miden_config = Some(config);
     }
 
     pub fn get_nonce(&self, address: &str) -> u64 {
@@ -456,15 +440,18 @@ impl EthApiServer for EthApiImpl {
         );
 
         // Step 10: Submit to Miden network in background task
-        let state_clone = Arc::clone(&self.state);
-        let tx_hash_clone = tx_hash.clone();
-        let bridge_faucet_id = match self.state.bridge_faucet_id {
-            Some(id) => id,
+        // Clone config for the spawned task (Client is not Send/Sync, so we create on-demand)
+        let miden_config = match &self.state.miden_config {
+            Some(cfg) => cfg.clone(),
             None => {
-                warn!("Bridge faucet ID not configured - skipping Miden submission");
+                warn!("Miden client not configured - skipping Miden submission");
                 return Ok(tx_hash);
             }
         };
+
+        let state_clone = Arc::clone(&self.state);
+        let tx_hash_clone = tx_hash.clone();
+        let bridge_faucet_id = miden_config.bridge_faucet_id;
 
         // Convert amount from U256 to u64 for FungibleAsset
         let amount_u64: u64 = claim_params.amount.try_into().map_err(|_| {
@@ -479,14 +466,13 @@ impl EthApiServer for EthApiImpl {
         tokio::spawn(async move {
             info!(tx_hash = %tx_hash_clone, "Starting Miden submission in background task");
 
-            // Get mutable access to the client
-            let mut client_guard = state_clone.miden_client.write().await;
-            let client = match client_guard.as_mut() {
-                Some(c) => c,
-                None => {
-                    error!(tx_hash = %tx_hash_clone, "Miden client not initialized");
+            // Create client on-demand (Client<FilesystemKeyStore> is not Send/Sync)
+            let mut client = match init_client(&miden_config).await {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(tx_hash = %tx_hash_clone, error = %e, "Failed to initialize Miden client");
                     state_clone.record_tx(tx_hash_clone, TxStatus::Failed {
-                        reason: "Miden client not initialized".to_string(),
+                        reason: format!("Client initialization failed: {}", e),
                     });
                     return;
                 }
@@ -545,7 +531,7 @@ impl EthApiServer for EthApiImpl {
 
             // Step 10.3: Submit the transaction
             info!(tx_hash = %tx_hash_clone, "Submitting transaction to Miden network...");
-            match submit_transaction(client, bridge_faucet_id, tx_request).await {
+            match submit_transaction(&mut client, bridge_faucet_id, tx_request).await {
                 Ok(miden_tx_id) => {
                     info!(
                         tx_hash = %tx_hash_clone,
@@ -734,9 +720,7 @@ async fn main() -> anyhow::Result<()> {
             bridge_faucet_id: faucet_id,
         };
 
-        if let Err(e) = state.init_miden_client(config).await {
-            warn!(error = %e, "Failed to initialize Miden client - submissions will be disabled");
-        }
+        state.set_miden_config(config);
     } else {
         info!("Miden client not configured (set MIDEN_RPC_ENDPOINT and MIDEN_BRIDGE_FAUCET_ID to enable)");
     }
