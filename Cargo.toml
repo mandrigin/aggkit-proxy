@@ -1,0 +1,54 @@
+[package]
+name = "miden-rpc-proxy"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "JSON-RPC proxy server bridging Ethereum-style RPC to Miden network"
+license = "MIT"
+
+[dependencies]
+# RPC server
+jsonrpsee = { version = "0.26", features = ["server", "macros"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP middleware
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+
+# Ethereum types
+alloy-primitives = "0.8"
+alloy-rlp = "0.3"
+alloy-rpc-types = "0.8"
+alloy-consensus = "0.8"
+
+# Miden client
+miden-client = { version = "0.12", features = ["tonic"] }
+miden-client-sqlite-store = "0.12"
+miden-objects = "0.12"
+miden-lib = "0.12"
+miden-crypto = "0.13"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+toml = "0.8"
+
+# Concurrent data structures
+dashmap = "6"
+
+# Error handling and logging
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
