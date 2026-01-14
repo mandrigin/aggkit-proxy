@@ -2,18 +2,13 @@
 //!
 //! TC-3.1 through TC-3.9: End-to-end integration tests covering
 //! the complete flow from L1 deposits through Miden execution to withdrawals.
-//!
-//! Uses miden-client and miden-protocol from agglayer-v0.1 tag.
 
-use miden_client::Client;
-use miden_client_sqlite_store::SqliteStore;
 use miden_protocol::{
-    account::{AccountId, AccountStorageMode, AccountType},
+    account::{AccountStorageMode, AccountType},
     asset::{FungibleAsset, TokenSymbol},
     note::NoteType,
     Felt,
 };
-use std::env;
 
 mod common;
 use common::create_test_client;
@@ -28,8 +23,9 @@ mod tc_3_1_deposit_flow {
     /// TC-3.1.1: Complete deposit flow simulation
     #[tokio::test]
     async fn test_deposit_flow() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, _state) = create_test_client().await;
 
+        // Simulate L1 deposit by minting on Miden side
         let token_symbol = TokenSymbol::new("DEP1").expect("Invalid symbol");
         let (faucet, _) = client
             .new_faucet(AccountStorageMode::Public, token_symbol, 8, Felt::new(1_000_000_000))
@@ -41,6 +37,7 @@ mod tc_3_1_deposit_flow {
             .await
             .expect("Failed to create user");
 
+        // Deposit (mint) tokens
         let result = client
             .new_mint_transaction(faucet.id(), user.id(), 100_000_000, NoteType::Public)
             .await;
@@ -51,7 +48,7 @@ mod tc_3_1_deposit_flow {
     /// TC-3.1.2: Deposit creates consumable note
     #[tokio::test]
     async fn test_deposit_creates_note() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("DEP2").expect("Invalid symbol");
         let (faucet, _) = client
@@ -71,7 +68,7 @@ mod tc_3_1_deposit_flow {
 
         client.sync_state().await.unwrap();
 
-        let notes = client.get_consumable_notes(Some(user.id())).unwrap();
+        let notes = client.get_consumable_notes(Some(user.id())).await.unwrap();
         assert!(!notes.is_empty(), "Deposit should create consumable note");
     }
 }
@@ -86,7 +83,7 @@ mod tc_3_2_transfer_flow {
     /// TC-3.2.1: Complete transfer between accounts
     #[tokio::test]
     async fn test_transfer_flow() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("TRF1").expect("Invalid symbol");
         let (faucet, _) = client
@@ -104,6 +101,7 @@ mod tc_3_2_transfer_flow {
             .await
             .unwrap();
 
+        // Fund Alice
         client
             .new_mint_transaction(faucet.id(), alice.id(), 1_000_000_000, NoteType::Public)
             .await
@@ -111,12 +109,14 @@ mod tc_3_2_transfer_flow {
 
         client.sync_state().await.unwrap();
 
-        let alice_notes = client.get_consumable_notes(Some(alice.id())).unwrap();
+        // Alice consumes mint note
+        let alice_notes = client.get_consumable_notes(Some(alice.id())).await.unwrap();
         if !alice_notes.is_empty() {
             let ids: Vec<_> = alice_notes.iter().map(|n| n.id()).collect();
-            client.new_consume_transaction(alice.id(), &ids).await.unwrap();
+            client.new_consume_transaction(alice.id(), ids).await.unwrap();
         }
 
+        // Alice transfers to Bob
         let asset = FungibleAsset::new(faucet.id(), 100_000_000).unwrap();
         let result = client
             .new_send_transaction(alice.id(), bob.id(), asset.into(), NoteType::Public)
@@ -136,7 +136,7 @@ mod tc_3_3_withdrawal_flow {
     /// TC-3.3.1: Withdrawal preparation (burn tokens)
     #[tokio::test]
     async fn test_withdrawal_preparation() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("WDR1").expect("Invalid symbol");
         let (faucet, _) = client
@@ -149,6 +149,7 @@ mod tc_3_3_withdrawal_flow {
             .await
             .unwrap();
 
+        // Fund user
         client
             .new_mint_transaction(faucet.id(), user.id(), 100_000_000, NoteType::Public)
             .await
@@ -156,10 +157,11 @@ mod tc_3_3_withdrawal_flow {
 
         client.sync_state().await.unwrap();
 
-        let notes = client.get_consumable_notes(Some(user.id())).unwrap();
+        // Consume to have balance
+        let notes = client.get_consumable_notes(Some(user.id())).await.unwrap();
         if !notes.is_empty() {
             let ids: Vec<_> = notes.iter().map(|n| n.id()).collect();
-            let result = client.new_consume_transaction(user.id(), &ids).await;
+            let result = client.new_consume_transaction(user.id(), ids).await;
             assert!(result.is_ok(), "Should be able to consume for withdrawal prep");
         }
     }
@@ -175,7 +177,7 @@ mod tc_3_4_multi_user {
     /// TC-3.4.1: Multiple concurrent users
     #[tokio::test]
     async fn test_multi_user_scenario() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("MUSR").expect("Invalid symbol");
         let (faucet, _) = client
@@ -183,6 +185,7 @@ mod tc_3_4_multi_user {
             .await
             .unwrap();
 
+        // Create multiple users
         let mut users = Vec::new();
         for _ in 0..5 {
             let (user, _) = client
@@ -192,6 +195,7 @@ mod tc_3_4_multi_user {
             users.push(user.id());
         }
 
+        // Fund all users
         for user_id in &users {
             client
                 .new_mint_transaction(faucet.id(), *user_id, 100_000_000, NoteType::Public)
@@ -201,8 +205,9 @@ mod tc_3_4_multi_user {
 
         client.sync_state().await.unwrap();
 
+        // Verify all users have notes
         for user_id in &users {
-            let notes = client.get_consumable_notes(Some(*user_id)).unwrap();
+            let notes = client.get_consumable_notes(Some(*user_id)).await.unwrap();
             assert!(!notes.is_empty(), "User {:?} should have notes", user_id);
         }
     }
@@ -218,7 +223,7 @@ mod tc_3_5_error_recovery {
     /// TC-3.5.1: Recovery after failed transaction
     #[tokio::test]
     async fn test_recovery_after_failure() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("RCV1").expect("Invalid symbol");
         let (faucet, _) = client
@@ -231,6 +236,7 @@ mod tc_3_5_error_recovery {
             .await
             .unwrap();
 
+        // Successful operation after potential failure
         let result = client
             .new_mint_transaction(faucet.id(), user.id(), 100_000_000, NoteType::Public)
             .await;
@@ -249,12 +255,9 @@ mod tc_3_6_state_verification {
     /// TC-3.6.1: State remains consistent after operations
     #[tokio::test]
     async fn test_state_consistency() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, _state) = create_test_client().await;
 
-        let initial_height = {
-            client.sync_state().await.unwrap();
-            client.get_sync_height()
-        };
+        let initial_height = client.sync_state().await.unwrap();
 
         let token_symbol = TokenSymbol::new("STV1").expect("Invalid symbol");
         let (faucet, _) = client
@@ -272,12 +275,9 @@ mod tc_3_6_state_verification {
             .await
             .unwrap();
 
-        let final_height = {
-            client.sync_state().await.unwrap();
-            client.get_sync_height()
-        };
+        let final_height = client.sync_state().await.unwrap();
 
-        assert!(final_height >= initial_height, "Block height should not decrease");
+        assert!(final_height.block_num >= initial_height.block_num, "Block height should not decrease");
     }
 }
 
@@ -291,7 +291,7 @@ mod tc_3_7_performance {
     /// TC-3.7.1: Handle multiple operations in sequence
     #[tokio::test]
     async fn test_sequential_operations() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("PERF").expect("Invalid symbol");
         let (faucet, _) = client
@@ -299,16 +299,17 @@ mod tc_3_7_performance {
             .await
             .unwrap();
 
+        // Perform multiple operations
         for i in 0..3 {
             let (user, _) = client
                 .new_account(AccountStorageMode::Public, AccountType::RegularAccountUpdatableCode)
                 .await
-                .unwrap_or_else(|_| panic!("Failed to create user {}", i));
+                .expect(&format!("Failed to create user {}", i));
 
             client
                 .new_mint_transaction(faucet.id(), user.id(), 10_000_000, NoteType::Public)
                 .await
-                .unwrap_or_else(|_| panic!("Failed to mint to user {}", i));
+                .expect(&format!("Failed to mint to user {}", i));
         }
 
         client.sync_state().await.expect("Final sync should succeed");
@@ -322,10 +323,10 @@ mod tc_3_7_performance {
 mod tc_3_8_edge_cases {
     use super::*;
 
-    /// TC-3.8.1: Handle minimum transfer
+    /// TC-3.8.1: Handle zero-value edge case
     #[tokio::test]
     async fn test_minimum_transfer() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("EDGE").expect("Invalid symbol");
         let (faucet, _) = client
@@ -338,6 +339,7 @@ mod tc_3_8_edge_cases {
             .await
             .unwrap();
 
+        // Minimum non-zero amount
         let result = client
             .new_mint_transaction(faucet.id(), user.id(), 1, NoteType::Public)
             .await;
@@ -356,8 +358,9 @@ mod tc_3_9_full_cycle {
     /// TC-3.9.1: Complete deposit-transfer-withdraw cycle
     #[tokio::test]
     async fn test_full_cycle() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, _state) = create_test_client().await;
 
+        // Setup
         let token_symbol = TokenSymbol::new("FULL").expect("Invalid symbol");
         let (faucet, _) = client
             .new_faucet(AccountStorageMode::Public, token_symbol, 8, Felt::new(10_000_000_000))
@@ -383,11 +386,11 @@ mod tc_3_9_full_cycle {
         client.sync_state().await.expect("Sync after deposit");
 
         // Step 2: Alice consumes deposit
-        let alice_notes = client.get_consumable_notes(Some(alice.id())).unwrap();
+        let alice_notes = client.get_consumable_notes(Some(alice.id())).await.unwrap();
         if !alice_notes.is_empty() {
             let ids: Vec<_> = alice_notes.iter().map(|n| n.id()).collect();
             client
-                .new_consume_transaction(alice.id(), &ids)
+                .new_consume_transaction(alice.id(), ids)
                 .await
                 .expect("Alice consume");
         }
@@ -402,15 +405,16 @@ mod tc_3_9_full_cycle {
         client.sync_state().await.expect("Sync after transfer");
 
         // Step 4: Bob consumes transfer
-        let bob_notes = client.get_consumable_notes(Some(bob.id())).unwrap();
+        let bob_notes = client.get_consumable_notes(Some(bob.id())).await.unwrap();
         if !bob_notes.is_empty() {
             let ids: Vec<_> = bob_notes.iter().map(|n| n.id()).collect();
             client
-                .new_consume_transaction(bob.id(), &ids)
+                .new_consume_transaction(bob.id(), ids)
                 .await
                 .expect("Bob consume");
         }
 
+        // Verify final state
         client.sync_state().await.expect("Final sync");
         println!("Full cycle test completed successfully");
     }
