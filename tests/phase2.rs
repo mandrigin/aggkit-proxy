@@ -3,14 +3,12 @@
 //! TC-2.1 through TC-2.5: CLAIM note creation, redemption, expiry,
 //! faucet interaction, and cross-chain coordination.
 
-use miden_client::client::Client;
-use miden_objects::{
-    accounts::{AccountStorageMode, AccountType},
-    assets::{FungibleAsset, TokenSymbol},
-    notes::NoteType,
+use miden_protocol::{
+    account::{AccountStorageMode, AccountType},
+    asset::{FungibleAsset, TokenSymbol},
+    note::NoteType,
     Felt,
 };
-use std::env;
 
 mod common;
 use common::create_test_client;
@@ -25,7 +23,7 @@ mod tc_2_1_claim_creation {
     /// TC-2.1.1: Create a CLAIM note for cross-chain redemption
     #[tokio::test]
     async fn test_create_claim_note() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("CLM1").expect("Invalid symbol");
         let (faucet, _) = client
@@ -49,7 +47,7 @@ mod tc_2_1_claim_creation {
     /// TC-2.1.2: CLAIM note has correct metadata
     #[tokio::test]
     async fn test_claim_note_metadata() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("CLM2").expect("Invalid symbol");
         let (faucet, _) = client
@@ -84,7 +82,7 @@ mod tc_2_2_claim_redemption {
     /// TC-2.2.1: Redeem CLAIM note successfully
     #[tokio::test]
     async fn test_redeem_claim() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("RDM1").expect("Invalid symbol");
         let (faucet, _) = client
@@ -115,7 +113,7 @@ mod tc_2_2_claim_redemption {
     /// TC-2.2.2: Cannot redeem same CLAIM twice
     #[tokio::test]
     async fn test_no_double_redemption() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("RDM2").expect("Invalid symbol");
         let (faucet, _) = client
@@ -163,7 +161,7 @@ mod tc_2_3_claim_expiry {
     /// TC-2.3.1: CLAIM notes have expiry tracking
     #[tokio::test]
     async fn test_claim_expiry_tracking() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("EXP1").expect("Invalid symbol");
         let (faucet, _) = client
@@ -198,7 +196,7 @@ mod tc_2_4_faucet_interaction {
     /// TC-2.4.1: Faucet can mint multiple CLAIMs
     #[tokio::test]
     async fn test_faucet_multiple_mints() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("MULT").expect("Invalid symbol");
         let (faucet, _) = client
@@ -226,7 +224,7 @@ mod tc_2_4_faucet_interaction {
     /// TC-2.4.2: Faucet respects supply limits
     #[tokio::test]
     async fn test_faucet_supply_limits() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("LIM1").expect("Invalid symbol");
         let max_supply = 100_000_000u64;
@@ -259,7 +257,7 @@ mod tc_2_5_cross_chain {
     /// TC-2.5.1: Notes can be tagged for cross-chain tracking
     #[tokio::test]
     async fn test_note_tagging() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("TAG1").expect("Invalid symbol");
         let (faucet, _) = client
@@ -286,7 +284,7 @@ mod tc_2_5_cross_chain {
     /// TC-2.5.2: State sync includes note data
     #[tokio::test]
     async fn test_sync_includes_notes() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("SYNC").expect("Invalid symbol");
         let (faucet, _) = client
