@@ -3,14 +3,12 @@
 //! TC-3.1 through TC-3.9: End-to-end integration tests covering
 //! the complete flow from L1 deposits through Miden execution to withdrawals.
 
-use miden_client::client::Client;
-use miden_objects::{
-    accounts::{AccountStorageMode, AccountType},
-    assets::{FungibleAsset, TokenSymbol},
-    notes::NoteType,
+use miden_protocol::{
+    account::{AccountStorageMode, AccountType},
+    asset::{FungibleAsset, TokenSymbol},
+    note::NoteType,
     Felt,
 };
-use std::env;
 
 mod common;
 use common::create_test_client;
@@ -25,7 +23,7 @@ mod tc_3_1_deposit_flow {
     /// TC-3.1.1: Complete deposit flow simulation
     #[tokio::test]
     async fn test_deposit_flow() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         // Simulate L1 deposit by minting on Miden side
         let token_symbol = TokenSymbol::new("DEP1").expect("Invalid symbol");
@@ -50,7 +48,7 @@ mod tc_3_1_deposit_flow {
     /// TC-3.1.2: Deposit creates consumable note
     #[tokio::test]
     async fn test_deposit_creates_note() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("DEP2").expect("Invalid symbol");
         let (faucet, _) = client
@@ -85,7 +83,7 @@ mod tc_3_2_transfer_flow {
     /// TC-3.2.1: Complete transfer between accounts
     #[tokio::test]
     async fn test_transfer_flow() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("TRF1").expect("Invalid symbol");
         let (faucet, _) = client
@@ -138,7 +136,7 @@ mod tc_3_3_withdrawal_flow {
     /// TC-3.3.1: Withdrawal preparation (burn tokens)
     #[tokio::test]
     async fn test_withdrawal_preparation() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("WDR1").expect("Invalid symbol");
         let (faucet, _) = client
@@ -179,7 +177,7 @@ mod tc_3_4_multi_user {
     /// TC-3.4.1: Multiple concurrent users
     #[tokio::test]
     async fn test_multi_user_scenario() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("MUSR").expect("Invalid symbol");
         let (faucet, _) = client
@@ -225,7 +223,7 @@ mod tc_3_5_error_recovery {
     /// TC-3.5.1: Recovery after failed transaction
     #[tokio::test]
     async fn test_recovery_after_failure() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("RCV1").expect("Invalid symbol");
         let (faucet, _) = client
@@ -257,7 +255,7 @@ mod tc_3_6_state_verification {
     /// TC-3.6.1: State remains consistent after operations
     #[tokio::test]
     async fn test_state_consistency() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let initial_height = client.sync_state().await.unwrap();
 
@@ -279,7 +277,7 @@ mod tc_3_6_state_verification {
 
         let final_height = client.sync_state().await.unwrap();
 
-        assert!(final_height >= initial_height, "Block height should not decrease");
+        assert!(final_height.block_num >= initial_height.block_num, "Block height should not decrease");
     }
 }
 
@@ -293,7 +291,7 @@ mod tc_3_7_performance {
     /// TC-3.7.1: Handle multiple operations in sequence
     #[tokio::test]
     async fn test_sequential_operations() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("PERF").expect("Invalid symbol");
         let (faucet, _) = client
@@ -328,7 +326,7 @@ mod tc_3_8_edge_cases {
     /// TC-3.8.1: Handle zero-value edge case
     #[tokio::test]
     async fn test_minimum_transfer() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         let token_symbol = TokenSymbol::new("EDGE").expect("Invalid symbol");
         let (faucet, _) = client
@@ -360,7 +358,7 @@ mod tc_3_9_full_cycle {
     /// TC-3.9.1: Complete deposit-transfer-withdraw cycle
     #[tokio::test]
     async fn test_full_cycle() {
-        let mut client = create_test_client().await;
+        let (mut client, _state) = create_test_client().await;
 
         // Setup
         let token_symbol = TokenSymbol::new("FULL").expect("Invalid symbol");
