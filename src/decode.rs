@@ -14,18 +14,23 @@ pub const CLAIM_ASSET_SELECTOR: [u8; 4] = [0xcc, 0xaa, 0x2d, 0x11];
 /// Errors that can occur during transaction decoding.
 #[derive(Debug, Error)]
 pub enum DecodeError {
+    /// RLP decoding failed.
     #[error("RLP decoding failed: {0}")]
     RlpDecode(String),
 
+    /// Not a claimAsset transaction.
     #[error("Not a claimAsset transaction: selector mismatch")]
     NotClaimAsset,
 
+    /// Invalid calldata format.
     #[error("Invalid calldata: {0}")]
     InvalidCalldata(String),
 
+    /// Transaction has no input data.
     #[error("Transaction has no input data")]
     NoInputData,
 
+    /// Failed to recover transaction signer.
     #[error("Failed to recover signer: {0}")]
     SignerRecovery(String),
 }
@@ -221,6 +226,7 @@ pub fn decode_transaction(raw_tx: &[u8]) -> Result<DecodedTransaction, DecodeErr
                 from,
             )
         }
+        _ => return Err(DecodeError::RlpDecode("Unsupported transaction type".into())),
     };
 
     Ok(DecodedTransaction {
@@ -247,7 +253,7 @@ pub fn parse_claim_asset(input: &[u8]) -> Result<ClaimAssetParams, DecodeError> 
     }
 
     // Decode using alloy-sol-types
-    let call = claimAssetCall::abi_decode(&input[4..])
+    let call = claimAssetCall::abi_decode(&input[4..], true)
         .map_err(|e| DecodeError::InvalidCalldata(e.to_string()))?;
 
     // Convert proof arrays
