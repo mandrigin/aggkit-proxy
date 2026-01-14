@@ -10,11 +10,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use miden_client::client::Client;
+use miden_client::Client;
 use miden_objects::{
-    accounts::AccountId,
-    assets::FungibleAsset,
-    notes::{Note, NoteId, NoteType},
+    account::AccountId,
+    asset::FungibleAsset,
+    note::{Note, NoteType},
     Felt,
 };
 use tokio::sync::RwLock;
@@ -119,15 +119,18 @@ impl<C> MidenClientWrapper<C> {
     sender = %sender_account_id,
     recipient = %recipient_account_id,
 ))]
-pub fn create_bridge_claim_note<R: miden_crypto::rand::FeltRng>(
+pub fn create_bridge_claim_note<R>(
     sender_account_id: AccountId,
     recipient_account_id: AccountId,
     assets: Vec<FungibleAsset>,
     note_type: NoteType,
     rng: &mut R,
-) -> Result<Note, ClientError> {
-    use miden_lib::notes::create_p2id_note;
-    use miden_objects::assets::Asset;
+) -> Result<Note, ClientError>
+where
+    R: miden_client::crypto::FeltRng,
+{
+    use miden_lib::note::create_p2id_note;
+    use miden_objects::asset::Asset;
 
     info!("Creating bridge claim P2ID note");
 
@@ -135,7 +138,7 @@ pub fn create_bridge_claim_note<R: miden_crypto::rand::FeltRng>(
 
     // Create the P2ID note using miden-lib's helper
     // P2ID notes can only be consumed by the target account
-    let (note, _note_details) = create_p2id_note(
+    let note = create_p2id_note(
         sender_account_id,
         recipient_account_id,
         assets,
@@ -164,21 +167,27 @@ pub fn create_bridge_claim_note<R: miden_crypto::rand::FeltRng>(
 /// # Returns
 /// A TransactionRequest ready for submission
 pub fn build_claim_transaction_request(
-    sender_account_id: AccountId,
+    _sender_account_id: AccountId,
     output_notes: Vec<Note>,
-) -> Result<miden_client::client::transactions::transaction_request::TransactionRequest, ClientError>
+) -> Result<miden_client::transaction::TransactionRequest, ClientError>
 {
-    use miden_client::client::transactions::transaction_request::TransactionRequest;
+    use miden_client::transaction::{TransactionRequestBuilder, OutputNote};
 
     info!(
-        sender = %sender_account_id,
         num_notes = output_notes.len(),
         "Building claim transaction request"
     );
 
+    // Convert Notes to OutputNotes for the builder
+    let output_notes: Vec<OutputNote> = output_notes
+        .into_iter()
+        .map(OutputNote::Full)
+        .collect();
+
     // Build transaction request with output notes
-    let tx_request = TransactionRequest::new()
-        .with_own_output_notes(output_notes)
+    let tx_request = TransactionRequestBuilder::new()
+        .own_output_notes(output_notes)
+        .build()
         .map_err(|e| ClientError::TransactionError(e.to_string()))?;
 
     Ok(tx_request)
@@ -193,42 +202,32 @@ pub fn build_claim_transaction_request(
 /// Initialized client or error
 pub async fn init_client(
     config: &MidenClientConfig,
-) -> Result<Client<impl miden_client::client::rpc::NodeRpcClient>, ClientError> {
-    use miden_client::{
-        client::rpc::TonicRpcClient,
-        config::{ClientConfig, RpcConfig},
-        store::sqlite_store::SqliteStore,
-    };
+) -> Result<Client<impl miden_client::auth::TransactionAuthenticator>, ClientError> {
+    use miden_client::builder::ClientBuilder;
+    use miden_client::rpc::Endpoint;
+    use miden_client_sqlite_store::SqliteStore;
+    use std::sync::Arc;
 
     info!(rpc_endpoint = %config.rpc_endpoint, "Initializing Miden client");
 
-    // Create RPC configuration
-    let rpc_config = RpcConfig {
-        endpoint: config.rpc_endpoint.clone().into(),
-        timeout_ms: 10_000,
-    };
-
-    // Create client configuration
-    let client_config = ClientConfig {
-        rpc: rpc_config,
-        store: config.store_path.clone().into(),
-        ..Default::default()
-    };
-
     // Initialize the SQLite store
-    let store = SqliteStore::new(&config.store_path)
+    let store = SqliteStore::new(config.store_path.clone())
         .await
         .map_err(|e| ClientError::InitializationError(e.to_string()))?;
 
-    // Create RPC client
-    let rpc_client = TonicRpcClient::new(&client_config.rpc.endpoint)
-        .map_err(|e| ClientError::InitializationError(e.to_string()))?;
+    // Parse the RPC endpoint
+    let endpoint = Endpoint::try_from(config.rpc_endpoint.as_str())
+        .map_err(|e| ClientError::InitializationError(format!("Invalid endpoint: {}", e)))?;
 
-    // Create random number generator
-    let rng = miden_crypto::rand::RpoRandomCoin::new([Felt::new(0); 4]);
-
-    // Initialize the client
-    let client = Client::new(rpc_client, rng, store, client_config.executor.clone())
+    // Build the client using the new builder pattern
+    let keystore_path = config.store_path.join("keystore");
+    let keystore_path_str = keystore_path.to_string_lossy();
+    let client: Client<miden_client::keystore::FilesystemKeyStore<_>> = ClientBuilder::new()
+        .grpc_client(&endpoint, Some(10_000))
+        .store(Arc::new(store))
+        .filesystem_keystore(&keystore_path_str)
+        .build()
+        .await
         .map_err(|e| ClientError::InitializationError(e.to_string()))?;
 
     info!("Miden client initialized successfully");
@@ -236,11 +235,11 @@ pub async fn init_client(
 }
 
 /// Sync client state and return summary
-pub async fn sync_state<C, R, S>(client: &mut Client<C, R, S>) -> Result<SyncSummary, ClientError>
+pub async fn sync_state<AUTH>(
+    client: &mut Client<AUTH>,
+) -> Result<SyncSummary, ClientError>
 where
-    C: miden_client::client::rpc::NodeRpcClient,
-    R: miden_crypto::rand::FeltRng,
-    S: miden_client::store::Store,
+    AUTH: miden_client::auth::TransactionAuthenticator + Sync + 'static,
 {
     info!("Synchronizing state with Miden network");
 
@@ -250,8 +249,8 @@ where
         .map_err(|e| ClientError::SyncError(e.to_string()))?;
 
     let summary = SyncSummary {
-        block_num: sync_result.block_num,
-        new_notes: sync_result.received_notes.len(),
+        block_num: sync_result.block_num.as_u32(),
+        new_notes: sync_result.new_public_notes.len(),
         consumed_notes: sync_result.consumed_notes.len(),
         updated_accounts: sync_result.updated_accounts.len(),
     };
@@ -267,31 +266,25 @@ where
 }
 
 /// Submit a transaction using the client
-pub async fn submit_transaction<C, R, S>(
-    client: &mut Client<C, R, S>,
-    tx_request: miden_client::client::transactions::transaction_request::TransactionRequest,
+///
+/// This function executes, proves, and submits a transaction in one operation.
+pub async fn submit_transaction<AUTH>(
+    client: &mut Client<AUTH>,
+    account_id: AccountId,
+    tx_request: miden_client::transaction::TransactionRequest,
 ) -> Result<String, ClientError>
 where
-    C: miden_client::client::rpc::NodeRpcClient,
-    R: miden_crypto::rand::FeltRng,
-    S: miden_client::store::Store,
+    AUTH: miden_client::auth::TransactionAuthenticator + Sync + 'static,
 {
     info!("Submitting transaction to Miden network");
 
-    // Build and submit the transaction
-    let executed_tx = client
-        .new_transaction(tx_request)
+    // Execute, prove, and submit the transaction in one operation
+    let tx_id = client
+        .submit_new_transaction(account_id, tx_request)
         .await
         .map_err(|e| ClientError::TransactionError(e.to_string()))?;
 
-    let tx_id = executed_tx.id();
     let tx_id_hex = hex::encode(tx_id.as_bytes());
-
-    // Submit to network
-    client
-        .submit_transaction(executed_tx)
-        .await
-        .map_err(|e| ClientError::TransactionError(e.to_string()))?;
 
     info!(%tx_id_hex, "Transaction submitted successfully");
 
