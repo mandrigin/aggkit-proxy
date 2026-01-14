@@ -23,11 +23,11 @@ alloy-rlp = "0.3"
 alloy-rpc-types = "0.8"
 alloy-consensus = "0.8"
 
-# Miden client (matching agglayer-v0.1 tag)
-miden-client = { version = "0.13", features = ["tonic"] }
-miden-client-sqlite-store = "0.13"
-miden-objects = "0.13"
-miden-lib = "0.13"
+# Miden client
+miden-client = { version = "0.12", features = ["tonic"] }
+miden-client-sqlite-store = "0.12"
+miden-objects = "0.12"
+miden-lib = "0.12"
 miden-crypto = "0.13"
 
 # Serialization
