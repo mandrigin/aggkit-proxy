@@ -5,6 +5,9 @@
 //! - P2ID note creation for claim distribution
 //! - Transaction submission via TransactionRequestBuilder
 //! - State synchronization for confirmation tracking
+//!
+//! NOTE: When miden-agglayer becomes compatible with miden-client (version alignment),
+//! switch to using miden-agglayer's create_claim_note() for bridge-specific validation.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,7 +21,7 @@ use miden_objects::{
     Felt,
 };
 use tokio::sync::RwLock;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 
 /// Error types for Miden client operations
 #[derive(Debug, thiserror::Error)]
@@ -101,29 +104,41 @@ impl<C> MidenClientWrapper<C> {
     }
 }
 
+/// Parameters for creating a bridge claim note
+#[derive(Debug, Clone)]
+pub struct BridgeClaimParams {
+    /// Bridge faucet account sending the assets
+    pub sender_account_id: AccountId,
+    /// Target Miden account receiving the claim
+    pub recipient_account_id: AccountId,
+    /// Fungible assets being transferred
+    pub assets: Vec<FungibleAsset>,
+    /// Type of note (Public, Private, etc.)
+    pub note_type: NoteType,
+}
+
 /// Create a P2ID (Pay to ID) note for claim distribution
 ///
 /// This is the core function for creating bridge claim notes that transfer
 /// assets from the bridge faucet to a recipient's Miden account.
 ///
+/// NOTE: When miden-agglayer becomes version-compatible with miden-client,
+/// switch to using miden-agglayer's create_claim_note() for bridge-specific
+/// SMT proof validation.
+///
 /// # Arguments
-/// * `sender_account_id` - The bridge faucet account sending the assets
-/// * `recipient_account_id` - The target Miden account receiving the claim
-/// * `assets` - The fungible assets being transferred
-/// * `note_type` - Type of note (Public, Private, etc.)
+/// * `params` - Bridge claim parameters
 /// * `rng` - Random number generator for note creation
 ///
 /// # Returns
 /// The created Note, or an error
 #[instrument(skip(rng), fields(
-    sender = %sender_account_id,
-    recipient = %recipient_account_id,
+    sender = %params.sender_account_id,
+    recipient = %params.recipient_account_id,
+    asset_count = params.assets.len(),
 ))]
 pub fn create_bridge_claim_note<R>(
-    sender_account_id: AccountId,
-    recipient_account_id: AccountId,
-    assets: Vec<FungibleAsset>,
-    note_type: NoteType,
+    params: BridgeClaimParams,
     rng: &mut R,
 ) -> Result<Note, ClientError>
 where
@@ -132,24 +147,39 @@ where
     use miden_lib::note::create_p2id_note;
     use miden_objects::asset::Asset;
 
-    info!("Creating bridge claim P2ID note");
+    info!(
+        sender = %params.sender_account_id,
+        recipient = %params.recipient_account_id,
+        asset_count = params.assets.len(),
+        note_type = ?params.note_type,
+        "Creating bridge claim P2ID note"
+    );
 
-    let assets: Vec<Asset> = assets.into_iter().map(Asset::Fungible).collect();
+    let assets: Vec<Asset> = params.assets.into_iter().map(Asset::Fungible).collect();
+
+    debug!(
+        asset_count = assets.len(),
+        "Converted assets to Asset enum"
+    );
 
     // Create the P2ID note using miden-lib's helper
     // P2ID notes can only be consumed by the target account
+    info!("Calling miden-lib create_p2id_note...");
     let note = create_p2id_note(
-        sender_account_id,
-        recipient_account_id,
+        params.sender_account_id,
+        params.recipient_account_id,
         assets,
-        note_type,
+        params.note_type,
         Felt::new(0), // recall height
         rng,
     )
-    .map_err(|e| ClientError::NoteCreationError(e.to_string()))?;
+    .map_err(|e| {
+        warn!(error = %e, "Failed to create P2ID note");
+        ClientError::NoteCreationError(e.to_string())
+    })?;
 
     let note_id = note.id();
-    debug!(?note_id, "Bridge claim note created");
+    info!(?note_id, "Bridge claim P2ID note created successfully");
 
     Ok(note)
 }
