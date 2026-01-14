@@ -1,0 +1,29 @@
+[package]
+name = "miden-integration-tests"
+version = "0.1.0"
+edition = "2021"
+description = "Integration tests for Miden node using miden-client"
+
+[dependencies]
+miden-client = { version = "0.13", features = ["tonic", "testing"] }
+miden-objects = "0.13"
+miden-lib = "0.13"
+miden-tx = "0.13"
+tokio = { version = "1", features = ["full", "rt-multi-thread", "macros"] }
+rand = "0.8"
+rand_chacha = "0.3"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[[test]]
+name = "phase1"
+path = "tests/phase1.rs"
+
+[[test]]
+name = "phase2"
+path = "tests/phase2.rs"
+
+[[test]]
+name = "phase3"
+path = "tests/phase3.rs"
