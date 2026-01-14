@@ -18,7 +18,7 @@ BRIDGE_SERVICE_PORT = 8080
 
 # Image definitions
 POSTGRES_IMAGE = "postgres:16-alpine"
-MIDEN_NODE_IMAGE = "ghcr.io/0xpolygonmiden/miden-node:latest"
+MIDEN_NODE_IMAGE = "ghcr.io/0xmiden/miden-node:agglayer-v0.1"
 FOUNDRY_IMAGE = "ghcr.io/foundry-rs/foundry:latest"
 BRIDGE_SERVICE_IMAGE = "ghcr.io/0xpolygonmiden/bridge-service:latest"
 
