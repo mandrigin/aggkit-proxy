@@ -1,0 +1,43 @@
+# Miden RPC Proxy Configuration
+# This is the default configuration for Docker/Kurtosis test environments
+
+[server]
+# Port to listen on (Ethereum-compatible RPC endpoint)
+listen_port = 8546
+
+# Host to bind to
+listen_host = "0.0.0.0"
+
+[miden]
+# Miden node RPC URL
+rpc_url = "http://miden-node:57291"
+
+# Chain ID to report via eth_chainId
+# This should be unique to your Miden network
+chain_id = "0x1000"  # 4096 in decimal
+
+[bridge]
+# Bridge service URL for claim tracking
+service_url = "http://bridge-service:8080"
+
+# Bridge account ID on Miden network
+# This is populated at runtime after deployment
+account_id = ""
+
+[l1]
+# L1 Ethereum RPC URL (for receipt verification)
+rpc_url = "http://l1-anvil:8545"
+
+# L1 chain ID
+chain_id = 31337
+
+[database]
+# PostgreSQL connection URL for state storage
+url = "postgres://miden:miden@postgres:5432/miden_proxy"
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log format: json, pretty
+format = "pretty"
