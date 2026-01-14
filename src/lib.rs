@@ -4,3 +4,5 @@
 
 #![deny(missing_docs)]
 #![deny(clippy::all)]
+
+pub mod client;
