@@ -453,6 +453,15 @@ impl EthApiServer for EthApiImpl {
         let tx_hash_clone = tx_hash.clone();
         let bridge_faucet_id = miden_config.bridge_faucet_id;
 
+        // Convert MidenAccountId ([u8; 15]) to miden_protocol::AccountId
+        let recipient_account_id = AccountId::try_from(miden_account_id.0).map_err(|e| {
+            ErrorObjectOwned::owned(
+                -32000,
+                format!("Invalid recipient account ID: {}", e),
+                None::<()>,
+            )
+        })?;
+
         // Convert amount from U256 to u64 for FungibleAsset
         let amount_u64: u64 = claim_params.amount.try_into().map_err(|_| {
             ErrorObjectOwned::owned(
@@ -479,7 +488,7 @@ impl EthApiServer for EthApiImpl {
             };
 
             // Create RNG for note creation
-            let mut rng = ChaCha20Rng::from_entropy();
+            let mut rng = ChaCha20Rng::seed_from_u64(rand::random());
 
             // Create bridge claim parameters
             let asset = match FungibleAsset::new(bridge_faucet_id, amount_u64) {
@@ -495,7 +504,7 @@ impl EthApiServer for EthApiImpl {
 
             let bridge_params = BridgeClaimParams {
                 sender_account_id: bridge_faucet_id,
-                recipient_account_id: miden_account_id,
+                recipient_account_id,
                 assets: vec![asset],
                 note_type: NoteType::Public,
             };
