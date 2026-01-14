@@ -1,0 +1,22 @@
+[package]
+name = "aggkit-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "Ethereum JSON-RPC proxy for Miden bridge claims"
+
+[lib]
+name = "aggkit_proxy"
+path = "src/lib.rs"
+
+[dependencies]
+# Alloy for Ethereum types and encoding - versions aligned
+alloy-consensus = { version = "0.15", features = ["k256"] }
+alloy-primitives = "1.5"
+alloy-rlp = "0.3"
+alloy-sol-types = "1.5"
+
+# Error handling
+thiserror = "2"
+
+[dev-dependencies]
+hex = "0.4"
