@@ -18,9 +18,9 @@ services:
       timeout: 5s
       retries: 5
 
-  # Miden node (devnet mode)
+  # Miden node (agglayer-v0.1 - required for compatibility)
   miden-node:
-    image: ghcr.io/0xpolygonmiden/miden-node:latest
+    image: ghcr.io/0xmiden/miden-node:agglayer-v0.1
     command: ["--dev"]
     ports:
       - "57291:57291"
