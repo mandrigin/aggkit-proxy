@@ -3,8 +3,6 @@ use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::server::Server;
 use jsonrpsee::types::ErrorObjectOwned;
 use parking_lot::RwLock;
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
@@ -23,7 +21,13 @@ use miden_rpc_proxy::client::{
     build_claim_transaction_request, create_bridge_claim_note, init_client, submit_transaction,
     BridgeClaimParams, MidenClientConfig,
 };
-use miden_protocol::{account::AccountId, asset::FungibleAsset, note::NoteType};
+use miden_protocol::{
+    account::AccountId,
+    asset::FungibleAsset,
+    crypto::rand::RpoRandomCoin,
+    note::NoteType,
+    Word,
+};
 
 /// Miden chain ID (placeholder - configure as needed)
 const MIDEN_CHAIN_ID: u64 = 0x4d494445; // "MIDE" in hex
@@ -487,8 +491,9 @@ impl EthApiServer for EthApiImpl {
                 }
             };
 
-            // Create RNG for note creation
-            let mut rng = ChaCha20Rng::seed_from_u64(rand::random());
+            // Create RNG for note creation (RpoRandomCoin implements FeltRng)
+            let seed: [u32; 4] = [rand::random(), rand::random(), rand::random(), rand::random()];
+            let mut rng = RpoRandomCoin::new(Word::from(seed));
 
             // Create bridge claim parameters
             let asset = match FungibleAsset::new(bridge_faucet_id, amount_u64) {
