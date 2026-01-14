@@ -30,3 +30,12 @@ pub use receipt::{
 };
 pub use storage::{AddressMapping, MappingStorage};
 pub use types::ClaimAssetParams;
+
+// Re-export client module types
+// NOTE: miden-agglayer helpers (create_claim_note, evm_address_to_account_id) are
+// not available due to version incompatibility with miden-client 0.12.
+// When versions align, we can use miden-agglayer's create_claim_note() instead.
+pub use client::{
+    create_bridge_claim_note, init_client, submit_transaction, sync_state, BridgeClaimParams,
+    ClientError, MidenClientConfig, MidenClientWrapper, SyncSummary,
+};

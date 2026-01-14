@@ -31,6 +31,12 @@ miden-tx = "0.12"
 miden-crypto = "0.13"
 miden-client-sqlite-store = "0.12"
 
+# NOTE: miden-agglayer (agglayer-v0.1) uses miden-protocol 0.13/miden-crypto 0.19
+# which is incompatible with miden-client 0.12. When miden-client is updated
+# to a compatible version, add:
+# miden-agglayer = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1" }
+# For now, we use custom P2ID note creation as a bridge implementation.
+
 # Additional dependencies
 sha3 = "0.10"
 dashmap = "6"
