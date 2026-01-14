@@ -36,6 +36,6 @@ pub use types::ClaimAssetParams;
 // not available due to version incompatibility with miden-client 0.12.
 // When versions align, we can use miden-agglayer's create_claim_note() instead.
 pub use client::{
-    create_bridge_claim_note, init_client, submit_transaction, sync_state, BridgeClaimParams,
-    ClientError, MidenClientConfig, MidenClientWrapper, SyncSummary,
+    build_claim_transaction_request, create_bridge_claim_note, init_client, submit_transaction,
+    sync_state, BridgeClaimParams, ClientError, MidenClientConfig, MidenClientWrapper, SyncSummary,
 };

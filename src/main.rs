@@ -3,10 +3,14 @@ use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::server::Server;
 use jsonrpsee::types::ErrorObjectOwned;
 use parking_lot::RwLock;
+use rand_chacha::ChaCha20Rng;
+use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock as TokioRwLock;
 use tracing::{debug, error, info, warn};
 
 // Import library modules for claim processing
@@ -14,6 +18,19 @@ use miden_rpc_proxy::{
     decode_transaction, is_claim_asset, parse_claim_asset, AddressMapper, AddressMapperConfig,
     ClaimTracker, EthAddress,
 };
+
+// Import Miden client types for submission
+use miden_rpc_proxy::client::{
+    create_bridge_claim_note, build_claim_transaction_request, submit_transaction,
+    init_client, MidenClientConfig, BridgeClaimParams, ClientError,
+};
+use miden_protocol::{
+    account::AccountId,
+    asset::FungibleAsset,
+    note::NoteType,
+};
+use miden_client::Client;
+use miden_client::keystore::FilesystemKeyStore;
 
 /// Miden chain ID (placeholder - configure as needed)
 const MIDEN_CHAIN_ID: u64 = 0x4d494445; // "MIDE" in hex
@@ -61,6 +78,10 @@ pub struct BridgeState {
     claim_tracker: ClaimTracker,
     /// Address mapper for Eth -> Miden address resolution (wrapped in Mutex for Sync)
     address_mapper: parking_lot::Mutex<AddressMapper>,
+    /// Miden client for transaction submission
+    miden_client: TokioRwLock<Option<Client<FilesystemKeyStore>>>,
+    /// Bridge faucet account ID for asset distribution
+    bridge_faucet_id: Option<AccountId>,
 }
 
 impl BridgeState {
@@ -80,7 +101,21 @@ impl BridgeState {
             block_height: RwLock::new(0),
             claim_tracker,
             address_mapper: parking_lot::Mutex::new(address_mapper),
+            miden_client: TokioRwLock::new(None),
+            bridge_faucet_id: None,
         }
+    }
+
+    /// Initialize the Miden client for transaction submission
+    pub async fn init_miden_client(&mut self, config: MidenClientConfig) -> Result<(), ClientError> {
+        info!(rpc_endpoint = %config.rpc_endpoint, "Initializing Miden client...");
+
+        let client = init_client(&config).await?;
+        self.bridge_faucet_id = Some(config.bridge_faucet_id);
+        *self.miden_client.write().await = Some(client);
+
+        info!("Miden client initialized successfully");
+        Ok(())
     }
 
     pub fn get_nonce(&self, address: &str) -> u64 {
@@ -420,11 +455,126 @@ impl EthApiServer for EthApiImpl {
             "=== CLAIM PROCESSING COMPLETE (pending Miden submission) ==="
         );
 
-        // TODO: In background task, submit to Miden network:
-        // 1. Call miden-agglayer::create_claim_note() with ClaimNoteParams
-        // 2. Build transaction with TransactionRequestBuilder
-        // 3. Submit via MidenClient::submit_transaction()
-        // 4. Update tx status to Confirmed on success
+        // Step 10: Submit to Miden network in background task
+        let state_clone = Arc::clone(&self.state);
+        let tx_hash_clone = tx_hash.clone();
+        let bridge_faucet_id = match self.state.bridge_faucet_id {
+            Some(id) => id,
+            None => {
+                warn!("Bridge faucet ID not configured - skipping Miden submission");
+                return Ok(tx_hash);
+            }
+        };
+
+        // Convert amount from U256 to u64 for FungibleAsset
+        let amount_u64: u64 = claim_params.amount.try_into().map_err(|_| {
+            ErrorObjectOwned::owned(
+                -32000,
+                "Amount too large for Miden",
+                None::<()>,
+            )
+        })?;
+
+        // Spawn background task for Miden submission
+        tokio::spawn(async move {
+            info!(tx_hash = %tx_hash_clone, "Starting Miden submission in background task");
+
+            // Get mutable access to the client
+            let mut client_guard = state_clone.miden_client.write().await;
+            let client = match client_guard.as_mut() {
+                Some(c) => c,
+                None => {
+                    error!(tx_hash = %tx_hash_clone, "Miden client not initialized");
+                    state_clone.record_tx(tx_hash_clone, TxStatus::Failed {
+                        reason: "Miden client not initialized".to_string(),
+                    });
+                    return;
+                }
+            };
+
+            // Create RNG for note creation
+            let mut rng = ChaCha20Rng::from_entropy();
+
+            // Create bridge claim parameters
+            let asset = match FungibleAsset::new(bridge_faucet_id, amount_u64) {
+                Ok(a) => a,
+                Err(e) => {
+                    error!(tx_hash = %tx_hash_clone, error = %e, "Failed to create FungibleAsset");
+                    state_clone.record_tx(tx_hash_clone, TxStatus::Failed {
+                        reason: format!("Failed to create asset: {}", e),
+                    });
+                    return;
+                }
+            };
+
+            let bridge_params = BridgeClaimParams {
+                sender_account_id: bridge_faucet_id,
+                recipient_account_id: miden_account_id,
+                assets: vec![asset],
+                note_type: NoteType::Public,
+            };
+
+            // Step 10.1: Create the bridge claim note
+            info!(tx_hash = %tx_hash_clone, "Creating bridge claim P2ID note...");
+            let note = match create_bridge_claim_note(bridge_params, &mut rng) {
+                Ok(n) => {
+                    info!(tx_hash = %tx_hash_clone, note_id = ?n.id(), "Note created successfully");
+                    n
+                }
+                Err(e) => {
+                    error!(tx_hash = %tx_hash_clone, error = %e, "Failed to create bridge claim note");
+                    state_clone.record_tx(tx_hash_clone, TxStatus::Failed {
+                        reason: format!("Note creation failed: {}", e),
+                    });
+                    return;
+                }
+            };
+
+            // Step 10.2: Build the transaction request
+            info!(tx_hash = %tx_hash_clone, "Building transaction request...");
+            let tx_request = match build_claim_transaction_request(bridge_faucet_id, vec![note]) {
+                Ok(req) => req,
+                Err(e) => {
+                    error!(tx_hash = %tx_hash_clone, error = %e, "Failed to build transaction request");
+                    state_clone.record_tx(tx_hash_clone, TxStatus::Failed {
+                        reason: format!("Transaction build failed: {}", e),
+                    });
+                    return;
+                }
+            };
+
+            // Step 10.3: Submit the transaction
+            info!(tx_hash = %tx_hash_clone, "Submitting transaction to Miden network...");
+            match submit_transaction(client, bridge_faucet_id, tx_request).await {
+                Ok(miden_tx_id) => {
+                    info!(
+                        tx_hash = %tx_hash_clone,
+                        miden_tx_id = %miden_tx_id,
+                        "Transaction submitted successfully to Miden network"
+                    );
+
+                    // Sync state to get block number
+                    let block_number = match client.sync_state().await {
+                        Ok(sync_result) => sync_result.block_num.as_u32() as u64,
+                        Err(_) => state_clone.get_block_height(),
+                    };
+
+                    // Step 10.4: Update status to Confirmed
+                    state_clone.record_tx(tx_hash_clone.clone(), TxStatus::Confirmed { block_number });
+                    info!(
+                        tx_hash = %tx_hash_clone,
+                        block_number = block_number,
+                        "Transaction status updated to CONFIRMED"
+                    );
+                }
+                Err(e) => {
+                    error!(tx_hash = %tx_hash_clone, error = %e, "Failed to submit transaction");
+                    state_clone.record_tx(tx_hash_clone, TxStatus::Failed {
+                        reason: format!("Submission failed: {}", e),
+                    });
+                }
+            }
+        });
 
         Ok(tx_hash)
     }
@@ -551,7 +701,47 @@ async fn main() -> anyhow::Result<()> {
     info!("Fixed gas estimate: {}", FIXED_GAS_ESTIMATE);
 
     info!("Initializing bridge state...");
-    let state = Arc::new(BridgeState::new());
+    let mut state = BridgeState::new();
+
+    // Initialize Miden client if environment variables are set
+    if let (Ok(rpc_endpoint), Ok(faucet_id_str)) = (
+        std::env::var("MIDEN_RPC_ENDPOINT"),
+        std::env::var("MIDEN_BRIDGE_FAUCET_ID"),
+    ) {
+        info!(
+            rpc_endpoint = %rpc_endpoint,
+            faucet_id = %faucet_id_str,
+            "Miden client configuration found"
+        );
+
+        // Parse the faucet account ID
+        let faucet_id = match faucet_id_str.parse::<u64>() {
+            Ok(id) => AccountId::try_from(id).map_err(|e| {
+                anyhow::anyhow!("Invalid bridge faucet ID: {}", e)
+            })?,
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to parse MIDEN_BRIDGE_FAUCET_ID: {}", e));
+            }
+        };
+
+        let store_path = std::env::var("MIDEN_STORE_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("./miden_store"));
+
+        let config = MidenClientConfig {
+            rpc_endpoint,
+            store_path,
+            bridge_faucet_id: faucet_id,
+        };
+
+        if let Err(e) = state.init_miden_client(config).await {
+            warn!(error = %e, "Failed to initialize Miden client - submissions will be disabled");
+        }
+    } else {
+        info!("Miden client not configured (set MIDEN_RPC_ENDPOINT and MIDEN_BRIDGE_FAUCET_ID to enable)");
+    }
+
+    let state = Arc::new(state);
     info!("Bridge state initialized successfully");
 
     let rpc_impl = EthApiImpl::new(state);
