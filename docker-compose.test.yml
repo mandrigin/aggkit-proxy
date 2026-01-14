@@ -1,0 +1,71 @@
+version: "3.8"
+
+# Test-focused compose file - runs tests then exits
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: miden
+      POSTGRES_PASSWORD: miden
+      POSTGRES_DB: miden_proxy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U miden"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  miden-node:
+    image: ghcr.io/0xpolygonmiden/miden-node:latest
+    command: ["--dev"]
+    ports:
+      - "57291:57291"
+
+  l1-anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint: ["anvil"]
+    command: ["--host", "0.0.0.0", "--chain-id", "31337", "--block-time", "1"]
+    ports:
+      - "8545:8545"
+
+  bridge-service:
+    image: ghcr.io/0xpolygonmiden/bridge-service:latest
+    environment:
+      DATABASE_URL: postgres://miden:miden@postgres:5432/miden_proxy
+      MIDEN_RPC_URL: http://miden-node:57291
+      L1_RPC_URL: http://l1-anvil:8545
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  proxy:
+    build: .
+    environment:
+      MIDEN_RPC_URL: http://miden-node:57291
+      BRIDGE_SERVICE_URL: http://bridge-service:8080
+      L1_RPC_URL: http://l1-anvil:8545
+      DATABASE_URL: postgres://miden:miden@postgres:5432/miden_proxy
+      RUST_LOG: info
+    ports:
+      - "8546:8546"
+    depends_on:
+      - bridge-service
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      PROXY_URL: http://proxy:8546
+      MIDEN_RPC_URL: http://miden-node:57291
+      BRIDGE_SERVICE_URL: http://bridge-service:8080
+      L1_RPC_URL: http://l1-anvil:8545
+      DATABASE_URL: postgres://miden:miden@postgres:5432/miden_proxy
+      RUST_LOG: debug
+    depends_on:
+      - proxy
+
+networks:
+  default:
+    name: miden-proxy-test
