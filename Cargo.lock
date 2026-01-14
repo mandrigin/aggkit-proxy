@@ -2692,6 +2692,7 @@ dependencies = [
  "miden-crypto 0.13.3",
  "miden-lib",
  "miden-objects",
+ "parking_lot",
  "serde",
  "serde_json",
  "thiserror 2.0.17",

@@ -35,6 +35,7 @@ pub struct TxHashMap {
 }
 
 impl TxHashMap {
+    /// Create a new empty transaction hash map
     pub fn new() -> Self {
         Self {
             hash_to_id: RwLock::new(HashMap::new()),
@@ -84,13 +85,21 @@ impl Default for TxHashMap {
 /// Ethereum-formatted transaction receipt
 #[derive(Debug, Clone)]
 pub struct EthReceipt {
+    /// Transaction hash (32 bytes)
     pub transaction_hash: EthTxHash,
+    /// Block number containing this transaction
     pub block_number: u64,
+    /// Block hash (32 bytes)
     pub block_hash: [u8; 32],
-    pub status: u8,  // 0x1 for success, 0x0 for failure
+    /// Transaction status: 0x1 for success, 0x0 for failure
+    pub status: u8,
+    /// Recipient address
     pub to: String,
+    /// Index of this transaction within the block
     pub transaction_index: u64,
+    /// Cumulative gas used in the block up to this transaction
     pub cumulative_gas_used: u64,
+    /// Gas used by this specific transaction
     pub gas_used: u64,
 }
 

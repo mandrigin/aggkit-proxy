@@ -60,14 +60,16 @@ impl ClaimAssetParams {
     ///
     /// Extracts bits 32-63 from the global index.
     pub fn rollup_index(&self) -> u32 {
-        ((self.global_index >> 32) & U256::from(u32::MAX)).to::<u32>()
+        let masked: U256 = (self.global_index >> 32) & U256::from(u32::MAX);
+        u32::try_from(masked).unwrap_or(0)
     }
 
     /// Returns the local root index from the global index.
     ///
     /// Extracts bits 0-31 from the global index.
     pub fn local_root_index(&self) -> u32 {
-        (self.global_index & U256::from(u32::MAX)).to::<u32>()
+        let masked: U256 = self.global_index & U256::from(u32::MAX);
+        u32::try_from(masked).unwrap_or(0)
     }
 }
 
