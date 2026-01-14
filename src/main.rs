@@ -700,14 +700,24 @@ async fn main() -> anyhow::Result<()> {
             "Miden client configuration found"
         );
 
-        // Parse the faucet account ID
-        let faucet_id = match faucet_id_str.parse::<u64>() {
-            Ok(id) => AccountId::try_from(id).map_err(|e| {
+        // Parse the faucet account ID (supports decimal u128 or hex with 0x prefix)
+        let faucet_id = if faucet_id_str.starts_with("0x") || faucet_id_str.starts_with("0X") {
+            // Hex string format
+            let hex_str = &faucet_id_str[2..];
+            let id = u128::from_str_radix(hex_str, 16).map_err(|e| {
+                anyhow::anyhow!("Failed to parse hex MIDEN_BRIDGE_FAUCET_ID: {}", e)
+            })?;
+            AccountId::try_from(id).map_err(|e| {
                 anyhow::anyhow!("Invalid bridge faucet ID: {}", e)
-            })?,
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to parse MIDEN_BRIDGE_FAUCET_ID: {}", e));
-            }
+            })?
+        } else {
+            // Decimal format
+            let id = faucet_id_str.parse::<u128>().map_err(|e| {
+                anyhow::anyhow!("Failed to parse MIDEN_BRIDGE_FAUCET_ID: {}", e)
+            })?;
+            AccountId::try_from(id).map_err(|e| {
+                anyhow::anyhow!("Invalid bridge faucet ID: {}", e)
+            })?
         };
 
         let store_path = std::env::var("MIDEN_STORE_PATH")
