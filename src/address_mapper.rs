@@ -3,9 +3,18 @@
 //! Implements "Option 3: Auto-create accounts" from the spec:
 //! - When a claim arrives for an unknown Ethereum address, auto-create a Miden wallet
 //! - Use deterministic derivation: eth_address -> keccak256 -> seed -> AccountId
+//!
+//! AccountId Structure:
+//! - 15 bytes total (120 bits)
+//! - Bytes 0-7: Prefix (Felt) - contains metadata in least significant byte
+//! - Bytes 8-14: Suffix (Felt, 7 bytes since LSB is always 0)
+//! - Byte 7 metadata: bits 0-3=version, bits 4-5=type, bits 6-7=storage_mode
 
 use crate::error::ProxyError;
 use crate::storage::{AddressMapping, MappingStorage};
+use miden_protocol::account::{AccountId, AccountStorageMode, AccountType};
+#[cfg(test)]
+use miden_protocol::account::AccountIdVersion;
 use sha3::{Digest, Keccak256};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -58,7 +67,7 @@ impl AddressMapper {
     /// Returns `None` if no mapping exists.
     pub fn lookup(&self, eth_address: &EthAddress) -> Result<Option<MidenAccountId>> {
         if let Some(mapping) = self.storage.get_by_eth_address(&eth_address.0)? {
-            Ok(Some(MidenAccountId(mapping.miden_account_id)))
+            Ok(Some(MidenAccountId::from_slice(&mapping.miden_account_id)?))
         } else {
             Ok(None)
         }
@@ -74,12 +83,13 @@ impl AddressMapper {
     pub fn get_or_create(&self, eth_address: &EthAddress) -> Result<(MidenAccountId, bool)> {
         // Check if mapping already exists
         if let Some(mapping) = self.storage.get_by_eth_address(&eth_address.0)? {
+            let miden_account_id = MidenAccountId::from_slice(&mapping.miden_account_id)?;
             debug!(
                 eth = %eth_address,
-                miden = %MidenAccountId(mapping.miden_account_id),
+                miden = %miden_account_id,
                 "Found existing mapping"
             );
-            return Ok((MidenAccountId(mapping.miden_account_id), false));
+            return Ok((miden_account_id, false));
         }
 
         // Derive seed deterministically from Ethereum address
@@ -89,15 +99,14 @@ impl AddressMapper {
             "Deriving new Miden account from Ethereum address"
         );
 
-        // Create the Miden account
-        // Note: In production, this would call miden-client to create the actual account.
-        // For now, we derive a placeholder AccountId from the seed.
+        // Create the Miden account with proper metadata bits
+        // This creates a RegularAccountUpdatableCode with Public storage mode
         let miden_account_id = self.seed_to_account_id(&seed)?;
 
-        // Store the mapping
+        // Store the mapping (convert AccountId to bytes for storage)
         let mapping = AddressMapping {
             eth_address: eth_address.0,
-            miden_account_id: miden_account_id.0,
+            miden_account_id: miden_account_id.to_bytes(),
             created_at: current_timestamp(),
             auto_created: true,
         };
@@ -106,6 +115,8 @@ impl AddressMapper {
         info!(
             eth = %eth_address,
             miden = %miden_account_id,
+            account_type = ?miden_account_id.inner().account_type(),
+            storage_mode = ?miden_account_id.inner().storage_mode(),
             "Auto-created new Miden account mapping"
         );
 
@@ -134,7 +145,7 @@ impl AddressMapper {
 
         let mapping = AddressMapping {
             eth_address: eth_address.0,
-            miden_account_id: miden_account_id.0,
+            miden_account_id: miden_account_id.to_bytes(),
             created_at: current_timestamp(),
             auto_created: false,
         };
@@ -151,7 +162,8 @@ impl AddressMapper {
 
     /// Reverse lookup: find the Ethereum address for a Miden AccountId.
     pub fn reverse_lookup(&self, miden_id: &MidenAccountId) -> Result<Option<EthAddress>> {
-        if let Some(mapping) = self.storage.get_by_miden_id(&miden_id.0)? {
+        let miden_bytes = miden_id.to_bytes();
+        if let Some(mapping) = self.storage.get_by_miden_id(&miden_bytes)? {
             Ok(Some(EthAddress(mapping.eth_address)))
         } else {
             Ok(None)
@@ -169,13 +181,20 @@ impl AddressMapper {
         hasher.finalize().into()
     }
 
-    /// Convert a 32-byte seed to a 120-bit (15-byte) Miden AccountId.
+    /// Convert a 32-byte seed to a proper Miden AccountId with correct metadata bits.
     ///
-    /// Note: In production, this would use miden-client's account creation API
-    /// with the seed as input to RpoRandomCoin. For now, we truncate the hash
-    /// to 15 bytes as a placeholder.
+    /// Creates a `RegularAccountUpdatableCode` with `Public` storage mode.
+    ///
+    /// The AccountId is 15 bytes with metadata encoded in byte 7 (the LSB of the prefix Felt):
+    /// - bits 0-3: version (0 for V0)
+    /// - bits 4-5: account type (0=RegularUpdatable, 1=RegularImmutable, 2=FungibleFaucet, 3=NonFungibleFaucet)
+    /// - bits 6-7: storage mode (0=Public, 1=Network, 2=Private)
+    ///
+    /// The AccountId must satisfy these constraints:
+    /// - Prefix (bytes 0-7): bit 32 must be 0 (for valid Felt)
+    /// - Suffix (bytes 8-14): MSB must be 0, LSB must be 0
     fn seed_to_account_id(&self, seed: &[u8; 32]) -> Result<MidenAccountId> {
-        // Hash the seed again to get the account ID bytes
+        // Hash the seed to get deterministic bytes for the AccountId
         // This ensures we have a clean separation between the seed and the ID
         let mut hasher = Keccak256::new();
         hasher.update(b"miden-account-id-v1");
@@ -183,11 +202,42 @@ impl AddressMapper {
         let hash = hasher.finalize();
 
         // Take the first 15 bytes for the 120-bit AccountId
-        let mut account_id = [0u8; 15];
-        account_id.copy_from_slice(&hash[..15]);
+        let mut account_id_bytes = [0u8; 15];
+        account_id_bytes.copy_from_slice(&hash[..15]);
 
-        // TODO: In production, set proper account type bits in the ID
-        // Miden AccountIds encode type, storage mode, and version in the ID itself
+        // Set proper metadata bits in byte 7 (the LSB of the prefix Felt)
+        // For RegularAccountUpdatableCode (type=0) + Public storage (mode=0) + Version 0:
+        // low_nibble = (storage_mode << 6) | (account_type << 4) | version
+        //            = (0 << 6) | (0 << 4) | 0 = 0x00
+        let account_type = AccountType::RegularAccountUpdatableCode;
+        let storage_mode = AccountStorageMode::Public;
+        let version: u8 = 0; // AccountIdVersion::Version0
+
+        let metadata_byte = ((storage_mode as u8) << 6) | ((account_type as u8) << 4) | version;
+        account_id_bytes[7] = metadata_byte;
+
+        // Clear the 32nd most significant bit of prefix (bit 0 of byte 3)
+        // This ensures the prefix is a valid Felt (< field modulus)
+        account_id_bytes[3] &= 0b1111_1110;
+
+        // Clear the MSB of the suffix (bit 7 of byte 8)
+        // The suffix's most significant bit must be zero
+        account_id_bytes[8] &= 0b0111_1111;
+
+        // The suffix's LSB is handled in the 15->Felt conversion
+        // (last byte is byte 14, and Felt expects lower 8 bits to be 0 after conversion)
+
+        // Create the AccountId from the shaped bytes
+        let account_id = AccountId::try_from(account_id_bytes).map_err(|e| {
+            ProxyError::AccountResolution {
+                eth_address: "unknown".to_string(),
+                reason: format!("failed to create AccountId from seed: {}", e),
+            }
+        })?;
+
+        // Verify the account type and storage mode are correct
+        debug_assert_eq!(account_id.account_type(), account_type);
+        debug_assert_eq!(account_id.storage_mode(), storage_mode);
 
         Ok(MidenAccountId(account_id))
     }
@@ -255,9 +305,12 @@ impl From<EthAddress> for alloy_primitives::Address {
     }
 }
 
-/// Miden AccountId (120-bit, 15 bytes).
+/// Miden AccountId wrapper for address mapping.
+///
+/// Wraps the proper `miden_protocol::account::AccountId` type and provides
+/// conversion utilities for storage and display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MidenAccountId(pub [u8; 15]);
+pub struct MidenAccountId(pub AccountId);
 
 impl MidenAccountId {
     /// Create from a byte slice.
@@ -271,15 +324,39 @@ impl MidenAccountId {
                 ),
             });
         }
-        let mut id = [0u8; 15];
-        id.copy_from_slice(bytes);
-        Ok(Self(id))
+        let mut id_bytes = [0u8; 15];
+        id_bytes.copy_from_slice(bytes);
+
+        let account_id = AccountId::try_from(id_bytes).map_err(|e| {
+            ProxyError::AccountResolution {
+                eth_address: "unknown".to_string(),
+                reason: format!("invalid Miden AccountId bytes: {}", e),
+            }
+        })?;
+
+        Ok(Self(account_id))
+    }
+
+    /// Convert to bytes for storage.
+    pub fn to_bytes(&self) -> [u8; 15] {
+        self.0.into()
+    }
+
+    /// Get the underlying AccountId.
+    pub fn inner(&self) -> AccountId {
+        self.0
     }
 }
 
 impl std::fmt::Display for MidenAccountId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(self.0))
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<AccountId> for MidenAccountId {
+    fn from(id: AccountId) -> Self {
+        Self(id)
     }
 }
 
@@ -298,6 +375,19 @@ mod tests {
         AddressMapperConfig::default()
     }
 
+    /// Create a valid test AccountId with proper metadata bits.
+    /// Uses AccountId::dummy() which is available in test mode.
+    fn create_test_account_id(bytes: [u8; 15]) -> MidenAccountId {
+        // Use the testing feature's dummy() function to create valid AccountIds
+        let account_id = AccountId::dummy(
+            bytes,
+            AccountIdVersion::Version0,
+            AccountType::RegularAccountUpdatableCode,
+            AccountStorageMode::Public,
+        );
+        MidenAccountId(account_id)
+    }
+
     #[test]
     fn test_get_or_create_new_address() {
         let mapper = AddressMapper::in_memory(test_config()).unwrap();
@@ -307,6 +397,10 @@ mod tests {
 
         assert!(was_created);
         assert_eq!(mapper.count().unwrap(), 1);
+
+        // Verify the account has correct type and storage mode
+        assert_eq!(miden_id.inner().account_type(), AccountType::RegularAccountUpdatableCode);
+        assert_eq!(miden_id.inner().storage_mode(), AccountStorageMode::Public);
 
         // Second call should return the same ID
         let (miden_id2, was_created2) = mapper.get_or_create(&eth_addr).unwrap();
@@ -336,7 +430,8 @@ mod tests {
         let mapper = AddressMapper::in_memory(test_config()).unwrap();
 
         let eth_addr = EthAddress([5u8; 20]);
-        let miden_id = MidenAccountId([6u8; 15]);
+        // Create a valid test AccountId with proper metadata
+        let miden_id = create_test_account_id([6u8; 15]);
 
         mapper.register(&eth_addr, &miden_id).unwrap();
 
@@ -366,6 +461,27 @@ mod tests {
         let (id2, _) = mapper.get_or_create(&eth2).unwrap();
 
         assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_account_id_metadata() {
+        // Test that derived AccountIds have correct metadata
+        let mapper = AddressMapper::in_memory(test_config()).unwrap();
+
+        let eth_addr = EthAddress([0xde; 20]);
+        let (miden_id, _) = mapper.get_or_create(&eth_addr).unwrap();
+
+        // Verify the AccountId has the expected type and storage mode
+        assert_eq!(
+            miden_id.inner().account_type(),
+            AccountType::RegularAccountUpdatableCode,
+            "AccountId should be RegularAccountUpdatableCode"
+        );
+        assert_eq!(
+            miden_id.inner().storage_mode(),
+            AccountStorageMode::Public,
+            "AccountId should have Public storage mode"
+        );
     }
 
     #[test]
