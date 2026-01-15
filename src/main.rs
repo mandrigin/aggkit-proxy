@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use std::path::PathBuf;
@@ -396,6 +397,116 @@ fn bytes_to_account_id(bytes: &[u8; 15]) -> Result<AccountId, String> {
 
     // Convert AccountIdV0 to AccountId
     Ok(AccountId::from(id_v0))
+}
+
+/// Poll the miden-node for the current block height
+///
+/// This function queries the miden-node via its gRPC API and returns the current
+/// block number. It creates a temporary client for each poll to avoid keeping
+/// long-lived connections.
+async fn poll_block_height(rpc_endpoint: &str, store_path: &PathBuf) -> Result<u32, ClientError> {
+    use miden_client::rpc::Endpoint;
+    use miden_client::builder::ClientBuilder;
+    use miden_client_sqlite_store::SqliteStore;
+
+    debug!(rpc_endpoint = %rpc_endpoint, "Polling miden-node for block height");
+
+    // Get a handle to the current runtime for use inside spawn_blocking
+    let rpc_endpoint = rpc_endpoint.to_string();
+    let store_path = store_path.clone();
+    let runtime_handle = tokio::runtime::Handle::current();
+
+    // Use spawn_blocking because miden_client::Client is !Send
+    let result = tokio::task::spawn_blocking(move || {
+        runtime_handle.block_on(async {
+            // Initialize SQLite store
+            let store = SqliteStore::new(store_path.clone())
+                .await
+                .map_err(|e| ClientError::InitializationError(e.to_string()))?;
+
+            // Parse the RPC endpoint
+            let endpoint = Endpoint::try_from(rpc_endpoint.as_str())
+                .map_err(|e| ClientError::InitializationError(format!("Invalid endpoint: {}", e)))?;
+
+            // Build a minimal client
+            let keystore_path = store_path.join("keystore");
+            let keystore_path_str = keystore_path.to_string_lossy();
+            let mut client: miden_client::Client<miden_client::keystore::FilesystemKeyStore> =
+                ClientBuilder::new()
+                    .grpc_client(&endpoint, Some(10_000))
+                    .store(Arc::new(store))
+                    .filesystem_keystore(&keystore_path_str)
+                    .build()
+                    .await
+                    .map_err(|e| ClientError::InitializationError(e.to_string()))?;
+
+            // Sync state to get current block number
+            let sync_result = client.sync_state().await
+                .map_err(|e| ClientError::SyncError(e.to_string()))?;
+
+            Ok::<u32, ClientError>(sync_result.block_num.as_u32())
+        })
+    })
+    .await
+    .map_err(|e| ClientError::SyncError(format!("Task join error: {}", e)))?;
+
+    result
+}
+
+/// Start a background task that polls the miden-node for block height
+///
+/// This task periodically queries the miden-node and updates the BridgeState
+/// with the current block height. The interval is configurable.
+fn start_block_height_poller(
+    state: Arc<BridgeState>,
+    rpc_endpoint: String,
+    poll_interval: Duration,
+) {
+    let store_path = PathBuf::from("/tmp/miden-block-height-poller-store");
+
+    // Ensure the store path is a directory (remove if it's a file from previous runs)
+    if store_path.exists() && !store_path.is_dir() {
+        if let Err(e) = std::fs::remove_file(&store_path) {
+            warn!(error = %e, path = %store_path.display(), "Failed to remove stale store path file");
+        }
+    }
+    // Create the directory if it doesn't exist
+    if !store_path.exists() {
+        if let Err(e) = std::fs::create_dir_all(&store_path) {
+            warn!(error = %e, path = %store_path.display(), "Failed to create store directory");
+        }
+    }
+
+    tokio::spawn(async move {
+        info!(
+            rpc_endpoint = %rpc_endpoint,
+            poll_interval_secs = poll_interval.as_secs(),
+            "Starting block height poller"
+        );
+
+        loop {
+            match poll_block_height(&rpc_endpoint, &store_path).await {
+                Ok(block_num) => {
+                    let old_height = state.get_block_height();
+                    state.set_block_height(block_num as u64);
+                    if block_num as u64 != old_height {
+                        info!(
+                            block_height = block_num,
+                            old_height = old_height,
+                            "Updated block height from miden-node"
+                        );
+                    } else {
+                        debug!(block_height = block_num, "Block height unchanged");
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to poll block height from miden-node");
+                }
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    });
 }
 
 #[async_trait]
@@ -829,6 +940,28 @@ async fn main() -> anyhow::Result<()> {
     info!("Initializing bridge state...");
     let state = Arc::new(BridgeState::new());
     info!("Bridge state initialized successfully");
+
+    // Start block height polling if MIDEN_RPC_URL is configured
+    let miden_rpc_url = std::env::var("MIDEN_RPC_URL")
+        .unwrap_or_else(|_| "http://localhost:57291".to_string());
+    let poll_interval_secs: u64 = std::env::var("BLOCK_HEIGHT_POLL_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5);
+
+    info!(
+        miden_rpc_url = %miden_rpc_url,
+        poll_interval_secs = poll_interval_secs,
+        "Block height polling configured"
+    );
+
+    // Clone state for the poller before passing to EthApiImpl
+    let state_for_poller = Arc::clone(&state);
+    start_block_height_poller(
+        state_for_poller,
+        miden_rpc_url,
+        Duration::from_secs(poll_interval_secs),
+    );
 
     let rpc_impl = EthApiImpl::new(state);
     info!("EthApi implementation created");
