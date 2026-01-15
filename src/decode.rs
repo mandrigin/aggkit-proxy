@@ -596,4 +596,232 @@ mod tests {
             );
         }
     }
+
+    /// Test decoding RLP-encoded signed transactions containing claimAsset calldata.
+    /// This tests the decode_transaction() function which handles full Ethereum transactions.
+    #[test]
+    fn test_decode_rlp_signed_claim_asset_transaction() {
+        use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
+        use alloy_primitives::{Bytes, PrimitiveSignature, TxKind};
+        use alloy_rlp::Encodable;
+        use alloy_sol_types::SolCall;
+
+        // Test private key (well-known test key from hardhat/foundry)
+        // Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+        let private_key_bytes: [u8; 32] = [
+            0xac, 0x09, 0x74, 0xbe, 0xc3, 0x9a, 0x17, 0xe3, 0x6b, 0xa4, 0xa6, 0xb4, 0xd2, 0x38,
+            0xff, 0x94, 0x4b, 0xac, 0xb4, 0x78, 0xcb, 0xed, 0x5e, 0xfc, 0xae, 0x78, 0x4d, 0x7b,
+            0xf4, 0xf2, 0xff, 0x80,
+        ];
+        let signing_key =
+            k256::ecdsa::SigningKey::from_bytes(&private_key_bytes.into()).expect("valid key");
+        let expected_signer = address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+
+        // Bridge contract address
+        let bridge_contract = address!("2a3DD3EB832aF982ec71669E178424b10Dca2EDe");
+
+        // Create claimAsset calldata
+        let smt_proof_local: [FixedBytes<32>; 32] = [FixedBytes::ZERO; 32];
+        let smt_proof_rollup: [FixedBytes<32>; 32] = [FixedBytes::ZERO; 32];
+        let global_index = U256::from(1u128 << 64) + U256::from(12345u64); // mainnet, local_root_index=12345
+
+        let call = claimAssetCall {
+            smtProofLocalExitRoot: smt_proof_local,
+            smtProofRollupExitRoot: smt_proof_rollup,
+            globalIndex: global_index,
+            mainnetExitRoot: FixedBytes::ZERO,
+            rollupExitRoot: FixedBytes::ZERO,
+            originNetwork: 0,
+            originTokenAddress: address!("D9343a049D5DBd89CD19DC6BcA8c48fB3a0a42a7"),
+            destinationNetwork: 7,
+            destinationAddress: address!("A95867B23955F98a3A5774645DB2B603baba4003"),
+            amount: U256::from(1000000000000000000u128), // 1 token
+            metadata: Bytes::new(),
+        };
+        let calldata = call.abi_encode();
+
+        // Create EIP-1559 transaction
+        let tx = TxEip1559 {
+            chain_id: 1,
+            nonce: 42,
+            gas_limit: 500_000,
+            max_fee_per_gas: 50_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            to: TxKind::Call(bridge_contract),
+            value: U256::ZERO,
+            access_list: Default::default(),
+            input: Bytes::from(calldata.clone()),
+        };
+
+        // Sign the transaction
+        let signature_hash = tx.signature_hash();
+        let (signature, recovery_id) = signing_key
+            .sign_prehash_recoverable(signature_hash.as_slice())
+            .expect("signing should succeed");
+
+        let prim_sig =
+            PrimitiveSignature::from_signature_and_parity(signature, recovery_id.is_y_odd());
+        let signed = TxEnvelope::Eip1559(alloy_consensus::Signed::new_unchecked(
+            tx,
+            prim_sig,
+            signature_hash,
+        ));
+
+        // RLP encode
+        let mut rlp_bytes = Vec::new();
+        signed.encode(&mut rlp_bytes);
+
+        // Now test our decode_transaction function
+        let decoded = decode_transaction(&rlp_bytes).expect("Should decode RLP transaction");
+
+        // Verify decoded fields
+        assert_eq!(decoded.from, expected_signer, "Signer should be recovered correctly");
+        assert_eq!(decoded.to, Some(bridge_contract), "To address should match");
+        assert_eq!(decoded.value, U256::ZERO, "Value should be zero");
+        assert_eq!(decoded.chain_id, Some(1), "Chain ID should be 1");
+        assert_eq!(decoded.input.as_ref(), calldata.as_slice(), "Input should match calldata");
+
+        // Verify the input is a valid claimAsset call
+        assert!(is_claim_asset(&decoded.input), "Should be claimAsset call");
+
+        // Parse the claimAsset parameters from the decoded transaction
+        let parsed = parse_claim_asset(&decoded.input).expect("Should parse claimAsset");
+        assert!(parsed.global_index.mainnet_flag, "Should be mainnet origin");
+        assert_eq!(parsed.global_index.local_root_index, 12345);
+        assert_eq!(parsed.destination_network, 7);
+        assert_eq!(
+            parsed.origin_token_address,
+            address!("D9343a049D5DBd89CD19DC6BcA8c48fB3a0a42a7")
+        );
+    }
+
+    /// Test decoding different transaction types (Legacy, EIP-2930, EIP-1559).
+    #[test]
+    fn test_decode_different_tx_types() {
+        use alloy_consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxEnvelope};
+        use alloy_primitives::{Bytes, PrimitiveSignature, TxKind};
+        use alloy_rlp::Encodable;
+        use alloy_sol_types::SolCall;
+
+        let private_key_bytes: [u8; 32] = [
+            0xac, 0x09, 0x74, 0xbe, 0xc3, 0x9a, 0x17, 0xe3, 0x6b, 0xa4, 0xa6, 0xb4, 0xd2, 0x38,
+            0xff, 0x94, 0x4b, 0xac, 0xb4, 0x78, 0xcb, 0xed, 0x5e, 0xfc, 0xae, 0x78, 0x4d, 0x7b,
+            0xf4, 0xf2, 0xff, 0x80,
+        ];
+        let signing_key =
+            k256::ecdsa::SigningKey::from_bytes(&private_key_bytes.into()).expect("valid key");
+        let expected_signer = address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+        let bridge_contract = address!("2a3DD3EB832aF982ec71669E178424b10Dca2EDe");
+
+        // Create minimal claimAsset calldata
+        let call = claimAssetCall {
+            smtProofLocalExitRoot: [FixedBytes::ZERO; 32],
+            smtProofRollupExitRoot: [FixedBytes::ZERO; 32],
+            globalIndex: U256::from(1u128 << 64),
+            mainnetExitRoot: FixedBytes::ZERO,
+            rollupExitRoot: FixedBytes::ZERO,
+            originNetwork: 0,
+            originTokenAddress: Address::ZERO,
+            destinationNetwork: 7,
+            destinationAddress: expected_signer,
+            amount: U256::from(100),
+            metadata: Bytes::new(),
+        };
+        let calldata = Bytes::from(call.abi_encode());
+
+        // Test Legacy transaction
+        {
+            let tx = TxLegacy {
+                chain_id: Some(1),
+                nonce: 0,
+                gas_price: 20_000_000_000,
+                gas_limit: 500_000,
+                to: TxKind::Call(bridge_contract),
+                value: U256::ZERO,
+                input: calldata.clone(),
+            };
+
+            let sig_hash = tx.signature_hash();
+            let (sig, rec_id) = signing_key
+                .sign_prehash_recoverable(sig_hash.as_slice())
+                .expect("sign");
+            let prim_sig = PrimitiveSignature::from_signature_and_parity(sig, rec_id.is_y_odd());
+            let signed = TxEnvelope::Legacy(alloy_consensus::Signed::new_unchecked(
+                tx, prim_sig, sig_hash,
+            ));
+
+            let mut rlp = Vec::new();
+            signed.encode(&mut rlp);
+
+            let decoded = decode_transaction(&rlp).expect("decode legacy");
+            assert_eq!(decoded.from, expected_signer);
+            assert_eq!(decoded.to, Some(bridge_contract));
+            assert!(is_claim_asset(&decoded.input));
+        }
+
+        // Test EIP-2930 transaction
+        {
+            let tx = TxEip2930 {
+                chain_id: 1,
+                nonce: 1,
+                gas_price: 20_000_000_000,
+                gas_limit: 500_000,
+                to: TxKind::Call(bridge_contract),
+                value: U256::ZERO,
+                input: calldata.clone(),
+                access_list: Default::default(),
+            };
+
+            let sig_hash = tx.signature_hash();
+            let (sig, rec_id) = signing_key
+                .sign_prehash_recoverable(sig_hash.as_slice())
+                .expect("sign");
+            let prim_sig = PrimitiveSignature::from_signature_and_parity(sig, rec_id.is_y_odd());
+            let signed = TxEnvelope::Eip2930(alloy_consensus::Signed::new_unchecked(
+                tx, prim_sig, sig_hash,
+            ));
+
+            let mut rlp = Vec::new();
+            signed.encode(&mut rlp);
+
+            let decoded = decode_transaction(&rlp).expect("decode eip2930");
+            assert_eq!(decoded.from, expected_signer);
+            assert_eq!(decoded.to, Some(bridge_contract));
+            assert_eq!(decoded.chain_id, Some(1));
+            assert!(is_claim_asset(&decoded.input));
+        }
+
+        // Test EIP-1559 transaction
+        {
+            let tx = TxEip1559 {
+                chain_id: 1,
+                nonce: 2,
+                max_fee_per_gas: 50_000_000_000,
+                max_priority_fee_per_gas: 1_000_000_000,
+                gas_limit: 500_000,
+                to: TxKind::Call(bridge_contract),
+                value: U256::ZERO,
+                input: calldata,
+                access_list: Default::default(),
+            };
+
+            let sig_hash = tx.signature_hash();
+            let (sig, rec_id) = signing_key
+                .sign_prehash_recoverable(sig_hash.as_slice())
+                .expect("sign");
+            let prim_sig = PrimitiveSignature::from_signature_and_parity(sig, rec_id.is_y_odd());
+            let signed = TxEnvelope::Eip1559(alloy_consensus::Signed::new_unchecked(
+                tx, prim_sig, sig_hash,
+            ));
+
+            let mut rlp = Vec::new();
+            signed.encode(&mut rlp);
+
+            let decoded = decode_transaction(&rlp).expect("decode eip1559");
+            assert_eq!(decoded.from, expected_signer);
+            assert_eq!(decoded.to, Some(bridge_contract));
+            assert_eq!(decoded.chain_id, Some(1));
+            assert!(is_claim_asset(&decoded.input));
+        }
+    }
 }
