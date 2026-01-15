@@ -72,16 +72,21 @@ VOLUME_NAME=$(docker compose -f "$COMPOSE_FILE" config --format json | \
     echo "miden_miden_node_data")
 
 # Query the SQLite database to get the first faucet account ID
-BRIDGE_FAUCET_ID=$(docker run --rm -v "${VOLUME_NAME}:/data" alpine sh -c \
+# Note: SQLite hex() returns variable-length output without 0x prefix
+# AccountIdV0::from_hex() requires exactly "0x" + 30 hex chars (15 bytes)
+RAW_HEX=$(docker run --rm -v "${VOLUME_NAME}:/data" alpine sh -c \
     "apk add --no-cache sqlite >/dev/null 2>&1 && \
      sqlite3 /data/miden-store.sqlite3 \
      \"SELECT hex(account_id) FROM accounts WHERE is_latest = 1 AND storage LIKE '%faucet%' ORDER BY account_id LIMIT 1;\"" 2>/dev/null)
 
-if [ -z "$BRIDGE_FAUCET_ID" ]; then
+if [ -z "$RAW_HEX" ]; then
     echo "WARNING: Could not extract BRIDGE_FAUCET_ID from miden-node database"
     echo "         Proxy will start without Miden submission support"
 else
-    echo "  BRIDGE_FAUCET_ID: $BRIDGE_FAUCET_ID"
+    # Format: left-pad to 30 hex chars with zeros, add 0x prefix
+    # AccountIdV0 is 15 bytes = 30 hex chars
+    BRIDGE_FAUCET_ID="0x$(printf '%30s' "$RAW_HEX" | tr ' ' '0')"
+    echo "  BRIDGE_FAUCET_ID: $BRIDGE_FAUCET_ID (raw: $RAW_HEX)"
     export BRIDGE_FAUCET_ID
 fi
 
