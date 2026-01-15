@@ -16,7 +16,7 @@ WORKDIR /build
 
 # Clone miden-node at the agglayer-v0.1 tag
 RUN git clone --depth 1 --branch agglayer-v0.1 \
-    https://github.com/0xPolygonMiden/miden-node.git .
+    https://github.com/0xMiden/miden-node.git .
 
 # Build the node binary
 RUN cargo build --release --bin miden-node
