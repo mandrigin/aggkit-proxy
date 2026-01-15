@@ -40,23 +40,32 @@ WORKDIR /app
 
 COPY --from=builder /build/target/release/miden-node /usr/local/bin/
 
+# Copy genesis config
+COPY config/genesis.toml /app/genesis.toml
+
 # gRPC port
 EXPOSE 57291
 
-# Create data directory
-RUN mkdir -p /data
+# Create data and accounts directories
+RUN mkdir -p /data /accounts
 
 # Entrypoint script to bootstrap and start the node
 RUN echo '#!/bin/bash\n\
 set -e\n\
 DATA_DIR="${MIDEN_NODE_DATA_DIRECTORY:-/data}"\n\
+ACCOUNTS_DIR="${MIDEN_NODE_ACCOUNTS_DIRECTORY:-/accounts}"\n\
 RPC_URL="${MIDEN_NODE_RPC_URL:-0.0.0.0:57291}"\n\
+GENESIS_FILE="${MIDEN_GENESIS_CONFIG_FILE:-/app/genesis.toml}"\n\
 \n\
 # Bootstrap if not already done\n\
 if [ ! -f "$DATA_DIR/.bootstrapped" ]; then\n\
     echo "Bootstrapping miden-node..."\n\
-    miden-node bundled bootstrap --data-directory "$DATA_DIR"\n\
+    miden-node bundled bootstrap \\\n\
+        --data-directory "$DATA_DIR" \\\n\
+        --accounts-directory "$ACCOUNTS_DIR" \\\n\
+        --genesis-config-file "$GENESIS_FILE"\n\
     touch "$DATA_DIR/.bootstrapped"\n\
+    echo "Bootstrap complete."\n\
 fi\n\
 \n\
 echo "Starting miden-node on $RPC_URL..."\n\
