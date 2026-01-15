@@ -13,9 +13,8 @@ use std::path::PathBuf;
 
 // Import library modules for claim processing
 use miden_rpc_proxy::{
-    build_claim_transaction_request, create_bridge_claim_note, decode_transaction, init_client,
-    is_claim_asset, parse_claim_asset, submit_transaction, AddressMapper, AddressMapperConfig,
-    BridgeClaimParams, ClaimTracker, ClientError, EthAddress, MidenClientConfig,
+    decode_transaction, init_client, is_claim_asset, parse_claim_asset, submit_transaction,
+    AddressMapper, AddressMapperConfig, ClaimTracker, ClientError, EthAddress, MidenClientConfig,
     CLAIM_ASSET_SELECTOR,
 };
 
@@ -24,9 +23,9 @@ use alloy_primitives::{Address, Bytes};
 // Miden protocol types
 use miden_protocol::{
     account::{AccountId, AccountIdV0},
-    asset::FungibleAsset,
-    note::NoteType,
+    Felt,
 };
+use miden_protocol::crypto::rand::FeltRng;  // For draw_element()
 
 /// Miden chain ID (placeholder - configure as needed)
 const MIDEN_CHAIN_ID: u64 = 0x4d494445; // "MIDE" in hex
@@ -244,6 +243,24 @@ struct ClaimSubmissionData {
     recipient_account_bytes: [u8; 15],
     /// Amount to transfer (as u64, converted from U256)
     amount: u64,
+    /// SMT proof for local exit root (32 * 32 bytes = 1024 bytes)
+    smt_proof_local_exit_root: [[u8; 32]; 32],
+    /// SMT proof for rollup exit root (32 * 32 bytes = 1024 bytes)
+    smt_proof_rollup_exit_root: [[u8; 32]; 32],
+    /// Global index (256 bits = 32 bytes)
+    global_index_bytes: [u8; 32],
+    /// Mainnet exit root (32 bytes)
+    mainnet_exit_root: [u8; 32],
+    /// Rollup exit root (32 bytes)
+    rollup_exit_root: [u8; 32],
+    /// Origin network ID
+    origin_network: u32,
+    /// Origin token address (20 bytes)
+    origin_token_address: [u8; 20],
+    /// Destination network ID
+    destination_network: u32,
+    /// Destination address (20 bytes - Ethereum address)
+    destination_address: [u8; 20],
 }
 
 /// Submit a claim to the Miden network using spawn_blocking
@@ -256,9 +273,6 @@ async fn submit_claim_to_miden(
     config: MidenSubmissionConfig,
     claim_data: ClaimSubmissionData,
 ) -> Result<u64, ClientError> {
-    use miden_protocol::crypto::rand::RpoRandomCoin;
-    use miden_protocol::Felt;
-
     info!(
         recipient = hex::encode(&claim_data.recipient_account_bytes),
         amount = claim_data.amount,
@@ -309,114 +323,133 @@ async fn submit_claim_to_miden(
             let block_num = sync_result.block_num.as_u32();
             info!(block_num = block_num, "State synced with network");
 
-            // Step 4.5: Import faucet account and keys
-            // If we have an account file with keys, use that. Otherwise, import from network.
-            // IMPORTANT: When using account file, the account ID from the file takes precedence
-            // over the BRIDGE_FAUCET_ID env var.
-            let bridge_faucet_id = if let Some(ref account_file_path) = config.faucet_account_file {
-                use miden_protocol::account::AccountFile;
-                use miden_client::keystore::FilesystemKeyStore;
+            // Step 4.5: Load faucet account to CONSUME claim notes
+            // The faucet processes CLAIM notes as inputs, validates proofs, and creates P2ID outputs.
+            // See bridge_in.rs test: build_tx_context(agglayer_faucet.id(), &[], &[claim_note])
+            use miden_client::keystore::FilesystemKeyStore;
+            use miden_protocol::account::AccountFile;
 
+            // Keystore path for the faucet account keys
+            let keystore_path = config.store_path
+                .parent()
+                .unwrap_or(std::path::Path::new("/app/data"))
+                .join("keystore");
+
+            let keystore = FilesystemKeyStore::new(keystore_path.clone())
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to open keystore at {}: {}",
+                    keystore_path.display(), e
+                )))?;
+
+            // Load faucet account from file (required for consuming claim notes)
+            let agglayer_faucet_id = if let Some(ref account_file_path) = config.faucet_account_file {
                 info!(
                     account_file = %account_file_path.display(),
-                    "Loading faucet account from file (with keys)..."
+                    "Loading faucet account for claim note consumption..."
                 );
 
-                // Load the account file which contains both account and secret keys
                 let account_file = AccountFile::read(account_file_path)
                     .map_err(|e| ClientError::InitializationError(format!(
                         "Failed to read account file {}: {}",
                         account_file_path.display(), e
                     )))?;
 
-                // Use the account ID from the file - this is the authoritative source
-                let faucet_id_from_file = account_file.account.id();
+                let faucet_id = account_file.account.id();
                 info!(
-                    account_id = ?faucet_id_from_file,
+                    faucet_account_id = ?faucet_id,
                     num_keys = account_file.auth_secret_keys.len(),
-                    "Account file loaded - using account ID from file"
+                    "Faucet account file loaded"
                 );
 
-                // Add the account to the client
-                client.add_account(&account_file.account, true).await
+                // Import faucet account from network to get current on-chain state
+                info!("Importing faucet account from network...");
+                client.import_account_by_id(faucet_id).await
                     .map_err(|e| ClientError::AccountNotFound(format!(
-                        "Failed to add faucet account to client: {}", e
+                        "Failed to import faucet account {}: {}",
+                        faucet_id, e
                     )))?;
-                info!("Faucet account added to client");
+                info!("Faucet account imported from network");
 
-                // Add the secret keys to the keystore
-                // The keystore path is: store_path.parent()/keystore
-                let keystore_path = config.store_path
-                    .parent()
-                    .unwrap_or(std::path::Path::new("/app/data"))
-                    .join("keystore");
-
-                let keystore = FilesystemKeyStore::new(keystore_path.clone())
-                    .map_err(|e| ClientError::InitializationError(format!(
-                        "Failed to open keystore at {}: {}",
-                        keystore_path.display(), e
-                    )))?;
-
+                // Add the faucet's secret keys to the keystore for transaction signing
                 for key in &account_file.auth_secret_keys {
                     keystore.add_key(key)
                         .map_err(|e| ClientError::InitializationError(format!(
-                            "Failed to add key to keystore: {}", e
+                            "Failed to add faucet key to keystore: {}", e
                         )))?;
                 }
                 info!(
                     num_keys = account_file.auth_secret_keys.len(),
                     keystore_path = %keystore_path.display(),
-                    "Secret keys added to keystore"
+                    "Faucet keys added to keystore"
                 );
 
-                // Return the account ID from file to use for the rest of the transaction
-                faucet_id_from_file
+                faucet_id
             } else {
-                // Fallback: try to import from network (won't have keys for signing)
-                info!(
-                    bridge_faucet_id = ?bridge_faucet_id,
-                    "No account file provided, importing from network (signing may fail)..."
-                );
-                client.import_account_by_id(bridge_faucet_id).await
-                    .map_err(|e| ClientError::AccountNotFound(format!(
-                        "Failed to import bridge faucet account {}: {}",
-                        bridge_faucet_id, e
-                    )))?;
-                warn!("Faucet account imported from network WITHOUT keys - transaction signing will fail!");
-                bridge_faucet_id
+                return Err(ClientError::InitializationError(
+                    "BRIDGE_FAUCET_ACCOUNT_FILE is required for claim note processing".to_string()
+                ));
             };
 
-            // Step 5: Create the fungible asset for transfer
-            let asset = FungibleAsset::new(bridge_faucet_id, claim_data.amount)
-                .map_err(|e| ClientError::NoteCreationError(format!("Invalid asset: {}", e)))?;
+            // The sender is the faucet (it consumes claim notes)
+            let sender_account_id = agglayer_faucet_id;
+
+            // Step 5: Create P2ID note for faucet distribution
+            // Using P2ID (not CLAIM) because our genesis faucet is a native faucet
+            // without agglayer procedures. The faucet will mint tokens via its distribute proc.
+            use miden_client::transaction::{TransactionRequestBuilder, OutputNote};
+            use miden_protocol::asset::FungibleAsset;
+            use miden_protocol::note::NoteType;
+            use miden_protocol::crypto::rand::RpoRandomCoin;
 
             info!(
-                faucet_id = ?bridge_faucet_id,
+                sender_id = ?sender_account_id,
+                faucet_id = ?agglayer_faucet_id,
+                recipient = ?recipient_account_id,
                 amount = claim_data.amount,
-                "Created fungible asset"
+                "Creating P2ID note for faucet distribution"
             );
 
-            // Step 6: Create the bridge claim note (P2ID)
-            // Initialize RNG for note creation using system randomness
-            let seed = generate_rng_seed();
+            // Generate RNG from claim data for deterministic note creation
+            let seed = [
+                claim_data.global_index_bytes[0..8].try_into().map(u64::from_le_bytes).unwrap_or(0),
+                claim_data.global_index_bytes[8..16].try_into().map(u64::from_le_bytes).unwrap_or(0),
+                claim_data.mainnet_exit_root[0..8].try_into().map(u64::from_le_bytes).unwrap_or(0),
+                claim_data.rollup_exit_root[0..8].try_into().map(u64::from_le_bytes).unwrap_or(0),
+            ];
             let mut rng = RpoRandomCoin::new(seed.map(Felt::new).into());
 
-            let claim_params = BridgeClaimParams {
-                sender_account_id: bridge_faucet_id,
-                recipient_account_id,
-                assets: vec![asset],
-                note_type: NoteType::Public,
-            };
+            // Create fungible asset from faucet for the specified amount
+            let asset = FungibleAsset::new(agglayer_faucet_id, claim_data.amount)
+                .map_err(|e| ClientError::NoteCreationError(format!("Failed to create asset: {}", e)))?;
 
-            let note = create_bridge_claim_note(claim_params, &mut rng)?;
-            info!(note_id = ?note.id(), "Created P2ID claim note");
+            // Create P2ID note using miden-standards
+            // P2ID notes can only be consumed by the target account
+            use miden_standards::note::create_p2id_note;
+            use miden_protocol::asset::Asset;
 
-            // Step 7: Build the transaction request
-            let tx_request = build_claim_transaction_request(bridge_faucet_id, vec![note])?;
-            info!("Built transaction request");
+            let p2id_note = create_p2id_note(
+                sender_account_id,           // Faucet is the sender
+                recipient_account_id,        // Recipient gets the tokens
+                vec![Asset::Fungible(asset)],
+                NoteType::Public,            // Public notes for bridge claims
+                Felt::new(0),                // aux field
+                &mut rng,
+            )
+            .map_err(|e| ClientError::NoteCreationError(format!("Failed to create P2ID note: {}", e)))?;
 
-            // Step 8: Submit the transaction
-            let miden_tx_id = submit_transaction(&mut client, bridge_faucet_id, tx_request).await?;
+            info!(note_id = ?p2id_note.id(), "Created P2ID note");
+
+            // Build transaction request with P2ID as OUTPUT (faucet mints tokens)
+            // The faucet creates new tokens via its distribute procedure when sending outputs
+            let tx_request = TransactionRequestBuilder::new()
+                .own_output_notes(vec![OutputNote::Full(p2id_note)])
+                .build()
+                .map_err(|e| ClientError::TransactionError(format!("Failed to build tx request: {}", e)))?;
+
+            info!("Built transaction request - faucet will mint and send P2ID to recipient {}", recipient_account_id);
+
+            // Step 8: Submit the transaction using the faucet account (which mints via distribute)
+            let miden_tx_id = submit_transaction(&mut client, sender_account_id, tx_request).await?;
             info!(
                 miden_tx_id = %miden_tx_id,
                 block_num = block_num,
@@ -430,38 +463,6 @@ async fn submit_claim_to_miden(
     .map_err(|e| ClientError::TransactionError(format!("Task join error: {}", e)))?;
 
     result
-}
-
-/// Generate a random seed for RpoRandomCoin
-///
-/// Uses system time and thread ID as entropy sources
-fn generate_rng_seed() -> [u64; 4] {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-
-    let mut hasher = DefaultHasher::new();
-    now.as_nanos().hash(&mut hasher);
-    std::thread::current().id().hash(&mut hasher);
-    let h1 = hasher.finish();
-
-    hasher = DefaultHasher::new();
-    (now.as_nanos() ^ 0xDEADBEEF).hash(&mut hasher);
-    let h2 = hasher.finish();
-
-    hasher = DefaultHasher::new();
-    (now.as_secs() * 1000000000 + now.subsec_nanos() as u64).hash(&mut hasher);
-    let h3 = hasher.finish();
-
-    hasher = DefaultHasher::new();
-    (h1 ^ h2 ^ h3).hash(&mut hasher);
-    let h4 = hasher.finish();
-
-    [h1, h2, h3, h4]
 }
 
 /// Parse an AccountId from a hex string
@@ -826,10 +827,10 @@ impl EthApiServer for EthApiImpl {
             destination_miden = %miden_account_id,
             amount = %claim_params.amount,
             global_index = %claim_params.global_index_raw,
-            "=== CLAIM PROCESSING COMPLETE (pending Miden submission) ==="
+            "=== CLAIM PARSED - submitting to Miden ==="
         );
 
-        // Step 10: Submit to Miden network in background task
+        // Step 10: Submit to Miden network (blocking - waits for result)
         if let Some(ref config) = self.miden_config {
             // Convert U256 amount from 18 decimals (ERC20 wei) to 8 decimals (Miden)
             // Scale factor: 10^10 (18 - 8 = 10 decimal places)
@@ -854,52 +855,75 @@ impl EthApiServer for EthApiImpl {
                 "Converted ERC20 amount (18 decimals) to Miden amount (8 decimals)"
             );
 
+            // Convert SMT proofs from Vec<[u8; 32]> to [[u8; 32]; 32]
+            let smt_proof_local: [[u8; 32]; 32] = {
+                let mut arr = [[0u8; 32]; 32];
+                for (i, sibling) in claim_params.smt_proof_local_exit_root.iter().take(32).enumerate() {
+                    arr[i] = *sibling;
+                }
+                arr
+            };
+            let smt_proof_rollup: [[u8; 32]; 32] = {
+                let mut arr = [[0u8; 32]; 32];
+                for (i, sibling) in claim_params.smt_proof_rollup_exit_root.iter().take(32).enumerate() {
+                    arr[i] = *sibling;
+                }
+                arr
+            };
+
+            // Convert global_index U256 to [u8; 32]
+            let global_index_bytes: [u8; 32] = claim_params.global_index_raw.to_be_bytes();
+
             let claim_data = ClaimSubmissionData {
                 recipient_account_bytes: miden_account_id.to_bytes(),
                 amount: amount_u64,
+                smt_proof_local_exit_root: smt_proof_local,
+                smt_proof_rollup_exit_root: smt_proof_rollup,
+                global_index_bytes,
+                mainnet_exit_root: claim_params.mainnet_exit_root,
+                rollup_exit_root: claim_params.rollup_exit_root,
+                origin_network: claim_params.origin_network,
+                origin_token_address: claim_params.origin_token_address.into_array(),
+                destination_network: claim_params.destination_network,
+                destination_address: claim_params.destination_address.into_array(),
             };
 
-            let config_clone = config.clone();
-            let state_clone = self.state.clone();
-            let tx_hash_clone = tx_hash.clone();
-
-            // Spawn background task for Miden submission
-            tokio::spawn(async move {
-                info!(
-                    tx_hash = %tx_hash_clone,
-                    "Starting background Miden submission"
-                );
-
-                match submit_claim_to_miden(config_clone, claim_data).await {
-                    Ok(block_num) => {
-                        info!(
-                            tx_hash = %tx_hash_clone,
-                            block_num = block_num,
-                            "Miden submission SUCCEEDED"
-                        );
-                        state_clone.record_tx(
-                            tx_hash_clone,
-                            TxStatus::Confirmed { block_number: block_num },
-                        );
-                    }
-                    Err(e) => {
-                        error!(
-                            tx_hash = %tx_hash_clone,
-                            error = %e,
-                            "Miden submission FAILED"
-                        );
-                        state_clone.record_tx(
-                            tx_hash_clone,
-                            TxStatus::Failed { reason: e.to_string() },
-                        );
-                    }
-                }
-            });
-
+            // Submit to Miden synchronously - wait for result and propagate errors
             info!(
                 tx_hash = %tx_hash,
-                "Background Miden submission task spawned"
+                "Starting Miden submission (blocking)"
             );
+
+            match submit_claim_to_miden(config.clone(), claim_data).await {
+                Ok(block_num) => {
+                    info!(
+                        tx_hash = %tx_hash,
+                        block_num = block_num,
+                        "Miden submission SUCCEEDED"
+                    );
+                    self.state.record_tx(
+                        tx_hash.clone(),
+                        TxStatus::Confirmed { block_number: block_num },
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        tx_hash = %tx_hash,
+                        error = %e,
+                        "Miden submission FAILED"
+                    );
+                    self.state.record_tx(
+                        tx_hash.clone(),
+                        TxStatus::Failed { reason: e.to_string() },
+                    );
+                    // Return error to caller instead of just logging
+                    return Err(ErrorObjectOwned::owned(
+                        -32000,
+                        format!("Miden transaction failed: {}", e),
+                        None::<()>,
+                    ));
+                }
+            }
         } else {
             warn!(
                 tx_hash = %tx_hash,
