@@ -21,7 +21,7 @@ use miden_protocol::{
     Felt,
 };
 use tokio::sync::RwLock;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 /// Error types for Miden client operations
 #[derive(Debug, thiserror::Error)]
@@ -317,7 +317,16 @@ where
     let tx_id = client
         .submit_new_transaction(account_id, tx_request)
         .await
-        .map_err(|e| ClientError::TransactionError(e.to_string()))?;
+        .map_err(|e| {
+            // Log detailed error information
+            error!(
+                error = %e,
+                error_debug = ?e,
+                account_id = ?account_id,
+                "Transaction submission failed"
+            );
+            ClientError::TransactionError(e.to_string())
+        })?;
 
     let tx_id_hex = hex::encode(tx_id.as_bytes());
 
