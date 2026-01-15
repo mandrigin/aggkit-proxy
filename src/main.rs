@@ -464,8 +464,8 @@ async fn submit_claim_to_miden(
 
             let ephemeral_account_id = ephemeral_account.id();
 
-            // Add ephemeral account to client
-            client.add_account(&ephemeral_account, false).await
+            // Add ephemeral account to client (track=true for proper state management)
+            client.add_account(&ephemeral_account, true).await
                 .map_err(|e| ClientError::InitializationError(format!(
                     "Failed to add ephemeral account to client: {}", e
                 )))?;
@@ -474,6 +474,13 @@ async fn submit_claim_to_miden(
                 ephemeral_account_id = ?ephemeral_account_id,
                 "Created ephemeral user account for CLAIM submission"
             );
+
+            // Sync state after adding ephemeral account to ensure proper tracking
+            client.sync_state().await
+                .map_err(|e| ClientError::SyncError(format!(
+                    "Failed to sync after adding ephemeral account: {}", e
+                )))?;
+            info!("State synced after ephemeral account creation");
 
             // Step 6: Create the bridge CLAIM note using miden-agglayer
             // Initialize RNG for note creation using system randomness
