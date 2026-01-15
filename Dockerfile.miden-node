@@ -29,12 +29,8 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     libsqlite3-0 \
     curl \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
-
-# Install grpc_health_probe for healthchecks
-RUN curl -fsSL https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.25/grpc_health_probe-linux-amd64 \
-    -o /usr/local/bin/grpc_health_probe && \
-    chmod +x /usr/local/bin/grpc_health_probe
 
 WORKDIR /app
 

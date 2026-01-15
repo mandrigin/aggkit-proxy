@@ -29,7 +29,7 @@ services:
       - miden_node_data:/data
       - miden_node_accounts:/accounts
     healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=:57291"]
+      test: ["CMD-SHELL", "nc -z localhost 57291 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
