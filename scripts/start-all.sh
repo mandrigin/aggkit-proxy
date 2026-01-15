@@ -72,10 +72,15 @@ VOLUME_NAME=$(docker compose -f "$COMPOSE_FILE" config --format json | \
     echo "miden_miden_node_data")
 
 # Query the SQLite database to get the first faucet account ID
-BRIDGE_FAUCET_ID=$(docker run --rm -v "${VOLUME_NAME}:/data" alpine sh -c \
+RAW_HEX=$(docker run --rm -v "${VOLUME_NAME}:/data" alpine sh -c \
     "apk add --no-cache sqlite >/dev/null 2>&1 && \
      sqlite3 /data/miden-store.sqlite3 \
      \"SELECT hex(account_id) FROM accounts WHERE is_latest = 1 AND storage LIKE '%faucet%' ORDER BY account_id LIMIT 1;\"" 2>/dev/null)
+
+# Format for AccountIdV0: 0x prefix + 30 hex chars (15 bytes), left-padded with zeros
+if [ -n "$RAW_HEX" ]; then
+    BRIDGE_FAUCET_ID="0x$(printf '%030s' "$RAW_HEX" | tr ' ' '0')"
+fi
 
 if [ -z "$BRIDGE_FAUCET_ID" ]; then
     echo "WARNING: Could not extract BRIDGE_FAUCET_ID from miden-node database"
