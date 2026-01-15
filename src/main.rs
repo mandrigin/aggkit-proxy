@@ -917,7 +917,12 @@ async fn main() -> anyhow::Result<()> {
         .with_line_number(true)
         .init();
 
-    let version = std::env::var("GIT_COMMIT").unwrap_or_else(|_| "unknown".to_string());
+    let git_commit = std::env::var("GIT_COMMIT").unwrap_or_else(|_| "unknown".to_string());
+    let version = if git_commit == "unknown" {
+        "unknown".to_string()
+    } else {
+        format!("{} (https://github.com/mandrigin/aggkit-proxy/commit/{})", git_commit, git_commit)
+    };
 
     // Collect all config from environment
     let miden_rpc_url = std::env::var("MIDEN_RPC_URL")

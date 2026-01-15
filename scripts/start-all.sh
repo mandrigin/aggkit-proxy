@@ -17,6 +17,9 @@ cd "$PROJECT_DIR"
 # Use local compose file (minimal dependencies)
 COMPOSE_FILE="docker-compose.local.yml"
 
+# Export GIT_COMMIT for Docker build args
+export GIT_COMMIT=$(git rev-parse --short HEAD)
+
 # Check for --clean flag
 if [ "$1" = "--clean" ]; then
     echo "Cleaning up existing volumes..."
