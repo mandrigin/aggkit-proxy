@@ -1,0 +1,51 @@
+version: "3.8"
+
+# Minimal local testing setup - just miden-node and proxy
+# No external dependencies (postgres, bridge-service, l1-anvil)
+
+services:
+  # Miden node (agglayer-v0.1 - built from source)
+  miden-node:
+    build:
+      context: .
+      dockerfile: Dockerfile.miden-node
+    ports:
+      - "57291:57291"
+    volumes:
+      - miden_node_data:/data
+      - miden_node_accounts:/accounts
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 57291 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+
+  # The proxy service (minimal config for decode testing)
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      RUST_LOG: info
+    ports:
+      - "8546:8546"
+    volumes:
+      - ./config/config.docker.toml:/app/config.toml:ro
+    depends_on:
+      miden-node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8546/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  miden_node_data:
+  miden_node_accounts:
+
+networks:
+  default:
+    name: miden-proxy-local-network

@@ -1,0 +1,23 @@
+# Miden RPC Proxy Configuration - Docker (minimal, no bridge/L1)
+# Use this for basic decode testing without external dependencies
+
+[server]
+listen_port = 8546
+listen_host = "0.0.0.0"
+
+[miden]
+rpc_url = "http://miden-node:57291"
+chain_id = "0x4d494445"
+
+# Dummy values - not used for decode testing
+[bridge]
+service_url = "http://localhost:8080"
+account_id = ""
+
+[l1]
+rpc_url = "http://localhost:8545"
+chain_id = 31337
+
+[logging]
+level = "info"
+format = "pretty"

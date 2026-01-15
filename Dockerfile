@@ -1,5 +1,6 @@
 # Build stage
-FROM rust:1.82-slim-bookworm AS builder
+# Miden crates require Rust 1.90+
+FROM rustlang/rust:nightly-bookworm-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -29,6 +30,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
