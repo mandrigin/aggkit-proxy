@@ -16,7 +16,10 @@ use miden_rpc_proxy::{
     build_claim_transaction_request, create_bridge_claim_note, decode_transaction, init_client,
     is_claim_asset, parse_claim_asset, submit_transaction, AddressMapper, AddressMapperConfig,
     BridgeClaimParams, ClaimTracker, ClientError, EthAddress, MidenClientConfig,
+    CLAIM_ASSET_SELECTOR,
 };
+
+use alloy_primitives::{Address, Bytes};
 
 // Miden protocol types
 use miden_protocol::{
@@ -468,48 +471,60 @@ impl EthApiServer for EthApiImpl {
             }
         };
 
-        // Step 2: Decode RLP transaction
-        info!("Decoding RLP transaction envelope...");
-        let decoded_tx = match decode_transaction(&tx_bytes) {
-            Ok(tx) => {
-                info!(
-                    from = %tx.from,
-                    to = ?tx.to,
-                    value = %tx.value,
-                    input_len = tx.input.len(),
-                    chain_id = ?tx.chain_id,
-                    "Transaction decoded successfully"
-                );
-                tx
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to decode transaction");
-                return Err(ErrorObjectOwned::owned(
-                    -32602,
-                    format!("Transaction decode error: {}", e),
-                    None::<()>,
-                ));
+        // Step 2: Detect input format and extract calldata
+        // Support two formats:
+        // 1. Raw claimAsset calldata (starts with selector 0xccaa2d11)
+        // 2. RLP-encoded signed transaction
+        let (input_data, sender_address) = if tx_bytes.len() >= 4 && tx_bytes[..4] == CLAIM_ASSET_SELECTOR {
+            // Raw calldata format - used by bridge systems
+            info!(
+                calldata_len = tx_bytes.len(),
+                "Detected raw claimAsset calldata (not RLP-encoded transaction)"
+            );
+            (Bytes::copy_from_slice(&tx_bytes), Address::ZERO)
+        } else {
+            // RLP-encoded transaction format - used by Ethereum wallets
+            info!("Decoding RLP transaction envelope...");
+            match decode_transaction(&tx_bytes) {
+                Ok(tx) => {
+                    info!(
+                        from = %tx.from,
+                        to = ?tx.to,
+                        value = %tx.value,
+                        input_len = tx.input.len(),
+                        chain_id = ?tx.chain_id,
+                        "Transaction decoded successfully"
+                    );
+                    // Check if this is a claimAsset call
+                    if !is_claim_asset(&tx.input) {
+                        warn!(
+                            input_len = tx.input.len(),
+                            selector = ?tx.input.get(..4),
+                            "Transaction is NOT a claimAsset call - rejecting"
+                        );
+                        return Err(ErrorObjectOwned::owned(
+                            -32602,
+                            "Only claimAsset transactions are supported",
+                            None::<()>,
+                        ));
+                    }
+                    (tx.input, tx.from)
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to decode transaction");
+                    return Err(ErrorObjectOwned::owned(
+                        -32602,
+                        format!("Transaction decode error: {}", e),
+                        None::<()>,
+                    ));
+                }
             }
         };
-
-        // Step 3: Check if this is a claimAsset call
-        if !is_claim_asset(&decoded_tx.input) {
-            warn!(
-                input_len = decoded_tx.input.len(),
-                selector = ?decoded_tx.input.get(..4),
-                "Transaction is NOT a claimAsset call - rejecting"
-            );
-            return Err(ErrorObjectOwned::owned(
-                -32602,
-                "Only claimAsset transactions are supported",
-                None::<()>,
-            ));
-        }
         info!("Transaction identified as claimAsset call");
 
-        // Step 4: Parse claimAsset parameters
+        // Step 3: Parse claimAsset parameters
         info!("Parsing claimAsset calldata...");
-        let claim_params = match parse_claim_asset(&decoded_tx.input) {
+        let claim_params = match parse_claim_asset(&input_data) {
             Ok(params) => {
                 info!(
                     global_index_raw = %params.global_index_raw,
@@ -629,7 +644,7 @@ impl EthApiServer for EthApiImpl {
         // Step 9: Log summary
         info!(
             tx_hash = %tx_hash,
-            from = %decoded_tx.from,
+            from = %sender_address,
             destination_eth = %eth_address,
             destination_miden = %miden_account_id,
             amount = %claim_params.amount,
