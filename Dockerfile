@@ -27,6 +27,10 @@ RUN touch src/main.rs && cargo build --release
 # Runtime stage
 FROM debian:bookworm-slim
 
+# Build-time argument for git commit SHA
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \

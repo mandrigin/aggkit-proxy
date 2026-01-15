@@ -28,6 +28,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     environment:
       RUST_LOG: info
       MIDEN_RPC_URL: http://miden-node:57291

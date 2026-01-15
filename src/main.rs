@@ -917,9 +917,12 @@ async fn main() -> anyhow::Result<()> {
         .with_line_number(true)
         .init();
 
+    let version = std::env::var("GIT_COMMIT").unwrap_or_else(|_| "unknown".to_string());
+
     info!("=======================================================");
     info!("  Miden RPC Proxy - Ethereum JSON-RPC to Miden Bridge  ");
     info!("=======================================================");
+    info!("Version: {}", version);
     info!("Chain ID: {:#x} (MIDE)", MIDEN_CHAIN_ID);
     info!("Fixed gas estimate: {}", FIXED_GAS_ESTIMATE);
 
