@@ -412,7 +412,70 @@ async fn submit_claim_to_miden(
                 bridge_faucet_id
             };
 
-            // Step 5: Create the bridge CLAIM note using miden-agglayer
+            // Step 5: Create an ephemeral user account for CLAIM note submission
+            // CLAIM notes must be submitted FROM a user account TO the faucet.
+            // The faucet validates the claim and mints assets to the destination.
+            use miden_client::account::component::{AccountComponent, AuthRpoFalcon512, BasicWallet};
+            use miden_client::account::{AccountBuilder, AccountType};
+            use miden_client::keystore::FilesystemKeyStore as EphemeralKeyStore;
+            use miden_protocol::account::auth::AuthSecretKey;
+            use miden_protocol::account::AccountStorageMode;
+
+            let ephemeral_keystore_path = config.store_path
+                .parent()
+                .unwrap_or(std::path::Path::new("/app/data"))
+                .join("keystore");
+
+            let ephemeral_keystore = EphemeralKeyStore::new(ephemeral_keystore_path.clone())
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to open keystore at {}: {}",
+                    ephemeral_keystore_path.display(), e
+                )))?;
+
+            // Generate random seed for ephemeral account
+            let rng_seed = generate_rng_seed();
+            let mut init_seed = [0u8; 32];
+            init_seed[0..8].copy_from_slice(&rng_seed[0].to_le_bytes());
+            init_seed[8..16].copy_from_slice(&rng_seed[1].to_le_bytes());
+            init_seed[16..24].copy_from_slice(&rng_seed[2].to_le_bytes());
+            init_seed[24..32].copy_from_slice(&rng_seed[3].to_le_bytes());
+
+            // Create key pair and auth component for the ephemeral user
+            let ephemeral_key_pair = AuthSecretKey::new_falcon512_rpo();
+            let ephemeral_auth_component: AccountComponent =
+                AuthRpoFalcon512::new(ephemeral_key_pair.public_key().to_commitment()).into();
+
+            // Add key to keystore
+            ephemeral_keystore.add_key(&ephemeral_key_pair)
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to add ephemeral key to keystore: {}", e
+                )))?;
+
+            // Build ephemeral wallet account
+            let ephemeral_account = AccountBuilder::new(init_seed)
+                .account_type(AccountType::RegularAccountUpdatableCode)
+                .storage_mode(AccountStorageMode::Public)
+                .with_auth_component(ephemeral_auth_component)
+                .with_component(BasicWallet)
+                .build()
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to build ephemeral account: {}", e
+                )))?;
+
+            let ephemeral_account_id = ephemeral_account.id();
+
+            // Add ephemeral account to client
+            client.add_account(&ephemeral_account, false).await
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to add ephemeral account to client: {}", e
+                )))?;
+
+            info!(
+                ephemeral_account_id = ?ephemeral_account_id,
+                "Created ephemeral user account for CLAIM submission"
+            );
+
+            // Step 6: Create the bridge CLAIM note using miden-agglayer
             // Initialize RNG for note creation using system randomness
             let seed = generate_rng_seed();
             let mut rng = RpoRandomCoin::new(seed.map(Felt::new).into());
@@ -438,6 +501,7 @@ async fn submit_claim_to_miden(
                 .map_err(|e| ClientError::NoteCreationError(format!("Failed to create note tag: {}", e)))?;
 
             info!(
+                ephemeral_user = ?ephemeral_account_id,
                 faucet_id = ?bridge_faucet_id,
                 recipient = ?recipient_account_id,
                 amount = claim_data.amount,
@@ -458,8 +522,8 @@ async fn submit_claim_to_miden(
                 destination_address: claim_data.destination_address,
                 amount: amount_felts,
                 metadata: metadata_felts,
-                // CLAIM Note Parameters
-                claim_note_creator_account_id: bridge_faucet_id,
+                // CLAIM Note Parameters - ephemeral user creates the note, faucet validates
+                claim_note_creator_account_id: ephemeral_account_id,
                 agglayer_faucet_account_id: bridge_faucet_id,
                 output_note_tag,
                 p2id_serial_number,
@@ -469,16 +533,17 @@ async fn submit_claim_to_miden(
             let note = create_bridge_claim_note(claim_params, &mut rng)?;
             info!(note_id = ?note.id(), "Created CLAIM note");
 
-            // Step 7: Build the transaction request
-            let tx_request = build_claim_transaction_request(bridge_faucet_id, vec![note])?;
-            info!("Built transaction request");
+            // Step 7: Build the transaction request from ephemeral user
+            let tx_request = build_claim_transaction_request(ephemeral_account_id, vec![note])?;
+            info!("Built transaction request for ephemeral user");
 
-            // Step 8: Submit the transaction
-            let miden_tx_id = submit_transaction(&mut client, bridge_faucet_id, tx_request).await?;
+            // Step 8: Submit the transaction from the ephemeral user
+            let miden_tx_id = submit_transaction(&mut client, ephemeral_account_id, tx_request).await?;
             info!(
                 miden_tx_id = %miden_tx_id,
+                ephemeral_user = ?ephemeral_account_id,
                 block_num = block_num,
-                "Transaction submitted successfully"
+                "Transaction submitted successfully from ephemeral user"
             );
 
             Ok::<u64, ClientError>(block_num as u64)
