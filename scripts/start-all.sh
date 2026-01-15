@@ -95,7 +95,8 @@ fi
 
 # Start proxy now that miden-node is healthy
 echo "Starting proxy..."
-docker compose -f "$COMPOSE_FILE" up -d proxy
+echo "  GIT_COMMIT: $GIT_COMMIT"
+docker compose -f "$COMPOSE_FILE" up -d --build proxy
 
 # Wait for proxy to be healthy
 echo "Waiting for proxy to be healthy..."
