@@ -695,13 +695,40 @@ impl EthApiServer for EthApiImpl {
         let hash_bytes = hasher.finalize();
         let tx_hash = format!("0x{}", hex::encode(hash_bytes));
 
-        info!(
+        // Format amount for human readability (assuming 18 decimals like most ERC20s)
+        // Convert U256 to string, then parse for division to avoid precision loss
+        let amount_wei = claim_params.amount;
+        let amount_human = {
+            // Convert to f64 for display (may lose precision for very large amounts)
+            let wei_str = amount_wei.to_string();
+            if let Ok(wei_f64) = wei_str.parse::<f64>() {
+                let tokens = wei_f64 / 1e18;
+                format!("{:.6}", tokens)
+            } else {
+                "overflow".to_string()
+            }
+        };
+
+        info!("╔══════════════════════════════════════════════════════════════════╗");
+        info!("║                    CLAIM ASSET DETAILS                           ║");
+        info!("╠══════════════════════════════════════════════════════════════════╣");
+        info!("║ TX Hash:     {}", tx_hash);
+        info!("║ Amount:      {} wei ({} tokens)", amount_wei, amount_human);
+        info!("║ Destination: {} (ETH)", claim_params.destination_address);
+        info!("║ Dest Miden:  {}", miden_account_id);
+        info!("║ Origin Token: {}", claim_params.origin_token_address);
+        info!("║ Global Index: {}", claim_params.global_index_raw);
+        info!("╚══════════════════════════════════════════════════════════════════╝");
+
+        debug!(
             tx_hash = %tx_hash,
             eth_address = %eth_address,
             miden_account_id = %miden_account_id,
             was_new_account = was_created,
-            amount = %claim_params.amount,
-            "Generated synthetic transaction hash"
+            amount_wei = %amount_wei,
+            amount_tokens = %amount_human,
+            origin_token = %claim_params.origin_token_address,
+            "Claim details (structured)"
         );
 
         // Step 8: Record transaction as pending
