@@ -950,7 +950,29 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let rpc_impl = EthApiImpl::new(state, miden_rpc_url);
+    // Initialize Miden submission config for claim processing
+    let bridge_faucet_id = std::env::var("BRIDGE_FAUCET_ID")
+        .unwrap_or_else(|_| {
+            warn!("BRIDGE_FAUCET_ID not set - claim submissions will fail");
+            String::new()
+        });
+
+    let miden_config = MidenSubmissionConfig {
+        rpc_endpoint: miden_rpc_url.clone(),
+        store_path: store_path.clone(),
+        bridge_faucet_id_hex: bridge_faucet_id.clone(),
+    };
+
+    let rpc_impl = if bridge_faucet_id.is_empty() {
+        warn!("Starting without Miden submission support (BRIDGE_FAUCET_ID not configured)");
+        EthApiImpl::new(state, miden_rpc_url)
+    } else {
+        info!(
+            bridge_faucet_id = %bridge_faucet_id,
+            "Miden submission config initialized"
+        );
+        EthApiImpl::with_miden_config(state, miden_config, miden_rpc_url)
+    };
     info!("EthApi implementation created");
 
     // Get listen address from environment or use defaults
