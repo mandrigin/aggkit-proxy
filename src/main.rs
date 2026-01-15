@@ -355,11 +355,32 @@ async fn submit_claim_to_miden(
                     )))?;
 
                 let faucet_id = account_file.account.id();
+                let account_type = faucet_id.account_type();
+                let is_faucet = faucet_id.is_faucet();
                 info!(
                     faucet_account_id = ?faucet_id,
+                    account_type = ?account_type,
+                    is_faucet = is_faucet,
                     num_keys = account_file.auth_secret_keys.len(),
                     "Faucet account file loaded"
                 );
+
+                // Verify account is actually a faucet
+                if !is_faucet {
+                    return Err(ClientError::InitializationError(format!(
+                        "Account file contains non-faucet account type {:?}. Expected a faucet account.",
+                        account_type
+                    )));
+                }
+
+                // Verify faucet ID from file matches env var (warn if mismatch)
+                if faucet_id != bridge_faucet_id {
+                    warn!(
+                        file_faucet_id = %faucet_id,
+                        env_faucet_id = %bridge_faucet_id,
+                        "FAUCET ID MISMATCH: Account file has different faucet than BRIDGE_FAUCET_ID env var. Using account file's faucet."
+                    );
+                }
 
                 // Import faucet account from network to get current on-chain state
                 info!("Importing faucet account from network...");
@@ -832,27 +853,27 @@ impl EthApiServer for EthApiImpl {
 
         // Step 10: Submit to Miden network (blocking - waits for result)
         if let Some(ref config) = self.miden_config {
-            // Convert U256 amount from 18 decimals (ERC20 wei) to 8 decimals (Miden)
-            // Scale factor: 10^10 (18 - 8 = 10 decimal places)
-            // This is necessary because ERC20 amounts can exceed u64::MAX
-            const DECIMAL_SCALE: u128 = 10_000_000_000; // 10^10
-            const MIDEN_MAX_AMOUNT: u64 = 9_223_372_034_707_292_160; // ~2^63, Miden's max
+            // Convert U256 amount from 18 decimals (ERC20 wei) to 3 decimals (genesis faucet)
+            // Scale factor: 10^15 (18 - 3 = 15 decimal places)
+            // Genesis faucet: decimals=3, max_supply=100_000_000 (100k tokens)
+            const DECIMAL_SCALE: u128 = 1_000_000_000_000_000; // 10^15
+            const MIDEN_MAX_AMOUNT: u64 = 100_000_000; // Genesis max_supply
 
             let scaled_amount = claim_params.amount / alloy_primitives::U256::from(DECIMAL_SCALE);
             let amount_u64: u64 = scaled_amount.try_into().unwrap_or_else(|_| {
                 warn!(
                     original_amount = %claim_params.amount,
                     scaled_amount = %scaled_amount,
-                    "Scaled amount still exceeds u64::MAX, capping at Miden max"
+                    "Scaled amount exceeds u64::MAX, capping at faucet max_supply"
                 );
                 MIDEN_MAX_AMOUNT
             });
-            // Cap at Miden's max if needed
+            // Cap at faucet's max_supply if needed
             let amount_u64 = amount_u64.min(MIDEN_MAX_AMOUNT);
             info!(
                 original_wei = %claim_params.amount,
                 scaled_miden = amount_u64,
-                "Converted ERC20 amount (18 decimals) to Miden amount (8 decimals)"
+                "Converted ERC20 amount (18 decimals) to Miden amount (3 decimals)"
             );
 
             // Convert SMT proofs from Vec<[u8; 32]> to [[u8; 32]; 32]
