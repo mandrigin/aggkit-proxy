@@ -34,11 +34,13 @@ services:
       RUST_LOG: info
       MIDEN_RPC_URL: http://miden-node:57291
       BRIDGE_FAUCET_ID: ${BRIDGE_FAUCET_ID:-}
+      BRIDGE_FAUCET_ACCOUNT_FILE: /accounts/faucet_miden.mac
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
     ports:
       - "8546:8546"
     volumes:
       - ./config/config.docker.toml:/app/config.toml:ro
+      - miden_node_accounts:/accounts:ro
     depends_on:
       miden-node:
         condition: service_healthy

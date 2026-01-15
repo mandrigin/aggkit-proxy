@@ -192,6 +192,8 @@ pub struct MidenSubmissionConfig {
     pub store_path: PathBuf,
     /// Bridge faucet account ID (hex string, e.g., "0x...")
     pub bridge_faucet_id_hex: String,
+    /// Path to faucet account file (.mac) containing keys
+    pub faucet_account_file: Option<PathBuf>,
 }
 
 impl Default for MidenSubmissionConfig {
@@ -200,6 +202,7 @@ impl Default for MidenSubmissionConfig {
             rpc_endpoint: "http://localhost:57291".to_string(),
             store_path: PathBuf::from("/tmp/miden-bridge-client"),
             bridge_faucet_id_hex: String::new(),
+            faucet_account_file: None,
         }
     }
 }
@@ -305,6 +308,83 @@ async fn submit_claim_to_miden(
                 .map_err(|e| ClientError::SyncError(e.to_string()))?;
             let block_num = sync_result.block_num.as_u32();
             info!(block_num = block_num, "State synced with network");
+
+            // Step 4.5: Import faucet account and keys
+            // If we have an account file with keys, use that. Otherwise, import from network.
+            // IMPORTANT: When using account file, the account ID from the file takes precedence
+            // over the BRIDGE_FAUCET_ID env var.
+            let bridge_faucet_id = if let Some(ref account_file_path) = config.faucet_account_file {
+                use miden_protocol::account::AccountFile;
+                use miden_client::keystore::FilesystemKeyStore;
+
+                info!(
+                    account_file = %account_file_path.display(),
+                    "Loading faucet account from file (with keys)..."
+                );
+
+                // Load the account file which contains both account and secret keys
+                let account_file = AccountFile::read(account_file_path)
+                    .map_err(|e| ClientError::InitializationError(format!(
+                        "Failed to read account file {}: {}",
+                        account_file_path.display(), e
+                    )))?;
+
+                // Use the account ID from the file - this is the authoritative source
+                let faucet_id_from_file = account_file.account.id();
+                info!(
+                    account_id = ?faucet_id_from_file,
+                    num_keys = account_file.auth_secret_keys.len(),
+                    "Account file loaded - using account ID from file"
+                );
+
+                // Add the account to the client
+                client.add_account(&account_file.account, true).await
+                    .map_err(|e| ClientError::AccountNotFound(format!(
+                        "Failed to add faucet account to client: {}", e
+                    )))?;
+                info!("Faucet account added to client");
+
+                // Add the secret keys to the keystore
+                // The keystore path is: store_path.parent()/keystore
+                let keystore_path = config.store_path
+                    .parent()
+                    .unwrap_or(std::path::Path::new("/app/data"))
+                    .join("keystore");
+
+                let keystore = FilesystemKeyStore::new(keystore_path.clone())
+                    .map_err(|e| ClientError::InitializationError(format!(
+                        "Failed to open keystore at {}: {}",
+                        keystore_path.display(), e
+                    )))?;
+
+                for key in &account_file.auth_secret_keys {
+                    keystore.add_key(key)
+                        .map_err(|e| ClientError::InitializationError(format!(
+                            "Failed to add key to keystore: {}", e
+                        )))?;
+                }
+                info!(
+                    num_keys = account_file.auth_secret_keys.len(),
+                    keystore_path = %keystore_path.display(),
+                    "Secret keys added to keystore"
+                );
+
+                // Return the account ID from file to use for the rest of the transaction
+                faucet_id_from_file
+            } else {
+                // Fallback: try to import from network (won't have keys for signing)
+                info!(
+                    bridge_faucet_id = ?bridge_faucet_id,
+                    "No account file provided, importing from network (signing may fail)..."
+                );
+                client.import_account_by_id(bridge_faucet_id).await
+                    .map_err(|e| ClientError::AccountNotFound(format!(
+                        "Failed to import bridge faucet account {}: {}",
+                        bridge_faucet_id, e
+                    )))?;
+                warn!("Faucet account imported from network WITHOUT keys - transaction signing will fail!");
+                bridge_faucet_id
+            };
 
             // Step 5: Create the fungible asset for transfer
             let asset = FungibleAsset::new(bridge_faucet_id, claim_data.amount)
@@ -968,6 +1048,10 @@ async fn main() -> anyhow::Result<()> {
     let miden_rpc_url = std::env::var("MIDEN_RPC_URL")
         .unwrap_or_else(|_| "http://localhost:57291".to_string());
     let bridge_faucet_id = std::env::var("BRIDGE_FAUCET_ID").unwrap_or_default();
+    let faucet_account_file = std::env::var("BRIDGE_FAUCET_ACCOUNT_FILE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
     let listen_host = std::env::var("LISTEN_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let listen_port = std::env::var("LISTEN_PORT").unwrap_or_else(|_| "8546".to_string());
     let store_path = PathBuf::from("/app/data/miden-client");
@@ -981,6 +1065,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Configuration:");
     info!("  MIDEN_RPC_URL:      {}", miden_rpc_url);
     info!("  BRIDGE_FAUCET_ID:   {}", if bridge_faucet_id.is_empty() { "(not set)" } else { &bridge_faucet_id });
+    info!("  FAUCET_ACCOUNT_FILE:{}", faucet_account_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(not set)".to_string()));
     info!("  LISTEN_HOST:        {}", listen_host);
     info!("  LISTEN_PORT:        {}", listen_port);
     info!("  Store Path:         {}", store_path.display());
@@ -1010,6 +1095,7 @@ async fn main() -> anyhow::Result<()> {
         rpc_endpoint: miden_rpc_url.clone(),
         store_path: store_path.clone(),
         bridge_faucet_id_hex: bridge_faucet_id.clone(),
+        faucet_account_file: faucet_account_file.clone(),
     };
 
     let rpc_impl = if bridge_faucet_id.is_empty() {
