@@ -6,13 +6,15 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 // Import library modules for claim processing
 use miden_rpc_proxy::{
-    decode_transaction, is_claim_asset, parse_claim_asset, AddressMapper, AddressMapperConfig,
-    ClaimTracker, EthAddress,
+    decode_transaction, is_claim_asset, parse_claim_asset, sync_state,
+    AddressMapper, AddressMapperConfig, ClaimTracker, EthAddress,
 };
 
 /// Miden chain ID (placeholder - configure as needed)
@@ -20,6 +22,9 @@ const MIDEN_CHAIN_ID: u64 = 0x4d494445; // "MIDE" in hex
 
 /// Fixed gas estimate for bridge operations
 const FIXED_GAS_ESTIMATE: u64 = 21000;
+
+/// Default sync interval in seconds
+const DEFAULT_SYNC_INTERVAL_SECS: u64 = 10;
 
 /// Transaction status in the Miden bridge
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -554,6 +559,49 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(BridgeState::new());
     info!("Bridge state initialized successfully");
 
+    // Try to initialize Miden client for block height sync
+    let miden_rpc_url = std::env::var("MIDEN_RPC_URL").ok();
+    if let Some(rpc_url) = miden_rpc_url {
+        info!(%rpc_url, "MIDEN_RPC_URL set, initializing Miden client for block sync");
+
+        let data_dir = std::env::var("MIDEN_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("./data"));
+
+        // Ensure data directory exists
+        if let Err(e) = std::fs::create_dir_all(&data_dir) {
+            warn!(?e, ?data_dir, "Failed to create data directory");
+        }
+
+        // Spawn sync task in a dedicated thread (client is not Send due to RNG)
+        let state_clone = Arc::clone(&state);
+        let sync_interval = std::env::var("MIDEN_SYNC_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_SYNC_INTERVAL_SECS);
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create sync runtime");
+
+            rt.block_on(async move {
+                match init_sync_client(&rpc_url, &data_dir).await {
+                    Ok(client) => {
+                        info!("Miden client initialized, starting block sync loop");
+                        run_block_sync_task(client, state_clone, sync_interval).await;
+                    }
+                    Err(e) => {
+                        warn!(?e, "Failed to initialize Miden client, block height will remain at 0");
+                    }
+                }
+            });
+        });
+    } else {
+        info!("MIDEN_RPC_URL not set, eth_blockNumber will return 0 (no Miden sync)");
+    }
+
     let rpc_impl = EthApiImpl::new(state);
     info!("EthApi implementation created");
 
@@ -568,4 +616,77 @@ async fn main() -> anyhow::Result<()> {
     handle.stopped().await;
 
     Ok(())
+}
+
+/// Initialize a Miden client for sync-only operations (no transactions)
+async fn init_sync_client(
+    rpc_endpoint: &str,
+    store_path: &PathBuf,
+) -> anyhow::Result<miden_client::Client<miden_client::keystore::FilesystemKeyStore>> {
+    use miden_client::builder::ClientBuilder;
+    use miden_client::rpc::Endpoint;
+    use miden_client_sqlite_store::SqliteStore;
+
+    info!(%rpc_endpoint, ?store_path, "Initializing Miden sync client");
+
+    // Initialize the SQLite store
+    let store = SqliteStore::new(store_path.clone())
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create SQLite store: {}", e))?;
+
+    // Parse the RPC endpoint
+    let endpoint = Endpoint::try_from(rpc_endpoint)
+        .map_err(|e| anyhow::anyhow!("Invalid RPC endpoint: {}", e))?;
+
+    // Build the client
+    let keystore_path = store_path.join("keystore");
+    let keystore_path_str = keystore_path.to_string_lossy();
+    let client = ClientBuilder::new()
+        .grpc_client(&endpoint, Some(10_000))
+        .store(Arc::new(store))
+        .filesystem_keystore(&keystore_path_str)
+        .build()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to build client: {}", e))?;
+
+    info!("Miden sync client initialized successfully");
+    Ok(client)
+}
+
+/// Background task that periodically syncs with Miden network and updates block height
+async fn run_block_sync_task<AUTH>(
+    mut client: miden_client::Client<AUTH>,
+    state: Arc<BridgeState>,
+    interval_secs: u64,
+) where
+    AUTH: miden_client::auth::TransactionAuthenticator + Sync + 'static,
+{
+    let interval = Duration::from_secs(interval_secs);
+    info!(?interval, "Starting Miden block sync task");
+
+    loop {
+        match sync_state(&mut client).await {
+            Ok(summary) => {
+                let block_num = summary.block_num as u64;
+                let prev_height = state.get_block_height();
+                state.set_block_height(block_num);
+
+                if block_num != prev_height {
+                    info!(
+                        prev_height,
+                        new_height = block_num,
+                        new_notes = summary.new_notes,
+                        "Block height updated"
+                    );
+                } else {
+                    debug!(block_num, "Block height unchanged");
+                }
+            }
+            Err(e) => {
+                warn!(?e, "Failed to sync state with Miden network");
+            }
+        }
+
+        tokio::time::sleep(interval).await;
+    }
 }

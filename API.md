@@ -261,6 +261,9 @@ curl -X POST http://localhost:8545 \
 
 Returns the current block number (Miden block height).
 
+When `MIDEN_RPC_URL` is configured, the proxy periodically syncs with the Miden network
+to fetch the latest block height. Without configuration, returns `0x0`.
+
 **Parameters:** None
 
 **Returns:** `string` - Hex-encoded block number
@@ -276,6 +279,16 @@ curl -X POST http://localhost:8545 \
 ```json
 {"jsonrpc":"2.0","result":"0x10","id":1}
 ```
+
+---
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MIDEN_RPC_URL` | Miden node gRPC endpoint (e.g., `http://localhost:57291`). Required for block sync. | None (block height = 0) |
+| `MIDEN_DATA_DIR` | Directory for SQLite store and keystore | `./data` |
+| `MIDEN_SYNC_INTERVAL_SECS` | Seconds between block sync operations | `10` |
 
 ---
 
