@@ -650,7 +650,7 @@ impl EthApiServer for EthApiImpl {
             });
 
             let claim_data = ClaimSubmissionData {
-                recipient_account_bytes: miden_account_id.0,
+                recipient_account_bytes: miden_account_id.to_bytes(),
                 amount: amount_u64,
             };
 
