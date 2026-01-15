@@ -119,3 +119,26 @@ Otherwise container-to-container communication fails.
 ### Docker Service Names
 Inside Docker network, use service names:
 - `MIDEN_RPC_URL=http://miden-node:57291` (not `localhost`)
+
+## Git Workflow
+
+### Keep Branches Up to Date
+Before starting work and before submitting:
+```bash
+git fetch origin
+git rebase origin/main
+```
+
+When new work lands on main, rebase your branch immediately to avoid conflicts.
+
+### Rebase After Main Updates
+When a fix lands on main that others depend on:
+1. Merge to main first
+2. Notify other workers to rebase: `git fetch origin && git rebase origin/main`
+3. This prevents merge conflicts and ensures everyone has latest fixes
+
+### Push Frequently
+Don't accumulate local commits. Push after each logical change to:
+- Make work visible to others
+- Enable early conflict detection
+- Prevent lost work
