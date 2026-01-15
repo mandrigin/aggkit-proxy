@@ -89,6 +89,30 @@ Configuration:
   LISTEN_PORT:        8546
 ```
 
+### Detailed Error Logging
+Always strive for detailed error logs. On any error:
+- Log the full error chain (use `{:?}` or `.source()`)
+- Include relevant context (tx_hash, account_id, amounts)
+- Log input data that caused the error
+- Make errors actionable - someone reading the log should know what went wrong
+
+```rust
+// BAD
+error!("Transaction failed");
+
+// GOOD
+error!(
+    tx_hash = %tx_hash,
+    account_id = %account_id,
+    amount = %amount,
+    error = ?e,
+    "Miden submission failed: {}", e
+);
+```
+
+### Log Account IDs When Loading
+When loading accounts from files, log the account ID to verify the correct account is being used.
+
 ## Transaction Decoding
 
 ### Handle Both Raw Calldata and RLP
