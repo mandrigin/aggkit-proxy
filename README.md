@@ -37,8 +37,8 @@ JSON-RPC proxy server bridging Ethereum-style RPC to Miden network. Enables AggL
 - Rust 1.82 or later
 - Docker (for integration tests)
 - Miden node **agglayer-v0.1** tag (required for compatibility)
-  - Image: `ghcr.io/0xmiden/miden-node:agglayer-v0.1`
-  - Source: https://github.com/0xMiden/miden-node/tree/agglayer-v0.1
+  - Built from source via `Dockerfile.miden-node`
+  - Source: https://github.com/0xPolygonMiden/miden-node (tag: agglayer-v0.1)
 
 ## Building
 

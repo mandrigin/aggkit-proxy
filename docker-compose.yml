@@ -18,18 +18,21 @@ services:
       timeout: 5s
       retries: 5
 
-  # Miden node (agglayer-v0.1 - required for compatibility)
+  # Miden node (agglayer-v0.1 - built from source)
   miden-node:
-    image: ghcr.io/0xmiden/miden-node:agglayer-v0.1
-    command: ["--dev"]
+    build:
+      context: .
+      dockerfile: Dockerfile.miden-node
     ports:
       - "57291:57291"
+    volumes:
+      - miden_node_data:/data
     healthcheck:
       test: ["CMD", "grpc_health_probe", "-addr=:57291"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 30s
+      start_period: 120s
 
   # L1 devnet (Anvil - Ethereum local chain)
   l1-anvil:
@@ -120,6 +123,7 @@ services:
 
 volumes:
   postgres_data:
+  miden_node_data:
 
 networks:
   default:

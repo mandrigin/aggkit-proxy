@@ -2,7 +2,8 @@
 # Start Miden node for local testing
 #
 # This script starts the miden-node container using docker-compose.
-# The node uses the agglayer-v0.1 image for compatibility with the proxy.
+# The node is built from source (agglayer-v0.1 tag) for compatibility with the proxy.
+# First run will take longer as it builds the Rust binary.
 
 set -e
 
