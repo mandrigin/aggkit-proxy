@@ -6,19 +6,24 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+use std::path::PathBuf;
+
 // Import library modules for claim processing
 use miden_rpc_proxy::{
-    decode_transaction, is_claim_asset, parse_claim_asset, AddressMapper, AddressMapperConfig,
-    ClaimTracker, EthAddress,
+    build_claim_transaction_request, create_bridge_claim_note, decode_transaction, init_client,
+    is_claim_asset, parse_claim_asset, submit_transaction, AddressMapper, AddressMapperConfig,
+    BridgeClaimParams, ClaimTracker, ClientError, EthAddress, MidenClientConfig,
 };
 
-// Import Miden client config (actual submission stubbed out for now)
-use miden_rpc_proxy::client::MidenClientConfig;
-use miden_protocol::account::AccountId;
+// Miden protocol types
+use miden_protocol::{
+    account::{AccountId, AccountIdV0},
+    asset::FungibleAsset,
+    note::NoteType,
+};
 
 /// Miden chain ID (placeholder - configure as needed)
 const MIDEN_CHAIN_ID: u64 = 0x4d494445; // "MIDE" in hex
@@ -66,8 +71,6 @@ pub struct BridgeState {
     claim_tracker: ClaimTracker,
     /// Address mapper for Eth -> Miden address resolution (wrapped in Mutex for Sync)
     address_mapper: parking_lot::Mutex<AddressMapper>,
-    /// Miden client config for on-demand client creation (Client is not Send/Sync)
-    miden_config: Option<MidenClientConfig>,
 }
 
 impl BridgeState {
@@ -87,14 +90,7 @@ impl BridgeState {
             block_height: RwLock::new(0),
             claim_tracker,
             address_mapper: parking_lot::Mutex::new(address_mapper),
-            miden_config: None,
         }
-    }
-
-    /// Set the Miden client configuration for on-demand client creation
-    pub fn set_miden_config(&mut self, config: MidenClientConfig) {
-        info!(rpc_endpoint = %config.rpc_endpoint, "Miden client config set");
-        self.miden_config = Some(config);
     }
 
     pub fn get_nonce(&self, address: &str) -> u64 {
@@ -184,15 +180,222 @@ pub trait EthApi {
     async fn block_number(&self) -> Result<String, ErrorObjectOwned>;
 }
 
+/// Configuration for Miden network submission
+#[derive(Debug, Clone)]
+pub struct MidenSubmissionConfig {
+    /// RPC endpoint for Miden node
+    pub rpc_endpoint: String,
+    /// Path to SQLite store for client state
+    pub store_path: PathBuf,
+    /// Bridge faucet account ID (hex string, e.g., "0x...")
+    pub bridge_faucet_id_hex: String,
+}
+
+impl Default for MidenSubmissionConfig {
+    fn default() -> Self {
+        Self {
+            rpc_endpoint: "http://localhost:57291".to_string(),
+            store_path: PathBuf::from("/tmp/miden-bridge-client"),
+            bridge_faucet_id_hex: String::new(),
+        }
+    }
+}
+
 /// Implementation of the Ethereum JSON-RPC API for Miden bridge
 pub struct EthApiImpl {
     state: Arc<BridgeState>,
+    miden_config: Option<MidenSubmissionConfig>,
 }
 
 impl EthApiImpl {
     pub fn new(state: Arc<BridgeState>) -> Self {
-        Self { state }
+        Self {
+            state,
+            miden_config: None,
+        }
     }
+
+    pub fn with_miden_config(state: Arc<BridgeState>, config: MidenSubmissionConfig) -> Self {
+        Self {
+            state,
+            miden_config: Some(config),
+        }
+    }
+}
+
+/// Data needed for Miden claim submission (must be Send + 'static for spawn_blocking)
+#[derive(Debug, Clone)]
+struct ClaimSubmissionData {
+    /// Recipient's Miden account ID (15 bytes)
+    recipient_account_bytes: [u8; 15],
+    /// Amount to transfer (as u64, converted from U256)
+    amount: u64,
+}
+
+/// Submit a claim to the Miden network using spawn_blocking
+///
+/// This function handles the !Send nature of miden_client::Client by:
+/// 1. Creating the client inside a blocking context
+/// 2. Performing all operations within that context
+/// 3. Returning only Send-safe results
+async fn submit_claim_to_miden(
+    config: MidenSubmissionConfig,
+    claim_data: ClaimSubmissionData,
+) -> Result<u64, ClientError> {
+    use miden_protocol::crypto::rand::RpoRandomCoin;
+    use miden_protocol::Felt;
+
+    info!(
+        recipient = hex::encode(&claim_data.recipient_account_bytes),
+        amount = claim_data.amount,
+        rpc_endpoint = %config.rpc_endpoint,
+        "Starting Miden claim submission"
+    );
+
+    // Get a handle to the current runtime for use inside spawn_blocking
+    let runtime_handle = tokio::runtime::Handle::current();
+
+    // Use spawn_blocking to run the client operations in a blocking context
+    // This is necessary because miden_client::Client is !Send
+    let result = tokio::task::spawn_blocking(move || {
+        runtime_handle.block_on(async {
+            // Step 1: Parse the bridge faucet ID from hex
+            let bridge_faucet_id = parse_account_id_from_hex(&config.bridge_faucet_id_hex)
+                .map_err(|e| ClientError::InitializationError(format!("Invalid bridge faucet ID: {}", e)))?;
+
+            info!(
+                bridge_faucet_id = ?bridge_faucet_id,
+                "Parsed bridge faucet account ID"
+            );
+
+            // Step 2: Convert recipient bytes to AccountId
+            // NOTE: This is a placeholder conversion - in production, this would need
+            // proper mapping from the 15-byte MidenAccountId to miden_protocol::AccountId
+            let recipient_account_id = bytes_to_account_id(&claim_data.recipient_account_bytes)
+                .map_err(|e| ClientError::AccountNotFound(format!("Invalid recipient account: {}", e)))?;
+
+            info!(
+                recipient_account_id = ?recipient_account_id,
+                "Converted recipient to AccountId"
+            );
+
+            // Step 3: Initialize the Miden client
+            let client_config = MidenClientConfig {
+                rpc_endpoint: config.rpc_endpoint.clone(),
+                store_path: config.store_path.clone(),
+                bridge_faucet_id,
+            };
+
+            let mut client = init_client(&client_config).await?;
+            info!("Miden client initialized");
+
+            // Step 4: Sync state to get current block info
+            let sync_result = client.sync_state().await
+                .map_err(|e| ClientError::SyncError(e.to_string()))?;
+            let block_num = sync_result.block_num.as_u32();
+            info!(block_num = block_num, "State synced with network");
+
+            // Step 5: Create the fungible asset for transfer
+            let asset = FungibleAsset::new(bridge_faucet_id, claim_data.amount)
+                .map_err(|e| ClientError::NoteCreationError(format!("Invalid asset: {}", e)))?;
+
+            info!(
+                faucet_id = ?bridge_faucet_id,
+                amount = claim_data.amount,
+                "Created fungible asset"
+            );
+
+            // Step 6: Create the bridge claim note (P2ID)
+            // Initialize RNG for note creation using system randomness
+            let seed = generate_rng_seed();
+            let mut rng = RpoRandomCoin::new(seed.map(Felt::new).into());
+
+            let claim_params = BridgeClaimParams {
+                sender_account_id: bridge_faucet_id,
+                recipient_account_id,
+                assets: vec![asset],
+                note_type: NoteType::Public,
+            };
+
+            let note = create_bridge_claim_note(claim_params, &mut rng)?;
+            info!(note_id = ?note.id(), "Created P2ID claim note");
+
+            // Step 7: Build the transaction request
+            let tx_request = build_claim_transaction_request(bridge_faucet_id, vec![note])?;
+            info!("Built transaction request");
+
+            // Step 8: Submit the transaction
+            let miden_tx_id = submit_transaction(&mut client, bridge_faucet_id, tx_request).await?;
+            info!(
+                miden_tx_id = %miden_tx_id,
+                block_num = block_num,
+                "Transaction submitted successfully"
+            );
+
+            Ok::<u64, ClientError>(block_num as u64)
+        })
+    })
+    .await
+    .map_err(|e| ClientError::TransactionError(format!("Task join error: {}", e)))?;
+
+    result
+}
+
+/// Generate a random seed for RpoRandomCoin
+///
+/// Uses system time and thread ID as entropy sources
+fn generate_rng_seed() -> [u64; 4] {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let mut hasher = DefaultHasher::new();
+    now.as_nanos().hash(&mut hasher);
+    std::thread::current().id().hash(&mut hasher);
+    let h1 = hasher.finish();
+
+    hasher = DefaultHasher::new();
+    (now.as_nanos() ^ 0xDEADBEEF).hash(&mut hasher);
+    let h2 = hasher.finish();
+
+    hasher = DefaultHasher::new();
+    (now.as_secs() * 1000000000 + now.subsec_nanos() as u64).hash(&mut hasher);
+    let h3 = hasher.finish();
+
+    hasher = DefaultHasher::new();
+    (h1 ^ h2 ^ h3).hash(&mut hasher);
+    let h4 = hasher.finish();
+
+    [h1, h2, h3, h4]
+}
+
+/// Parse an AccountId from a hex string
+///
+/// Supports formats: "0x..." or plain hex
+/// Uses AccountIdV0::from_hex which expects a 15-byte (120-bit) hex representation
+fn parse_account_id_from_hex(hex_str: &str) -> Result<AccountId, String> {
+    // AccountIdV0::from_hex handles both "0x" prefix and plain hex
+    let id_v0 = AccountIdV0::from_hex(hex_str)
+        .map_err(|e| format!("Invalid account ID hex: {}", e))?;
+
+    // Convert AccountIdV0 to AccountId
+    Ok(AccountId::from(id_v0))
+}
+
+/// Convert 15-byte MidenAccountId to miden_protocol::AccountId
+///
+/// Uses AccountIdV0::try_from([u8; 15]) to properly convert the bytes
+fn bytes_to_account_id(bytes: &[u8; 15]) -> Result<AccountId, String> {
+    // AccountIdV0 implements TryFrom<[u8; 15]>
+    let id_v0 = AccountIdV0::try_from(*bytes)
+        .map_err(|e| format!("Invalid account ID bytes: {}", e))?;
+
+    // Convert AccountIdV0 to AccountId
+    Ok(AccountId::from(id_v0))
 }
 
 #[async_trait]
@@ -434,27 +637,70 @@ impl EthApiServer for EthApiImpl {
             "=== CLAIM PROCESSING COMPLETE (pending Miden submission) ==="
         );
 
-        // Step 10: Miden submission (STUB - actual submission via spawn_blocking TODO)
-        // The Miden Client is not Send/Sync, so we can't use it directly in async handlers.
-        // For now, just log and mark as confirmed. Real submission will be added later
-        // using spawn_blocking or a dedicated submission task.
-        if self.state.miden_config.is_some() {
+        // Step 10: Submit to Miden network in background task
+        if let Some(ref config) = self.miden_config {
+            // Convert U256 amount to u64 (Miden uses u64 for asset amounts)
+            // Note: This may truncate for very large amounts
+            let amount_u64: u64 = claim_params.amount.try_into().unwrap_or_else(|_| {
+                warn!(
+                    amount = %claim_params.amount,
+                    "Amount exceeds u64::MAX, truncating"
+                );
+                u64::MAX
+            });
+
+            let claim_data = ClaimSubmissionData {
+                recipient_account_bytes: miden_account_id.0,
+                amount: amount_u64,
+            };
+
+            let config_clone = config.clone();
+            let state_clone = self.state.clone();
+            let tx_hash_clone = tx_hash.clone();
+
+            // Spawn background task for Miden submission
+            tokio::spawn(async move {
+                info!(
+                    tx_hash = %tx_hash_clone,
+                    "Starting background Miden submission"
+                );
+
+                match submit_claim_to_miden(config_clone, claim_data).await {
+                    Ok(block_num) => {
+                        info!(
+                            tx_hash = %tx_hash_clone,
+                            block_num = block_num,
+                            "Miden submission SUCCEEDED"
+                        );
+                        state_clone.record_tx(
+                            tx_hash_clone,
+                            TxStatus::Confirmed { block_number: block_num },
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            tx_hash = %tx_hash_clone,
+                            error = %e,
+                            "Miden submission FAILED"
+                        );
+                        state_clone.record_tx(
+                            tx_hash_clone,
+                            TxStatus::Failed { reason: e.to_string() },
+                        );
+                    }
+                }
+            });
+
             info!(
                 tx_hash = %tx_hash,
-                recipient = %miden_account_id,
-                amount = %claim_params.amount,
-                "STUB: Would submit to Miden network (not implemented yet)"
+                "Background Miden submission task spawned"
+            );
+        } else {
+            warn!(
+                tx_hash = %tx_hash,
+                "Miden submission config not available - transaction will remain pending"
             );
         }
-
-        // Mark as confirmed for now (stub behavior)
-        let block_number = self.state.get_block_height();
-        self.state.record_tx(tx_hash.clone(), TxStatus::Confirmed { block_number });
-        info!(
-            tx_hash = %tx_hash,
-            block_number = block_number,
-            "Transaction marked as CONFIRMED (stub - actual Miden submission TODO)"
-        );
 
         Ok(tx_hash)
     }
@@ -581,55 +827,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Fixed gas estimate: {}", FIXED_GAS_ESTIMATE);
 
     info!("Initializing bridge state...");
-    let mut state = BridgeState::new();
-
-    // Initialize Miden client if environment variables are set
-    if let (Ok(rpc_endpoint), Ok(faucet_id_str)) = (
-        std::env::var("MIDEN_RPC_ENDPOINT"),
-        std::env::var("MIDEN_BRIDGE_FAUCET_ID"),
-    ) {
-        info!(
-            rpc_endpoint = %rpc_endpoint,
-            faucet_id = %faucet_id_str,
-            "Miden client configuration found"
-        );
-
-        // Parse the faucet account ID (supports decimal u128 or hex with 0x prefix)
-        let faucet_id = if faucet_id_str.starts_with("0x") || faucet_id_str.starts_with("0X") {
-            // Hex string format
-            let hex_str = &faucet_id_str[2..];
-            let id = u128::from_str_radix(hex_str, 16).map_err(|e| {
-                anyhow::anyhow!("Failed to parse hex MIDEN_BRIDGE_FAUCET_ID: {}", e)
-            })?;
-            AccountId::try_from(id).map_err(|e| {
-                anyhow::anyhow!("Invalid bridge faucet ID: {}", e)
-            })?
-        } else {
-            // Decimal format
-            let id = faucet_id_str.parse::<u128>().map_err(|e| {
-                anyhow::anyhow!("Failed to parse MIDEN_BRIDGE_FAUCET_ID: {}", e)
-            })?;
-            AccountId::try_from(id).map_err(|e| {
-                anyhow::anyhow!("Invalid bridge faucet ID: {}", e)
-            })?
-        };
-
-        let store_path = std::env::var("MIDEN_STORE_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("./miden_store"));
-
-        let config = MidenClientConfig {
-            rpc_endpoint,
-            store_path,
-            bridge_faucet_id: faucet_id,
-        };
-
-        state.set_miden_config(config);
-    } else {
-        info!("Miden client not configured (set MIDEN_RPC_ENDPOINT and MIDEN_BRIDGE_FAUCET_ID to enable)");
-    }
-
-    let state = Arc::new(state);
+    let state = Arc::new(BridgeState::new());
     info!("Bridge state initialized successfully");
 
     let rpc_impl = EthApiImpl::new(state);
