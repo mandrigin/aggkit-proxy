@@ -39,6 +39,9 @@ pub async fn create_test_client() -> Result<(TestClient, FilesystemKeyStore, Pat
     let node_url = get_node_url();
     let db_path = get_test_db_path();
 
+    // Create the test directory first
+    std::fs::create_dir_all(&db_path)?;
+
     // Create SQLite store for test
     let store = SqliteStore::new(db_path.join("store.db")).await?;
 
