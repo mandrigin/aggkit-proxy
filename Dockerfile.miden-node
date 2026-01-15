@@ -16,7 +16,7 @@ WORKDIR /build
 
 # Clone miden-node at the agglayer-v0.1 tag
 RUN git clone --depth 1 --branch agglayer-v0.1 \
-    https://github.com/0xPolygonMiden/miden-node.git .
+    https://github.com/0xMiden/miden-node.git .
 
 # Build the node binary
 RUN cargo build --release --bin miden-node
@@ -43,25 +43,34 @@ COPY --from=builder /build/target/release/miden-node /usr/local/bin/
 # gRPC port
 EXPOSE 57291
 
-# Create data directory
-RUN mkdir -p /data
+# Create data and accounts directories
+RUN mkdir -p /data /accounts
 
-# Entrypoint script to bootstrap and start the node
-RUN echo '#!/bin/bash\n\
-set -e\n\
-DATA_DIR="${MIDEN_NODE_DATA_DIRECTORY:-/data}"\n\
-RPC_URL="${MIDEN_NODE_RPC_URL:-0.0.0.0:57291}"\n\
-\n\
-# Bootstrap if not already done\n\
-if [ ! -f "$DATA_DIR/.bootstrapped" ]; then\n\
-    echo "Bootstrapping miden-node..."\n\
-    miden-node bundled bootstrap --data-directory "$DATA_DIR"\n\
-    touch "$DATA_DIR/.bootstrapped"\n\
-fi\n\
-\n\
-echo "Starting miden-node on $RPC_URL..."\n\
-exec miden-node bundled start --rpc.url "$RPC_URL" --data-directory "$DATA_DIR" "$@"\n\
-' > /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
+# Create entrypoint script
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'set -e' \
+    '' \
+    'DATA_DIR="${MIDEN_NODE_DATA_DIRECTORY:-/data}"' \
+    'ACCOUNTS_DIR="${MIDEN_NODE_ACCOUNTS_DIRECTORY:-/accounts}"' \
+    'RPC_URL="${MIDEN_NODE_RPC_URL:-0.0.0.0:57291}"' \
+    '' \
+    '# Bootstrap if data directory is empty (no database yet)' \
+    'if [ ! -d "$DATA_DIR/db" ]; then' \
+    '    echo "Bootstrapping miden-node..."' \
+    '    miden-node bundled bootstrap \' \
+    '        --data-directory "$DATA_DIR" \' \
+    '        --accounts-directory "$ACCOUNTS_DIR"' \
+    '    echo "Bootstrap complete."' \
+    'fi' \
+    '' \
+    'echo "Starting miden-node on $RPC_URL..."' \
+    'exec miden-node bundled start \' \
+    '    --rpc.url "$RPC_URL" \' \
+    '    --data-directory "$DATA_DIR" \' \
+    '    "$@"' \
+    > /usr/local/bin/entrypoint.sh && \
+    chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD []
