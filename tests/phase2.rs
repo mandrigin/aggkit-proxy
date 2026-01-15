@@ -5,18 +5,82 @@
 //!
 //! Uses miden-client and miden-protocol from agglayer-v0.1 tag.
 
-use miden_client::Client;
-use miden_client_sqlite_store::SqliteStore;
-use miden_protocol::{
-    account::{AccountId, AccountStorageMode, AccountType},
-    asset::{FungibleAsset, TokenSymbol},
-    note::NoteType,
-    Felt,
+use miden_client::account::component::{
+    AccountComponent, AuthRpoFalcon512, BasicFungibleFaucet, BasicWallet,
 };
-use std::env;
+use miden_client::account::{AccountBuilder, AccountType};
+use miden_client::keystore::FilesystemKeyStore;
+use miden_client::transaction::TransactionRequestBuilder;
+use miden_protocol::account::auth::AuthSecretKey;
+use miden_protocol::account::AccountStorageMode;
+use miden_protocol::asset::{FungibleAsset, TokenSymbol};
+use miden_protocol::note::NoteType;
+use miden_protocol::Felt;
+use rand::RngCore;
 
 mod common;
-use common::create_test_client;
+use common::{create_test_client, TestClient, TestError};
+
+// =============================================================================
+// Helper functions for account creation
+// =============================================================================
+
+/// Create a new wallet account with authentication
+async fn create_wallet(
+    client: &mut TestClient,
+    keystore: &FilesystemKeyStore,
+    storage_mode: AccountStorageMode,
+) -> Result<miden_protocol::account::Account, TestError> {
+    let mut init_seed = [0u8; 32];
+    client.rng().fill_bytes(&mut init_seed);
+
+    let key_pair = AuthSecretKey::new_falcon512_rpo();
+    let auth_component: AccountComponent =
+        AuthRpoFalcon512::new(key_pair.public_key().to_commitment()).into();
+
+    keystore.add_key(&key_pair)?;
+
+    let account = AccountBuilder::new(init_seed)
+        .account_type(AccountType::RegularAccountUpdatableCode)
+        .storage_mode(storage_mode)
+        .with_auth_component(auth_component)
+        .with_component(BasicWallet)
+        .build()?;
+
+    client.add_account(&account, false).await?;
+    Ok(account)
+}
+
+/// Create a new fungible faucet account
+async fn create_faucet(
+    client: &mut TestClient,
+    keystore: &FilesystemKeyStore,
+    storage_mode: AccountStorageMode,
+    symbol: &str,
+    max_supply: u64,
+) -> Result<miden_protocol::account::Account, TestError> {
+    let mut init_seed = [0u8; 32];
+    client.rng().fill_bytes(&mut init_seed);
+
+    let key_pair = AuthSecretKey::new_falcon512_rpo();
+    let auth_component: AccountComponent =
+        AuthRpoFalcon512::new(key_pair.public_key().to_commitment()).into();
+
+    keystore.add_key(&key_pair)?;
+
+    let token_symbol = TokenSymbol::new(symbol)?;
+    let max_supply_felt = Felt::new(max_supply);
+
+    let account = AccountBuilder::new(init_seed)
+        .account_type(AccountType::FungibleFaucet)
+        .storage_mode(storage_mode)
+        .with_auth_component(auth_component)
+        .with_component(BasicFungibleFaucet::new(token_symbol, 8, max_supply_felt)?)
+        .build()?;
+
+    client.add_account(&account, false).await?;
+    Ok(account)
+}
 
 // =============================================================================
 // TC-2.1: CLAIM Note Creation
@@ -28,51 +92,49 @@ mod tc_2_1_claim_creation {
     /// TC-2.1.1: Create a CLAIM note for cross-chain redemption
     #[tokio::test]
     async fn test_create_claim_note() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let token_symbol = TokenSymbol::new("CLM1").expect("Invalid symbol");
-        let (faucet, _) = client
-            .new_faucet(AccountStorageMode::Public, token_symbol, 8, Felt::new(1_000_000_000))
+        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "CLM1", 1_000_000_000)
             .await
             .expect("Failed to create faucet");
 
-        let (target, _) = client
-            .new_account(AccountStorageMode::Public, AccountType::RegularAccountUpdatableCode)
+        let target = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
             .await
             .expect("Failed to create target");
 
         let amount = 100_000_000u64;
-        let result = client
-            .new_mint_transaction(faucet.id(), target.id(), amount, NoteType::Public)
-            .await;
+        let asset = FungibleAsset::new(faucet.id(), amount).expect("Invalid asset");
 
+        let tx_request = TransactionRequestBuilder::new()
+            .build_mint_fungible_asset(asset, target.id(), NoteType::Public, client.rng())
+            .expect("Failed to build mint request");
+
+        let result = client.submit_new_transaction(faucet.id(), tx_request).await;
         assert!(result.is_ok(), "CLAIM note creation should succeed");
     }
 
     /// TC-2.1.2: CLAIM note has correct metadata
     #[tokio::test]
     async fn test_claim_note_metadata() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let token_symbol = TokenSymbol::new("CLM2").expect("Invalid symbol");
-        let (faucet, _) = client
-            .new_faucet(AccountStorageMode::Public, token_symbol, 8, Felt::new(1_000_000_000))
+        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "CLM2", 1_000_000_000)
             .await
             .unwrap();
 
-        let (target, _) = client
-            .new_account(AccountStorageMode::Public, AccountType::RegularAccountUpdatableCode)
+        let target = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
             .await
             .unwrap();
 
-        client
-            .new_mint_transaction(faucet.id(), target.id(), 100_000_000, NoteType::Public)
-            .await
+        let asset = FungibleAsset::new(faucet.id(), 100_000_000).unwrap();
+        let tx_request = TransactionRequestBuilder::new()
+            .build_mint_fungible_asset(asset, target.id(), NoteType::Public, client.rng())
             .unwrap();
 
+        client.submit_new_transaction(faucet.id(), tx_request).await.unwrap();
         client.sync_state().await.unwrap();
 
-        let notes = client.get_consumable_notes(Some(target.id())).unwrap();
+        let notes = client.get_consumable_notes(Some(target.id())).await.unwrap();
         assert!(!notes.is_empty(), "Should have consumable notes");
     }
 }
@@ -87,30 +149,31 @@ mod tc_2_2_claim_redemption {
     /// TC-2.2.1: Redeem CLAIM note successfully
     #[tokio::test]
     async fn test_redeem_claim() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let token_symbol = TokenSymbol::new("RDM1").expect("Invalid symbol");
-        let (faucet, _) = client
-            .new_faucet(AccountStorageMode::Public, token_symbol, 8, Felt::new(1_000_000_000))
+        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "RDM1", 1_000_000_000)
             .await
             .unwrap();
 
-        let (redeemer, _) = client
-            .new_account(AccountStorageMode::Public, AccountType::RegularAccountUpdatableCode)
+        let redeemer = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
             .await
             .unwrap();
 
-        client
-            .new_mint_transaction(faucet.id(), redeemer.id(), 100_000_000, NoteType::Public)
-            .await
+        let asset = FungibleAsset::new(faucet.id(), 100_000_000).unwrap();
+        let tx_request = TransactionRequestBuilder::new()
+            .build_mint_fungible_asset(asset, redeemer.id(), NoteType::Public, client.rng())
             .unwrap();
 
+        client.submit_new_transaction(faucet.id(), tx_request).await.unwrap();
         client.sync_state().await.unwrap();
 
-        let notes = client.get_consumable_notes(Some(redeemer.id())).unwrap();
+        let notes = client.get_consumable_notes(Some(redeemer.id())).await.unwrap();
         if !notes.is_empty() {
-            let ids: Vec<_> = notes.iter().map(|n| n.id()).collect();
-            let result = client.new_consume_transaction(redeemer.id(), &ids).await;
+            let ids: Vec<_> = notes.iter().map(|(n, _)| n.id()).collect();
+            let consume_request = TransactionRequestBuilder::new()
+                .build_consume_notes(ids)
+                .unwrap();
+            let result = client.submit_new_transaction(redeemer.id(), consume_request).await;
             assert!(result.is_ok(), "CLAIM redemption should succeed");
         }
     }
@@ -118,37 +181,38 @@ mod tc_2_2_claim_redemption {
     /// TC-2.2.2: Cannot redeem same CLAIM twice
     #[tokio::test]
     async fn test_no_double_redemption() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let token_symbol = TokenSymbol::new("RDM2").expect("Invalid symbol");
-        let (faucet, _) = client
-            .new_faucet(AccountStorageMode::Public, token_symbol, 8, Felt::new(1_000_000_000))
+        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "RDM2", 1_000_000_000)
             .await
             .unwrap();
 
-        let (redeemer, _) = client
-            .new_account(AccountStorageMode::Public, AccountType::RegularAccountUpdatableCode)
+        let redeemer = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
             .await
             .unwrap();
 
-        client
-            .new_mint_transaction(faucet.id(), redeemer.id(), 100_000_000, NoteType::Public)
-            .await
+        let asset = FungibleAsset::new(faucet.id(), 100_000_000).unwrap();
+        let tx_request = TransactionRequestBuilder::new()
+            .build_mint_fungible_asset(asset, redeemer.id(), NoteType::Public, client.rng())
             .unwrap();
 
+        client.submit_new_transaction(faucet.id(), tx_request).await.unwrap();
         client.sync_state().await.unwrap();
 
-        let notes = client.get_consumable_notes(Some(redeemer.id())).unwrap();
+        let notes = client.get_consumable_notes(Some(redeemer.id())).await.unwrap();
         if !notes.is_empty() {
-            let ids: Vec<_> = notes.iter().map(|n| n.id()).collect();
-            client.new_consume_transaction(redeemer.id(), &ids).await.unwrap();
+            let ids: Vec<_> = notes.iter().map(|(n, _)| n.id()).collect();
+            let consume_request = TransactionRequestBuilder::new()
+                .build_consume_notes(ids.clone())
+                .unwrap();
+            client.submit_new_transaction(redeemer.id(), consume_request).await.unwrap();
 
             client.sync_state().await.unwrap();
 
-            let remaining = client.get_consumable_notes(Some(redeemer.id())).unwrap();
+            let remaining = client.get_consumable_notes(Some(redeemer.id())).await.unwrap();
             for id in &ids {
                 assert!(
-                    !remaining.iter().any(|n| n.id() == *id),
+                    !remaining.iter().any(|(n, _)| n.id() == *id),
                     "Consumed note should not be available"
                 );
             }
@@ -166,27 +230,25 @@ mod tc_2_3_claim_expiry {
     /// TC-2.3.1: CLAIM notes have expiry tracking
     #[tokio::test]
     async fn test_claim_expiry_tracking() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let token_symbol = TokenSymbol::new("EXP1").expect("Invalid symbol");
-        let (faucet, _) = client
-            .new_faucet(AccountStorageMode::Public, token_symbol, 8, Felt::new(1_000_000_000))
+        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "EXP1", 1_000_000_000)
             .await
             .unwrap();
 
-        let (target, _) = client
-            .new_account(AccountStorageMode::Public, AccountType::RegularAccountUpdatableCode)
+        let target = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
             .await
             .unwrap();
 
-        client
-            .new_mint_transaction(faucet.id(), target.id(), 100_000_000, NoteType::Public)
-            .await
+        let asset = FungibleAsset::new(faucet.id(), 100_000_000).unwrap();
+        let tx_request = TransactionRequestBuilder::new()
+            .build_mint_fungible_asset(asset, target.id(), NoteType::Public, client.rng())
             .unwrap();
 
+        client.submit_new_transaction(faucet.id(), tx_request).await.unwrap();
         client.sync_state().await.unwrap();
 
-        let notes = client.get_consumable_notes(Some(target.id())).unwrap();
+        let notes = client.get_consumable_notes(Some(target.id())).await.unwrap();
         assert!(!notes.is_empty(), "Should have notes to check expiry");
     }
 }
@@ -201,27 +263,26 @@ mod tc_2_4_faucet_interaction {
     /// TC-2.4.1: Faucet can mint multiple CLAIMs
     #[tokio::test]
     async fn test_faucet_multiple_mints() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let token_symbol = TokenSymbol::new("MULT").expect("Invalid symbol");
-        let (faucet, _) = client
-            .new_faucet(AccountStorageMode::Public, token_symbol, 8, Felt::new(1_000_000_000))
+        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "MULT", 1_000_000_000)
             .await
             .unwrap();
 
         let mut recipients = Vec::new();
         for _ in 0..3 {
-            let (account, _) = client
-                .new_account(AccountStorageMode::Public, AccountType::RegularAccountUpdatableCode)
+            let account = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
                 .await
                 .unwrap();
             recipients.push(account.id());
         }
 
         for recipient_id in &recipients {
-            let result = client
-                .new_mint_transaction(faucet.id(), *recipient_id, 50_000_000, NoteType::Public)
-                .await;
+            let asset = FungibleAsset::new(faucet.id(), 50_000_000).unwrap();
+            let tx_request = TransactionRequestBuilder::new()
+                .build_mint_fungible_asset(asset, *recipient_id, NoteType::Public, client.rng())
+                .unwrap();
+            let result = client.submit_new_transaction(faucet.id(), tx_request).await;
             assert!(result.is_ok(), "Minting to {:?} should succeed", recipient_id);
         }
     }
@@ -229,25 +290,23 @@ mod tc_2_4_faucet_interaction {
     /// TC-2.4.2: Faucet respects supply limits
     #[tokio::test]
     async fn test_faucet_supply_limits() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let token_symbol = TokenSymbol::new("LIM1").expect("Invalid symbol");
         let max_supply = 100_000_000u64;
-
-        let (faucet, _) = client
-            .new_faucet(AccountStorageMode::Public, token_symbol, 8, Felt::new(max_supply))
+        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "LIM1", max_supply)
             .await
             .unwrap();
 
-        let (target, _) = client
-            .new_account(AccountStorageMode::Public, AccountType::RegularAccountUpdatableCode)
+        let target = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
             .await
             .unwrap();
 
-        let result = client
-            .new_mint_transaction(faucet.id(), target.id(), max_supply / 2, NoteType::Public)
-            .await;
+        let asset = FungibleAsset::new(faucet.id(), max_supply / 2).unwrap();
+        let tx_request = TransactionRequestBuilder::new()
+            .build_mint_fungible_asset(asset, target.id(), NoteType::Public, client.rng())
+            .unwrap();
 
+        let result = client.submit_new_transaction(faucet.id(), tx_request).await;
         assert!(result.is_ok(), "Minting within limits should succeed");
     }
 }
@@ -262,55 +321,54 @@ mod tc_2_5_cross_chain {
     /// TC-2.5.1: Notes can be tagged for cross-chain tracking
     #[tokio::test]
     async fn test_note_tagging() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let token_symbol = TokenSymbol::new("TAG1").expect("Invalid symbol");
-        let (faucet, _) = client
-            .new_faucet(AccountStorageMode::Public, token_symbol, 8, Felt::new(1_000_000_000))
+        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "TAG1", 1_000_000_000)
             .await
             .unwrap();
 
-        let (target, _) = client
-            .new_account(AccountStorageMode::Public, AccountType::RegularAccountUpdatableCode)
+        let target = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
             .await
             .unwrap();
 
-        client
-            .new_mint_transaction(faucet.id(), target.id(), 100_000_000, NoteType::Public)
-            .await
+        let asset = FungibleAsset::new(faucet.id(), 100_000_000).unwrap();
+        let tx_request = TransactionRequestBuilder::new()
+            .build_mint_fungible_asset(asset, target.id(), NoteType::Public, client.rng())
+            .expect("Failed to build mint request");
+
+        client.submit_new_transaction(faucet.id(), tx_request).await
             .expect("Failed to create tagged note");
 
         client.sync_state().await.unwrap();
 
-        let notes = client.get_consumable_notes(Some(target.id())).unwrap();
+        let notes = client.get_consumable_notes(Some(target.id())).await.unwrap();
         assert!(!notes.is_empty(), "Tagged note should be created");
     }
 
     /// TC-2.5.2: State sync includes note data
     #[tokio::test]
     async fn test_sync_includes_notes() {
-        let mut client = create_test_client().await.expect("Failed to create client");
+        let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let token_symbol = TokenSymbol::new("SYNC").expect("Invalid symbol");
-        let (faucet, _) = client
-            .new_faucet(AccountStorageMode::Public, token_symbol, 8, Felt::new(1_000_000_000))
+        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "SYNC", 1_000_000_000)
             .await
             .unwrap();
 
-        let (target, _) = client
-            .new_account(AccountStorageMode::Public, AccountType::RegularAccountUpdatableCode)
+        let target = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
             .await
             .unwrap();
 
-        client
-            .new_mint_transaction(faucet.id(), target.id(), 100_000_000, NoteType::Public)
-            .await
+        let asset = FungibleAsset::new(faucet.id(), 100_000_000).unwrap();
+        let tx_request = TransactionRequestBuilder::new()
+            .build_mint_fungible_asset(asset, target.id(), NoteType::Public, client.rng())
             .unwrap();
+
+        client.submit_new_transaction(faucet.id(), tx_request).await.unwrap();
 
         let sync_result = client.sync_state().await;
         assert!(sync_result.is_ok(), "Sync should succeed with new notes");
 
-        let notes = client.get_consumable_notes(Some(target.id())).unwrap();
+        let notes = client.get_consumable_notes(Some(target.id())).await.unwrap();
         assert!(!notes.is_empty(), "Synced state should include notes");
     }
 }
