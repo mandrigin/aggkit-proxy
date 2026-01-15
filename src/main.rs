@@ -310,42 +310,44 @@ async fn submit_claim_to_miden(
             info!(block_num = block_num, "State synced with network");
 
             // Step 4.5: Import faucet account and keys
-            // If we have an account file with keys, use that. Otherwise, import from network.
-            // IMPORTANT: When using account file, the account ID from the file takes precedence
-            // over the BRIDGE_FAUCET_ID env var.
+            // Strategy: Import from network first (to get vault state), then add keys from file.
+            // The network import gives us the current vault state needed for transaction validation.
             let bridge_faucet_id = if let Some(ref account_file_path) = config.faucet_account_file {
                 use miden_protocol::account::AccountFile;
                 use miden_client::keystore::FilesystemKeyStore;
 
                 info!(
                     account_file = %account_file_path.display(),
-                    "Loading faucet account from file (with keys)..."
+                    "Loading faucet account file (for keys)..."
                 );
 
-                // Load the account file which contains both account and secret keys
+                // Load the account file to get secret keys
                 let account_file = AccountFile::read(account_file_path)
                     .map_err(|e| ClientError::InitializationError(format!(
                         "Failed to read account file {}: {}",
                         account_file_path.display(), e
                     )))?;
 
-                // Use the account ID from the file - this is the authoritative source
                 let faucet_id_from_file = account_file.account.id();
                 info!(
                     account_id = ?faucet_id_from_file,
                     num_keys = account_file.auth_secret_keys.len(),
-                    "Account file loaded - using account ID from file"
+                    "Account file loaded"
                 );
 
-                // Add the account to the client
-                client.add_account(&account_file.account, true).await
+                // First, import from network to get the current vault state
+                // This is essential for the transaction validator to verify vault state
+                info!(
+                    account_id = ?faucet_id_from_file,
+                    "Importing faucet account from network (for vault state)..."
+                );
+                client.import_account_by_id(faucet_id_from_file).await
                     .map_err(|e| ClientError::AccountNotFound(format!(
-                        "Failed to add faucet account to client: {}", e
+                        "Failed to import faucet account from network: {}", e
                     )))?;
-                info!("Faucet account added to client");
+                info!("Faucet account imported from network with vault state");
 
-                // Add the secret keys to the keystore
-                // The keystore path is: store_path.parent()/keystore
+                // Then add the secret keys to the keystore for signing
                 let keystore_path = config.store_path
                     .parent()
                     .unwrap_or(std::path::Path::new("/app/data"))
@@ -369,7 +371,6 @@ async fn submit_claim_to_miden(
                     "Secret keys added to keystore"
                 );
 
-                // Return the account ID from file to use for the rest of the transaction
                 faucet_id_from_file
             } else {
                 // Fallback: try to import from network (won't have keys for signing)
