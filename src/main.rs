@@ -919,23 +919,30 @@ async fn main() -> anyhow::Result<()> {
 
     let version = std::env::var("GIT_COMMIT").unwrap_or_else(|_| "unknown".to_string());
 
+    // Collect all config from environment
+    let miden_rpc_url = std::env::var("MIDEN_RPC_URL")
+        .unwrap_or_else(|_| "http://localhost:57291".to_string());
+    let bridge_faucet_id = std::env::var("BRIDGE_FAUCET_ID").unwrap_or_default();
+    let listen_host = std::env::var("LISTEN_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let listen_port = std::env::var("LISTEN_PORT").unwrap_or_else(|_| "8546".to_string());
+    let store_path = PathBuf::from("/app/data/miden-client");
+
     info!("=======================================================");
     info!("  Miden RPC Proxy - Ethereum JSON-RPC to Miden Bridge  ");
     info!("=======================================================");
     info!("Version: {}", version);
     info!("Chain ID: {:#x} (MIDE)", MIDEN_CHAIN_ID);
     info!("Fixed gas estimate: {}", FIXED_GAS_ESTIMATE);
+    info!("Configuration:");
+    info!("  MIDEN_RPC_URL:      {}", miden_rpc_url);
+    info!("  BRIDGE_FAUCET_ID:   {}", if bridge_faucet_id.is_empty() { "(not set)" } else { &bridge_faucet_id });
+    info!("  LISTEN_HOST:        {}", listen_host);
+    info!("  LISTEN_PORT:        {}", listen_port);
+    info!("  Store Path:         {}", store_path.display());
 
     info!("Initializing bridge state...");
     let state = Arc::new(BridgeState::new());
     info!("Bridge state initialized successfully");
-
-    // Get miden-node RPC URL from environment
-    let miden_rpc_url = std::env::var("MIDEN_RPC_URL")
-        .unwrap_or_else(|_| "http://localhost:57291".to_string());
-    let store_path = PathBuf::from("/app/data/miden-client");
-
-    info!(miden_rpc_url = %miden_rpc_url, "Miden node RPC URL configured");
 
     // Pre-flight check: verify we can connect to miden-node
     // Server MUST crash if miden-node is unreachable - fail fast and loud
@@ -954,12 +961,6 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize Miden submission config for claim processing
-    let bridge_faucet_id = std::env::var("BRIDGE_FAUCET_ID")
-        .unwrap_or_else(|_| {
-            warn!("BRIDGE_FAUCET_ID not set - claim submissions will fail");
-            String::new()
-        });
-
     let miden_config = MidenSubmissionConfig {
         rpc_endpoint: miden_rpc_url.clone(),
         store_path: store_path.clone(),
@@ -978,9 +979,6 @@ async fn main() -> anyhow::Result<()> {
     };
     info!("EthApi implementation created");
 
-    // Get listen address from environment or use defaults
-    let listen_host = std::env::var("LISTEN_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-    let listen_port = std::env::var("LISTEN_PORT").unwrap_or_else(|_| "8546".to_string());
     let addr = format!("{}:{}", listen_host, listen_port);
     info!("Starting Miden RPC server on {}", addr);
     info!("Supported methods: eth_chainId, eth_gasPrice, eth_estimateGas, eth_getTransactionCount, eth_sendRawTransaction, eth_getTransactionReceipt, eth_call, eth_blockNumber");
