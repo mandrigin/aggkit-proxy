@@ -6,7 +6,7 @@ version: "3.8"
 services:
   # Miden node (agglayer-v0.1 - built from source)
   miden-node:
-    image: miden-node:${BRANCH:-local}
+    image: miden-node:${GIT_COMMIT:-latest}
     build:
       context: .
       dockerfile: Dockerfile.miden-node
@@ -24,7 +24,7 @@ services:
 
   # The proxy service (minimal config for decode testing)
   proxy:
-    image: miden-proxy:${BRANCH:-local}
+    image: miden-proxy:${GIT_COMMIT:-latest}
     build:
       context: .
       dockerfile: Dockerfile
