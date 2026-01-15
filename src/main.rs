@@ -724,15 +724,28 @@ impl EthApiServer for EthApiImpl {
 
         // Step 10: Submit to Miden network in background task
         if let Some(ref config) = self.miden_config {
-            // Convert U256 amount to u64 (Miden uses u64 for asset amounts)
-            // Note: This may truncate for very large amounts
-            let amount_u64: u64 = claim_params.amount.try_into().unwrap_or_else(|_| {
+            // Convert U256 amount from 18 decimals (ERC20 wei) to 8 decimals (Miden)
+            // Scale factor: 10^10 (18 - 8 = 10 decimal places)
+            // This is necessary because ERC20 amounts can exceed u64::MAX
+            const DECIMAL_SCALE: u128 = 10_000_000_000; // 10^10
+            const MIDEN_MAX_AMOUNT: u64 = 9_223_372_034_707_292_160; // ~2^63, Miden's max
+
+            let scaled_amount = claim_params.amount / alloy_primitives::U256::from(DECIMAL_SCALE);
+            let amount_u64: u64 = scaled_amount.try_into().unwrap_or_else(|_| {
                 warn!(
-                    amount = %claim_params.amount,
-                    "Amount exceeds u64::MAX, truncating"
+                    original_amount = %claim_params.amount,
+                    scaled_amount = %scaled_amount,
+                    "Scaled amount still exceeds u64::MAX, capping at Miden max"
                 );
-                u64::MAX
+                MIDEN_MAX_AMOUNT
             });
+            // Cap at Miden's max if needed
+            let amount_u64 = amount_u64.min(MIDEN_MAX_AMOUNT);
+            info!(
+                original_wei = %claim_params.amount,
+                scaled_miden = amount_u64,
+                "Converted ERC20 amount (18 decimals) to Miden amount (8 decimals)"
+            );
 
             let claim_data = ClaimSubmissionData {
                 recipient_account_bytes: miden_account_id.to_bytes(),
