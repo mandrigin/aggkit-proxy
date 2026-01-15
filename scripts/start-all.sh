@@ -58,12 +58,49 @@ if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
     exit 1
 fi
 
+# Start proxy now that miden-node is healthy
+echo "Starting proxy..."
+docker compose up -d proxy
+
+# Wait for proxy to be healthy
+echo "Waiting for proxy to be healthy..."
+RETRY_COUNT=0
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    if docker compose ps proxy | grep -q "healthy"; then
+        echo "proxy is healthy!"
+        break
+    fi
+
+    # Check if service exited/failed
+    if docker compose ps proxy | grep -qE "Exit|exited"; then
+        echo "ERROR: proxy failed to start!"
+        echo ""
+        echo "Logs:"
+        docker compose logs proxy
+        exit 1
+    fi
+
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    echo "  Waiting... ($RETRY_COUNT/$MAX_RETRIES)"
+    sleep 5
+done
+
+if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+    echo "ERROR: proxy did not become healthy in time!"
+    echo ""
+    echo "Logs:"
+    docker compose logs proxy
+    exit 1
+fi
+
 echo ""
 echo "============================================"
 echo "Ready! Services running."
 echo ""
 echo "Endpoints:"
 echo "  Miden node:  http://localhost:57291"
+echo "  Proxy:       http://localhost:8546"
 echo ""
 echo "Commands:"
 echo "  View logs:   docker compose logs -f"
