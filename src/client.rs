@@ -9,7 +9,7 @@
 //! NOTE: When miden-agglayer becomes compatible with miden-client (version alignment),
 //! switch to using miden-agglayer's create_claim_note() for bridge-specific validation.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -250,7 +250,12 @@ pub async fn init_client(
         .map_err(|e| ClientError::InitializationError(format!("Invalid endpoint: {}", e)))?;
 
     // Build the client using the new builder pattern
-    let keystore_path = config.store_path.join("keystore");
+    // Use parent directory of store_path (which is a file) for keystore
+    let keystore_path = config
+        .store_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("keystore");
     let keystore_path_str = keystore_path.to_string_lossy();
     let client: Client<miden_client::keystore::FilesystemKeyStore> = ClientBuilder::new()
         .grpc_client(&endpoint, Some(10_000))
