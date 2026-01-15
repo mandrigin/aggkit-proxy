@@ -2,23 +2,21 @@
 //!
 //! Provides a wrapper around the Miden client for:
 //! - Client initialization with RPC endpoint
-//! - P2ID note creation for claim distribution
+//! - CLAIM note creation for bridge claims using miden-agglayer
 //! - Transaction submission via TransactionRequestBuilder
 //! - State synchronization for confirmation tracking
-//!
-//! NOTE: When miden-agglayer becomes compatible with miden-client (version alignment),
-//! switch to using miden-agglayer's create_claim_note() for bridge-specific validation.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
+use miden_agglayer::{create_claim_note, ClaimNoteParams};
 use miden_client::Client;
 use miden_protocol::{
     account::AccountId,
-    asset::FungibleAsset,
-    note::{Note, NoteType},
-    Felt,
+    crypto::rand::FeltRng,
+    note::{Note, NoteTag},
+    Felt, Word,
 };
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
@@ -104,82 +102,111 @@ impl<C> MidenClientWrapper<C> {
     }
 }
 
-/// Parameters for creating a bridge claim note
+/// Parameters for creating a bridge CLAIM note.
+///
+/// These parameters are extracted from the claimAsset calldata and used to
+/// create a CLAIM note via miden-agglayer's create_claim_note().
 #[derive(Debug, Clone)]
 pub struct BridgeClaimParams {
-    /// Bridge faucet account sending the assets
-    pub sender_account_id: AccountId,
-    /// Target Miden account receiving the claim
-    pub recipient_account_id: AccountId,
-    /// Fungible assets being transferred
-    pub assets: Vec<FungibleAsset>,
-    /// Type of note (Public, Private, etc.)
-    pub note_type: NoteType,
+    // === SMT Proof Data ===
+    /// SMT proof for local exit root (32 siblings * 8 felts each = 256 felts)
+    pub smt_proof_local_exit_root: Vec<Felt>,
+    /// SMT proof for rollup exit root (32 siblings * 8 felts each = 256 felts)
+    pub smt_proof_rollup_exit_root: Vec<Felt>,
+    /// Global index (uint256 as 8 u32 felts)
+    pub global_index: [Felt; 8],
+    /// Mainnet exit root hash (32 bytes)
+    pub mainnet_exit_root: [u8; 32],
+    /// Rollup exit root hash (32 bytes)
+    pub rollup_exit_root: [u8; 32],
+
+    // === Leaf Data ===
+    /// Origin network identifier (uint32)
+    pub origin_network: Felt,
+    /// Origin token address (20 bytes)
+    pub origin_token_address: [u8; 20],
+    /// Destination network identifier (uint32)
+    pub destination_network: Felt,
+    /// Destination address (20 bytes)
+    pub destination_address: [u8; 20],
+    /// Amount of tokens (uint256 as 8 u32 felts)
+    pub amount: [Felt; 8],
+    /// ABI encoded metadata (8 felts)
+    pub metadata: [Felt; 8],
+
+    // === CLAIM Note Parameters ===
+    /// Account ID that creates the CLAIM note
+    pub claim_note_creator_account_id: AccountId,
+    /// Agglayer faucet AccountId
+    pub agglayer_faucet_account_id: AccountId,
+    /// Output P2ID note tag
+    pub output_note_tag: NoteTag,
+    /// P2ID note serial number (4 felts as Word)
+    pub p2id_serial_number: Word,
+    /// Destination Miden account ID
+    pub destination_account_id: AccountId,
 }
 
-/// Create a P2ID (Pay to ID) note for claim distribution
+/// Create a CLAIM note for bridge claims.
 ///
-/// This is the core function for creating bridge claim notes that transfer
-/// assets from the bridge faucet to a recipient's Miden account.
-///
-/// NOTE: When miden-agglayer becomes version-compatible with miden-client,
-/// switch to using miden-agglayer's create_claim_note() for bridge-specific
-/// SMT proof validation.
+/// This function creates a CLAIM note using miden-agglayer's create_claim_note(),
+/// which validates the SMT proofs and creates a note that instructs the agglayer
+/// faucet to mint assets to the destination account.
 ///
 /// # Arguments
-/// * `params` - Bridge claim parameters
+/// * `params` - Bridge claim parameters including SMT proofs and claim data
 /// * `rng` - Random number generator for note creation
 ///
 /// # Returns
 /// The created Note, or an error
-#[instrument(skip(rng), fields(
-    sender = %params.sender_account_id,
-    recipient = %params.recipient_account_id,
-    asset_count = params.assets.len(),
+#[instrument(skip(params, rng), fields(
+    creator = %params.claim_note_creator_account_id,
+    faucet = %params.agglayer_faucet_account_id,
+    destination = %params.destination_account_id,
 ))]
 pub fn create_bridge_claim_note<R>(
     params: BridgeClaimParams,
     rng: &mut R,
 ) -> Result<Note, ClientError>
 where
-    R: miden_protocol::crypto::rand::FeltRng,
+    R: FeltRng,
 {
-    use miden_standards::note::create_p2id_note;
-    use miden_protocol::asset::Asset;
-
     info!(
-        sender = %params.sender_account_id,
-        recipient = %params.recipient_account_id,
-        asset_count = params.assets.len(),
-        note_type = ?params.note_type,
-        "Creating bridge claim P2ID note"
+        creator = %params.claim_note_creator_account_id,
+        faucet = %params.agglayer_faucet_account_id,
+        destination = %params.destination_account_id,
+        "Creating bridge CLAIM note using miden-agglayer"
     );
 
-    let assets: Vec<Asset> = params.assets.into_iter().map(Asset::Fungible).collect();
-
-    debug!(
-        asset_count = assets.len(),
-        "Converted assets to Asset enum"
-    );
-
-    // Create the P2ID note using miden-standards helper
-    // P2ID notes can only be consumed by the target account
-    info!("Calling miden-standards create_p2id_note...");
-    let note = create_p2id_note(
-        params.sender_account_id,
-        params.recipient_account_id,
-        assets,
-        params.note_type,
-        Felt::new(0), // aux field
+    // Construct ClaimNoteParams from our BridgeClaimParams
+    let claim_note_params = ClaimNoteParams {
+        smt_proof_local_exit_root: params.smt_proof_local_exit_root,
+        smt_proof_rollup_exit_root: params.smt_proof_rollup_exit_root,
+        global_index: params.global_index,
+        mainnet_exit_root: &params.mainnet_exit_root,
+        rollup_exit_root: &params.rollup_exit_root,
+        origin_network: params.origin_network,
+        origin_token_address: &params.origin_token_address,
+        destination_network: params.destination_network,
+        destination_address: &params.destination_address,
+        amount: params.amount,
+        metadata: params.metadata,
+        claim_note_creator_account_id: params.claim_note_creator_account_id,
+        agglayer_faucet_account_id: params.agglayer_faucet_account_id,
+        output_note_tag: params.output_note_tag,
+        p2id_serial_number: params.p2id_serial_number,
+        destination_account_id: params.destination_account_id,
         rng,
-    )
-    .map_err(|e| {
-        warn!(error = %e, "Failed to create P2ID note");
+    };
+
+    debug!("Calling miden-agglayer create_claim_note...");
+    let note = create_claim_note(claim_note_params).map_err(|e| {
+        warn!(error = %e, "Failed to create CLAIM note");
         ClientError::NoteCreationError(e.to_string())
     })?;
 
     let note_id = note.id();
-    info!(?note_id, "Bridge claim P2ID note created successfully");
+    info!(?note_id, "Bridge CLAIM note created successfully");
 
     Ok(note)
 }

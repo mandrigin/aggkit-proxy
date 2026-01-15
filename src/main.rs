@@ -24,8 +24,9 @@ use alloy_primitives::{Address, Bytes};
 // Miden protocol types
 use miden_protocol::{
     account::{AccountId, AccountIdV0},
-    asset::FungibleAsset,
-    note::NoteType,
+    crypto::rand::FeltRng,
+    note::NoteTag,
+    Felt, Word,
 };
 
 /// Miden chain ID (placeholder - configure as needed)
@@ -240,10 +241,34 @@ impl EthApiImpl {
 /// Data needed for Miden claim submission (must be Send + 'static for spawn_blocking)
 #[derive(Debug, Clone)]
 struct ClaimSubmissionData {
-    /// Recipient's Miden account ID (15 bytes)
-    recipient_account_bytes: [u8; 15],
+    // === SMT Proof Data ===
+    /// SMT proof for local exit root (32 siblings as [u8; 32] each)
+    smt_proof_local_exit_root: [[u8; 32]; 32],
+    /// SMT proof for rollup exit root (32 siblings as [u8; 32] each)
+    smt_proof_rollup_exit_root: [[u8; 32]; 32],
+    /// Global index (raw U256 as bytes)
+    global_index_bytes: [u8; 32],
+    /// Mainnet exit root hash (32 bytes)
+    mainnet_exit_root: [u8; 32],
+    /// Rollup exit root hash (32 bytes)
+    rollup_exit_root: [u8; 32],
+
+    // === Leaf Data ===
+    /// Origin network identifier (uint32)
+    origin_network: u32,
+    /// Origin token address (20 bytes)
+    origin_token_address: [u8; 20],
+    /// Destination network identifier (uint32)
+    destination_network: u32,
+    /// Destination address (20 bytes from Ethereum address)
+    destination_address: [u8; 20],
     /// Amount to transfer (as u64, converted from U256)
     amount: u64,
+    /// Metadata (up to 64 bytes)
+    metadata: Vec<u8>,
+
+    /// Recipient's Miden account ID (15 bytes)
+    recipient_account_bytes: [u8; 15],
 }
 
 /// Submit a claim to the Miden network using spawn_blocking
@@ -387,30 +412,62 @@ async fn submit_claim_to_miden(
                 bridge_faucet_id
             };
 
-            // Step 5: Create the fungible asset for transfer
-            let asset = FungibleAsset::new(bridge_faucet_id, claim_data.amount)
-                .map_err(|e| ClientError::NoteCreationError(format!("Invalid asset: {}", e)))?;
-
-            info!(
-                faucet_id = ?bridge_faucet_id,
-                amount = claim_data.amount,
-                "Created fungible asset"
-            );
-
-            // Step 6: Create the bridge claim note (P2ID)
+            // Step 5: Create the bridge CLAIM note using miden-agglayer
             // Initialize RNG for note creation using system randomness
             let seed = generate_rng_seed();
             let mut rng = RpoRandomCoin::new(seed.map(Felt::new).into());
 
+            // Convert SMT proofs to Vec<Felt> (32 siblings * 8 u32 felts per 32 bytes = 256 felts)
+            let smt_proof_local = bytes32_array_to_felts(&claim_data.smt_proof_local_exit_root);
+            let smt_proof_rollup = bytes32_array_to_felts(&claim_data.smt_proof_rollup_exit_root);
+
+            // Convert global_index (U256) to [Felt; 8]
+            let global_index = u256_bytes_to_felt_array(&claim_data.global_index_bytes);
+
+            // Convert amount (u64) to [Felt; 8] (low limb only, rest zeros)
+            let amount_felts = u64_to_felt_array(claim_data.amount);
+
+            // Convert metadata to [Felt; 8] (pad with zeros)
+            let metadata_felts = bytes_to_felt_array_padded(&claim_data.metadata, 8);
+
+            // Generate P2ID serial number (random Word)
+            let p2id_serial_number: Word = rng.draw_word();
+
+            // Generate output note tag for P2ID notes (public note for recipient)
+            let output_note_tag = NoteTag::for_public_use_case(0, 0, miden_protocol::note::NoteExecutionMode::Local)
+                .map_err(|e| ClientError::NoteCreationError(format!("Failed to create note tag: {}", e)))?;
+
+            info!(
+                faucet_id = ?bridge_faucet_id,
+                recipient = ?recipient_account_id,
+                amount = claim_data.amount,
+                "Creating CLAIM note with miden-agglayer"
+            );
+
             let claim_params = BridgeClaimParams {
-                sender_account_id: bridge_faucet_id,
-                recipient_account_id,
-                assets: vec![asset],
-                note_type: NoteType::Public,
+                // SMT Proof Data
+                smt_proof_local_exit_root: smt_proof_local,
+                smt_proof_rollup_exit_root: smt_proof_rollup,
+                global_index,
+                mainnet_exit_root: claim_data.mainnet_exit_root,
+                rollup_exit_root: claim_data.rollup_exit_root,
+                // Leaf Data
+                origin_network: Felt::new(claim_data.origin_network as u64),
+                origin_token_address: claim_data.origin_token_address,
+                destination_network: Felt::new(claim_data.destination_network as u64),
+                destination_address: claim_data.destination_address,
+                amount: amount_felts,
+                metadata: metadata_felts,
+                // CLAIM Note Parameters
+                claim_note_creator_account_id: bridge_faucet_id,
+                agglayer_faucet_account_id: bridge_faucet_id,
+                output_note_tag,
+                p2id_serial_number,
+                destination_account_id: recipient_account_id,
             };
 
             let note = create_bridge_claim_note(claim_params, &mut rng)?;
-            info!(note_id = ?note.id(), "Created P2ID claim note");
+            info!(note_id = ?note.id(), "Created CLAIM note");
 
             // Step 7: Build the transaction request
             let tx_request = build_claim_transaction_request(bridge_faucet_id, vec![note])?;
@@ -463,6 +520,59 @@ fn generate_rng_seed() -> [u64; 4] {
     let h4 = hasher.finish();
 
     [h1, h2, h3, h4]
+}
+
+/// Convert an array of 32 32-byte values to Vec<Felt> (256 felts total).
+/// Each 32-byte value becomes 8 u32 felts (little-endian).
+fn bytes32_array_to_felts(array: &[[u8; 32]; 32]) -> Vec<Felt> {
+    let mut felts = Vec::with_capacity(256);
+    for bytes32 in array {
+        // Convert each 32-byte value to 8 u32 felts (little-endian chunks)
+        for chunk in bytes32.chunks(4) {
+            let value = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            felts.push(Felt::new(value as u64));
+        }
+    }
+    felts
+}
+
+/// Convert a 32-byte U256 (big-endian) to [Felt; 8] array.
+/// Each felt contains a u32 limb, little-endian order.
+fn u256_bytes_to_felt_array(bytes: &[u8; 32]) -> [Felt; 8] {
+    let mut felts = [Felt::new(0); 8];
+    // Convert big-endian bytes to little-endian u32 limbs
+    for (i, chunk) in bytes.chunks(4).rev().enumerate() {
+        if i < 8 {
+            let value = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            felts[i] = Felt::new(value as u64);
+        }
+    }
+    felts
+}
+
+/// Convert u64 to [Felt; 8] array (low limbs filled, rest zeros).
+fn u64_to_felt_array(value: u64) -> [Felt; 8] {
+    let mut felts = [Felt::new(0); 8];
+    // Split u64 into two u32 limbs
+    felts[0] = Felt::new((value & 0xFFFFFFFF) as u64);
+    felts[1] = Felt::new((value >> 32) as u64);
+    felts
+}
+
+/// Convert bytes to [Felt; 8] array, padding with zeros.
+/// Each 4 bytes becomes one felt (little-endian).
+fn bytes_to_felt_array_padded(bytes: &[u8], num_felts: usize) -> [Felt; 8] {
+    let mut felts = [Felt::new(0); 8];
+    let chunks: Vec<&[u8]> = bytes.chunks(4).collect();
+    for (i, chunk) in chunks.iter().enumerate() {
+        if i >= num_felts || i >= 8 {
+            break;
+        }
+        let mut buf = [0u8; 4];
+        buf[..chunk.len()].copy_from_slice(chunk);
+        felts[i] = Felt::new(u32::from_le_bytes(buf) as u64);
+    }
+    felts
 }
 
 /// Parse an AccountId from a hex string
@@ -856,8 +966,21 @@ impl EthApiServer for EthApiImpl {
             );
 
             let claim_data = ClaimSubmissionData {
-                recipient_account_bytes: miden_account_id.to_bytes(),
+                // SMT Proof Data
+                smt_proof_local_exit_root: claim_params.smt_proof_local_exit_root,
+                smt_proof_rollup_exit_root: claim_params.smt_proof_rollup_exit_root,
+                global_index_bytes: claim_params.global_index_raw.to_be_bytes::<32>(),
+                mainnet_exit_root: claim_params.mainnet_exit_root,
+                rollup_exit_root: claim_params.rollup_exit_root,
+                // Leaf Data
+                origin_network: claim_params.origin_network,
+                origin_token_address: claim_params.origin_token_address.0 .0,
+                destination_network: claim_params.destination_network,
+                destination_address: claim_params.destination_address.0 .0,
                 amount: amount_u64,
+                metadata: claim_params.metadata.to_vec(),
+                // Recipient
+                recipient_account_bytes: miden_account_id.to_bytes(),
             };
 
             info!(
