@@ -30,6 +30,7 @@ services:
       dockerfile: Dockerfile
     environment:
       RUST_LOG: info
+      MIDEN_RPC_URL: http://miden-node:57291
     ports:
       - "8546:8546"
     volumes:
