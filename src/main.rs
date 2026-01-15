@@ -382,14 +382,15 @@ async fn submit_claim_to_miden(
                     );
                 }
 
-                // Import faucet account from network to get current on-chain state
-                info!("Importing faucet account from network...");
-                client.import_account_by_id(faucet_id).await
+                // Add faucet account to client from file (with full vault state)
+                // Using add_account instead of import_account_by_id to get full vault tracking
+                info!("Adding faucet account from file to client...");
+                client.add_account(&account_file.account, false).await
                     .map_err(|e| ClientError::AccountNotFound(format!(
-                        "Failed to import faucet account {}: {}",
+                        "Failed to add faucet account {}: {}",
                         faucet_id, e
                     )))?;
-                info!("Faucet account imported from network");
+                info!("Faucet account added to client from file");
 
                 // Add the faucet's secret keys to the keystore for transaction signing
                 for key in &account_file.auth_secret_keys {
