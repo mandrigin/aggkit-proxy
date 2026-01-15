@@ -53,7 +53,7 @@ RUN printf '%s\n' \
     '' \
     'DATA_DIR="${MIDEN_NODE_DATA_DIRECTORY:-/data}"' \
     'ACCOUNTS_DIR="${MIDEN_NODE_ACCOUNTS_DIRECTORY:-/accounts}"' \
-    'RPC_URL="${MIDEN_NODE_RPC_URL:-0.0.0.0:57291}"' \
+    'RPC_URL="${MIDEN_NODE_RPC_URL:-http://0.0.0.0:57291}"' \
     '' \
     '# Bootstrap if data directory is empty (no database yet)' \
     'if [ ! -d "$DATA_DIR/db" ]; then' \
