@@ -833,11 +833,14 @@ async fn main() -> anyhow::Result<()> {
     let rpc_impl = EthApiImpl::new(state);
     info!("EthApi implementation created");
 
-    let addr = "127.0.0.1:8545";
+    // Get listen address from environment or use defaults
+    let listen_host = std::env::var("LISTEN_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let listen_port = std::env::var("LISTEN_PORT").unwrap_or_else(|_| "8546".to_string());
+    let addr = format!("{}:{}", listen_host, listen_port);
     info!("Starting Miden RPC server on {}", addr);
     info!("Supported methods: eth_chainId, eth_gasPrice, eth_estimateGas, eth_getTransactionCount, eth_sendRawTransaction, eth_getTransactionReceipt, eth_call, eth_blockNumber");
 
-    let server = Server::builder().build(addr).await?;
+    let server = Server::builder().build(&addr).await?;
     let handle = server.start(rpc_impl.into_rpc());
 
     info!("Miden RPC server running on http://{}", addr);

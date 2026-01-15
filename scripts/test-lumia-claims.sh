@@ -86,10 +86,91 @@ EOF
     echo ""
 }
 
+# Pre-flight checks
+preflight_check() {
+    echo "============================================"
+    echo "Pre-flight checks"
+    echo "============================================"
+    echo ""
+
+    # Check 1: eth_chainId
+    echo "1. Testing eth_chainId..."
+    local chain_response=$(curl -sf -X POST \
+        -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' \
+        "$PROXY_URL" 2>&1)
+
+    if [ $? -ne 0 ] || [ -z "$chain_response" ]; then
+        echo "   FAILED: Proxy not responding at $PROXY_URL"
+        echo "   Make sure the proxy is running: docker compose -f docker-compose.local.yml up -d"
+        return 1
+    fi
+
+    local chain_id=$(echo "$chain_response" | jq -r '.result' 2>/dev/null)
+    if [ "$chain_id" = "null" ] || [ -z "$chain_id" ]; then
+        echo "   FAILED: Invalid response: $chain_response"
+        return 1
+    fi
+    echo "   OK: Chain ID = $chain_id"
+
+    # Check 2: eth_blockNumber
+    echo "2. Testing eth_blockNumber..."
+    local block_response=$(curl -sf -X POST \
+        -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":2}' \
+        "$PROXY_URL" 2>&1)
+
+    if [ $? -ne 0 ] || [ -z "$block_response" ]; then
+        echo "   FAILED: eth_blockNumber not responding"
+        return 1
+    fi
+
+    local block_num=$(echo "$block_response" | jq -r '.result' 2>/dev/null)
+    if [ "$block_num" = "null" ] || [ -z "$block_num" ]; then
+        echo "   FAILED: Invalid response: $block_response"
+        return 1
+    fi
+    echo "   OK: Block number = $block_num"
+
+    # Check 3: eth_gasPrice
+    echo "3. Testing eth_gasPrice..."
+    local gas_response=$(curl -sf -X POST \
+        -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","method":"eth_gasPrice","params":[],"id":3}' \
+        "$PROXY_URL" 2>&1)
+
+    if [ $? -ne 0 ] || [ -z "$gas_response" ]; then
+        echo "   FAILED: eth_gasPrice not responding"
+        return 1
+    fi
+
+    local gas_price=$(echo "$gas_response" | jq -r '.result' 2>/dev/null)
+    if [ "$gas_price" = "null" ] || [ -z "$gas_price" ]; then
+        echo "   FAILED: Invalid response: $gas_response"
+        return 1
+    fi
+    echo "   OK: Gas price = $gas_price"
+
+    echo ""
+    echo "All pre-flight checks passed!"
+    echo ""
+    return 0
+}
+
 # Main
 echo "Lumia claimAsset Test Vectors"
 echo "=============================="
 echo "Proxy URL: $PROXY_URL"
+echo ""
+
+# Run pre-flight checks first
+if ! preflight_check; then
+    echo ""
+    echo "Pre-flight checks FAILED. Aborting tests."
+    echo "Please ensure the proxy is running and responding."
+    exit 1
+fi
+
 echo "Test vectors: 10 real Lumia bridge claims"
 echo "  - destination_network: 7 (Lumia L2)"
 echo "  - origin_network: 0 (Ethereum mainnet)"
