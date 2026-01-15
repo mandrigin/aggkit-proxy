@@ -58,8 +58,13 @@ parking_lot = "0.12"
 tokio-test = "0.4"
 tempfile = "3"
 rand = "0.9"
+k256 = "0.13"
 # Enable testing feature for miden-protocol in tests (for AccountId::dummy)
 miden-protocol = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1", features = ["std", "testing"] }
+
+[[example]]
+name = "gen_signed_tx"
+path = "examples/gen_signed_tx.rs"
 
 [profile.release]
 lto = true
