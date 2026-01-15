@@ -11,23 +11,17 @@ use tracing::{debug, error, info, warn};
 
 use std::path::PathBuf;
 
-// Import library modules for claim processing
+// Import library modules for claim processing (P2ID mint approach)
 use miden_rpc_proxy::{
-    build_claim_transaction_request, create_bridge_claim_note, decode_transaction, init_client,
-    is_claim_asset, parse_claim_asset, submit_transaction, AddressMapper, AddressMapperConfig,
-    BridgeClaimParams, ClaimTracker, ClientError, EthAddress, MidenClientConfig,
+    decode_transaction, init_client, is_claim_asset, parse_claim_asset, submit_transaction,
+    AddressMapper, AddressMapperConfig, ClaimTracker, ClientError, EthAddress, MidenClientConfig,
     CLAIM_ASSET_SELECTOR,
 };
 
 use alloy_primitives::{Address, Bytes};
 
 // Miden protocol types
-use miden_protocol::{
-    account::{AccountId, AccountIdV0},
-    crypto::rand::FeltRng,
-    note::NoteTag,
-    Felt, Word,
-};
+use miden_protocol::account::{AccountId, AccountIdV0};
 
 /// Miden chain ID (placeholder - configure as needed)
 const MIDEN_CHAIN_ID: u64 = 0x4d494445; // "MIDE" in hex
@@ -240,83 +234,76 @@ impl EthApiImpl {
 
 /// Data needed for Miden claim submission (must be Send + 'static for spawn_blocking)
 #[derive(Debug, Clone)]
+/// Simplified claim data for P2ID mint approach
 struct ClaimSubmissionData {
-    // === SMT Proof Data ===
-    /// SMT proof for local exit root (32 siblings as [u8; 32] each)
-    smt_proof_local_exit_root: [[u8; 32]; 32],
-    /// SMT proof for rollup exit root (32 siblings as [u8; 32] each)
-    smt_proof_rollup_exit_root: [[u8; 32]; 32],
-    /// Global index (raw U256 as bytes)
-    global_index_bytes: [u8; 32],
-    /// Mainnet exit root hash (32 bytes)
-    mainnet_exit_root: [u8; 32],
-    /// Rollup exit root hash (32 bytes)
-    rollup_exit_root: [u8; 32],
-
-    // === Leaf Data ===
-    /// Origin network identifier (uint32)
-    origin_network: u32,
-    /// Origin token address (20 bytes)
-    origin_token_address: [u8; 20],
-    /// Destination network identifier (uint32)
-    destination_network: u32,
-    /// Destination address (20 bytes from Ethereum address)
-    destination_address: [u8; 20],
-    /// Amount to transfer (as u64, converted from U256)
+    /// Amount to mint (scaled to Miden decimals)
     amount: u64,
-    /// Metadata (up to 64 bytes)
-    metadata: Vec<u8>,
-
     /// Recipient's Miden account ID (15 bytes)
     recipient_account_bytes: [u8; 15],
 }
 
 /// Submit a claim to the Miden network using spawn_blocking
 ///
-/// This function handles the !Send nature of miden_client::Client by:
-/// 1. Creating the client inside a blocking context
-/// 2. Performing all operations within that context
-/// 3. Returning only Send-safe results
+/// Uses P2ID mint approach: the faucet directly mints tokens and sends them
+/// to the recipient via a P2ID note. This works with native faucets that
+/// don't have agglayer procedures.
+///
+/// # TODO: CLAIM Note Implementation (Future Milestone)
+///
+/// The full bridge flow should use CLAIM notes via `miden_agglayer::create_claim_note()`:
+/// 1. Ephemeral user creates CLAIM note with SMT proofs from claimAsset calldata
+/// 2. Ephemeral user submits CLAIM note TO the agglayer faucet
+/// 3. Agglayer faucet validates SMT proofs against bridge MMR
+/// 4. Agglayer faucet mints tokens to destination account
+///
+/// **Infrastructure Requirement**: CLAIM notes require an agglayer-enabled faucet
+/// with `agglayer_faucet_component` procedures. The current test environment uses
+/// a standard `NetworkFungibleFaucet` from genesis.toml which does NOT have these
+/// procedures, causing "asset is not tracked in the partial vault" errors.
+///
+/// The CLAIM note code is preserved in `client.rs`:
+/// - `BridgeClaimParams` struct with all SMT proof fields
+/// - `create_bridge_claim_note()` function wrapping miden-agglayer
+/// - Helper functions for byte-to-Felt conversions
+///
+/// When agglayer faucet infrastructure is available:
+/// 1. Update genesis.toml to include agglayer faucet
+/// 2. Re-add CLAIM note imports to this file
+/// 3. Replace P2ID flow with ephemeral user + CLAIM note flow
+/// 4. Re-enable ClaimSubmissionData fields for SMT proofs
 async fn submit_claim_to_miden(
     config: MidenSubmissionConfig,
     claim_data: ClaimSubmissionData,
 ) -> Result<u64, ClientError> {
+    use miden_client::keystore::FilesystemKeyStore;
+    use miden_client::transaction::{OutputNote, TransactionRequestBuilder};
+    use miden_protocol::account::AccountFile;
+    use miden_protocol::asset::FungibleAsset;
     use miden_protocol::crypto::rand::RpoRandomCoin;
-    use miden_protocol::Felt;
+    use miden_protocol::note::NoteType;
+    use miden_protocol::{Felt, FieldElement};
+    use miden_standards::note::create_p2id_note;
 
     info!(
         recipient = hex::encode(&claim_data.recipient_account_bytes),
         amount = claim_data.amount,
         rpc_endpoint = %config.rpc_endpoint,
-        "Starting Miden claim submission"
+        "Starting Miden claim submission (P2ID mint approach)"
     );
 
-    // Get a handle to the current runtime for use inside spawn_blocking
     let runtime_handle = tokio::runtime::Handle::current();
 
-    // Use spawn_blocking to run the client operations in a blocking context
-    // This is necessary because miden_client::Client is !Send
     let result = tokio::task::spawn_blocking(move || {
         runtime_handle.block_on(async {
             // Step 1: Parse the bridge faucet ID from hex
             let bridge_faucet_id = parse_account_id_from_hex(&config.bridge_faucet_id_hex)
                 .map_err(|e| ClientError::InitializationError(format!("Invalid bridge faucet ID: {}", e)))?;
-
-            info!(
-                bridge_faucet_id = ?bridge_faucet_id,
-                "Parsed bridge faucet account ID"
-            );
+            info!(bridge_faucet_id = ?bridge_faucet_id, "Parsed bridge faucet account ID");
 
             // Step 2: Convert recipient bytes to AccountId
-            // NOTE: This is a placeholder conversion - in production, this would need
-            // proper mapping from the 15-byte MidenAccountId to miden_protocol::AccountId
             let recipient_account_id = bytes_to_account_id(&claim_data.recipient_account_bytes)
                 .map_err(|e| ClientError::AccountNotFound(format!("Invalid recipient account: {}", e)))?;
-
-            info!(
-                recipient_account_id = ?recipient_account_id,
-                "Converted recipient to AccountId"
-            );
+            info!(recipient_account_id = ?recipient_account_id, "Converted recipient to AccountId");
 
             // Step 3: Initialize the Miden client
             let client_config = MidenClientConfig {
@@ -324,7 +311,6 @@ async fn submit_claim_to_miden(
                 store_path: config.store_path.clone(),
                 bridge_faucet_id,
             };
-
             let mut client = init_client(&client_config).await?;
             info!("Miden client initialized");
 
@@ -334,223 +320,88 @@ async fn submit_claim_to_miden(
             let block_num = sync_result.block_num.as_u32();
             info!(block_num = block_num, "State synced with network");
 
-            // Step 4.5: Import faucet account and keys
-            // Strategy: Import from network first (to get vault state), then add keys from file.
-            // The network import gives us the current vault state needed for transaction validation.
-            let bridge_faucet_id = if let Some(ref account_file_path) = config.faucet_account_file {
-                use miden_protocol::account::AccountFile;
-                use miden_client::keystore::FilesystemKeyStore;
+            // Step 5: Load faucet account from file (for keys) and network (for vault state)
+            // For P2ID mint, the FAUCET submits the transaction directly.
+            // We need: (1) secret keys from file for signing, (2) current vault state from network
+            let faucet_account_file = config.faucet_account_file.as_ref()
+                .ok_or_else(|| ClientError::InitializationError(
+                    "Faucet account file required for P2ID mint approach".to_string()
+                ))?;
+            info!(account_file = %faucet_account_file.display(), "Loading faucet account file (for keys)...");
 
-                info!(
-                    account_file = %account_file_path.display(),
-                    "Loading faucet account file (for keys)..."
-                );
+            let account_file = AccountFile::read(faucet_account_file)
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to read account file {}: {}", faucet_account_file.display(), e
+                )))?;
+            let faucet_id = account_file.account.id();
+            info!(faucet_id = ?faucet_id, num_keys = account_file.auth_secret_keys.len(), "Account file loaded");
 
-                // Load the account file to get secret keys
-                let account_file = AccountFile::read(account_file_path)
-                    .map_err(|e| ClientError::InitializationError(format!(
-                        "Failed to read account file {}: {}",
-                        account_file_path.display(), e
-                    )))?;
+            // Import faucet from NETWORK to get current vault state with merkle paths
+            // This is essential - add_account from file doesn't have network vault state
+            info!(faucet_id = ?faucet_id, "Importing faucet account from network (for vault state)...");
+            client.import_account_by_id(faucet_id).await
+                .map_err(|e| ClientError::AccountNotFound(format!(
+                    "Failed to import faucet account from network: {}", e
+                )))?;
+            info!("Faucet account imported from network with current vault state");
 
-                let faucet_id_from_file = account_file.account.id();
-                info!(
-                    account_id = ?faucet_id_from_file,
-                    num_keys = account_file.auth_secret_keys.len(),
-                    "Account file loaded"
-                );
-
-                // First, import from network to get the current vault state
-                // This is essential for the transaction validator to verify vault state
-                info!(
-                    account_id = ?faucet_id_from_file,
-                    "Importing faucet account from network (for vault state)..."
-                );
-                client.import_account_by_id(faucet_id_from_file).await
-                    .map_err(|e| ClientError::AccountNotFound(format!(
-                        "Failed to import faucet account from network: {}", e
-                    )))?;
-                info!("Faucet account imported from network with vault state");
-
-                // Then add the secret keys to the keystore for signing
-                let keystore_path = config.store_path
-                    .parent()
-                    .unwrap_or(std::path::Path::new("/app/data"))
-                    .join("keystore");
-
-                let keystore = FilesystemKeyStore::new(keystore_path.clone())
-                    .map_err(|e| ClientError::InitializationError(format!(
-                        "Failed to open keystore at {}: {}",
-                        keystore_path.display(), e
-                    )))?;
-
-                for key in &account_file.auth_secret_keys {
-                    keystore.add_key(key)
-                        .map_err(|e| ClientError::InitializationError(format!(
-                            "Failed to add key to keystore: {}", e
-                        )))?;
-                }
-                info!(
-                    num_keys = account_file.auth_secret_keys.len(),
-                    keystore_path = %keystore_path.display(),
-                    "Secret keys added to keystore"
-                );
-
-                faucet_id_from_file
-            } else {
-                // Fallback: try to import from network (won't have keys for signing)
-                info!(
-                    bridge_faucet_id = ?bridge_faucet_id,
-                    "No account file provided, importing from network (signing may fail)..."
-                );
-                client.import_account_by_id(bridge_faucet_id).await
-                    .map_err(|e| ClientError::AccountNotFound(format!(
-                        "Failed to import bridge faucet account {}: {}",
-                        bridge_faucet_id, e
-                    )))?;
-                warn!("Faucet account imported from network WITHOUT keys - transaction signing will fail!");
-                bridge_faucet_id
-            };
-
-            // Step 5: Create an ephemeral user account for CLAIM note submission
-            // CLAIM notes must be submitted FROM a user account TO the faucet.
-            // The faucet validates the claim and mints assets to the destination.
-            use miden_client::account::component::{AccountComponent, AuthRpoFalcon512, BasicWallet};
-            use miden_client::account::{AccountBuilder, AccountType};
-            use miden_client::keystore::FilesystemKeyStore as EphemeralKeyStore;
-            use miden_protocol::account::auth::AuthSecretKey;
-            use miden_protocol::account::AccountStorageMode;
-
-            let ephemeral_keystore_path = config.store_path
+            // Add secret keys to keystore for signing
+            let keystore_path = config.store_path
                 .parent()
                 .unwrap_or(std::path::Path::new("/app/data"))
                 .join("keystore");
-
-            let ephemeral_keystore = EphemeralKeyStore::new(ephemeral_keystore_path.clone())
+            let keystore = FilesystemKeyStore::new(keystore_path.clone())
                 .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to open keystore at {}: {}",
-                    ephemeral_keystore_path.display(), e
+                    "Failed to open keystore at {}: {}", keystore_path.display(), e
                 )))?;
+            for key in &account_file.auth_secret_keys {
+                keystore.add_key(key)
+                    .map_err(|e| ClientError::InitializationError(format!(
+                        "Failed to add key to keystore: {}", e
+                    )))?;
+            }
+            info!(num_keys = account_file.auth_secret_keys.len(), "Secret keys added to keystore");
 
-            // Generate random seed for ephemeral account
-            let rng_seed = generate_rng_seed();
-            let mut init_seed = [0u8; 32];
-            init_seed[0..8].copy_from_slice(&rng_seed[0].to_le_bytes());
-            init_seed[8..16].copy_from_slice(&rng_seed[1].to_le_bytes());
-            init_seed[16..24].copy_from_slice(&rng_seed[2].to_le_bytes());
-            init_seed[24..32].copy_from_slice(&rng_seed[3].to_le_bytes());
-
-            // Create key pair and auth component for the ephemeral user
-            let ephemeral_key_pair = AuthSecretKey::new_falcon512_rpo();
-            let ephemeral_auth_component: AccountComponent =
-                AuthRpoFalcon512::new(ephemeral_key_pair.public_key().to_commitment()).into();
-
-            // Add key to keystore
-            ephemeral_keystore.add_key(&ephemeral_key_pair)
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to add ephemeral key to keystore: {}", e
-                )))?;
-
-            // Build ephemeral wallet account
-            let ephemeral_account = AccountBuilder::new(init_seed)
-                .account_type(AccountType::RegularAccountUpdatableCode)
-                .storage_mode(AccountStorageMode::Public)
-                .with_auth_component(ephemeral_auth_component)
-                .with_component(BasicWallet)
-                .build()
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to build ephemeral account: {}", e
-                )))?;
-
-            let ephemeral_account_id = ephemeral_account.id();
-
-            // Add ephemeral account to client (track=true for proper state management)
-            client.add_account(&ephemeral_account, true).await
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to add ephemeral account to client: {}", e
-                )))?;
-
-            info!(
-                ephemeral_account_id = ?ephemeral_account_id,
-                "Created ephemeral user account for CLAIM submission"
-            );
-
-            // Sync state after adding ephemeral account to ensure proper tracking
-            client.sync_state().await
-                .map_err(|e| ClientError::SyncError(format!(
-                    "Failed to sync after adding ephemeral account: {}", e
-                )))?;
-            info!("State synced after ephemeral account creation");
-
-            // Step 6: Create the bridge CLAIM note using miden-agglayer
-            // Initialize RNG for note creation using system randomness
+            // Step 6: Create a P2ID note from faucet to recipient
             let seed = generate_rng_seed();
             let mut rng = RpoRandomCoin::new(seed.map(Felt::new).into());
 
-            // Convert SMT proofs to Vec<Felt> (32 siblings * 8 u32 felts per 32 bytes = 256 felts)
-            let smt_proof_local = bytes32_array_to_felts(&claim_data.smt_proof_local_exit_root);
-            let smt_proof_rollup = bytes32_array_to_felts(&claim_data.smt_proof_rollup_exit_root);
+            // Create the fungible asset to mint
+            let asset = FungibleAsset::new(faucet_id, claim_data.amount)
+                .map_err(|e| ClientError::NoteCreationError(format!(
+                    "Failed to create fungible asset: {:?}", e
+                )))?;
+            info!(faucet_id = ?faucet_id, recipient = ?recipient_account_id, amount = claim_data.amount, "Creating P2ID note for mint");
 
-            // Convert global_index (U256) to [Felt; 8]
-            let global_index = u256_bytes_to_felt_array(&claim_data.global_index_bytes);
+            // Create P2ID note: faucet sends newly minted tokens to recipient
+            let note = create_p2id_note(
+                faucet_id,
+                recipient_account_id,
+                vec![asset.into()],
+                NoteType::Public,
+                FieldElement::ZERO,
+                &mut rng,
+            ).map_err(|e| ClientError::NoteCreationError(format!("Failed to create P2ID note: {}", e)))?;
+            info!(note_id = ?note.id(), "Created P2ID note for mint");
 
-            // Convert amount (u64) to [Felt; 8] (low limb only, rest zeros)
-            let amount_felts = u64_to_felt_array(claim_data.amount);
+            // Step 7: Build transaction request with own_output_notes
+            let tx_request = TransactionRequestBuilder::new()
+                .own_output_notes(vec![OutputNote::Full(note)])
+                .build()
+                .map_err(|e| ClientError::TransactionError(format!(
+                    "Failed to build transaction request: {}", e
+                )))?;
+            info!("Built transaction request for faucet mint");
 
-            // Convert metadata to [Felt; 8] (pad with zeros)
-            let metadata_felts = bytes_to_felt_array_padded(&claim_data.metadata, 8);
-
-            // Generate P2ID serial number (random Word)
-            let p2id_serial_number: Word = rng.draw_word();
-
-            // Generate output note tag for P2ID notes (public note for recipient)
-            let output_note_tag = NoteTag::for_public_use_case(0, 0, miden_protocol::note::NoteExecutionMode::Local)
-                .map_err(|e| ClientError::NoteCreationError(format!("Failed to create note tag: {}", e)))?;
-
-            info!(
-                ephemeral_user = ?ephemeral_account_id,
-                faucet_id = ?bridge_faucet_id,
-                recipient = ?recipient_account_id,
-                amount = claim_data.amount,
-                "Creating CLAIM note with miden-agglayer"
-            );
-
-            let claim_params = BridgeClaimParams {
-                // SMT Proof Data
-                smt_proof_local_exit_root: smt_proof_local,
-                smt_proof_rollup_exit_root: smt_proof_rollup,
-                global_index,
-                mainnet_exit_root: claim_data.mainnet_exit_root,
-                rollup_exit_root: claim_data.rollup_exit_root,
-                // Leaf Data
-                origin_network: Felt::new(claim_data.origin_network as u64),
-                origin_token_address: claim_data.origin_token_address,
-                destination_network: Felt::new(claim_data.destination_network as u64),
-                destination_address: claim_data.destination_address,
-                amount: amount_felts,
-                metadata: metadata_felts,
-                // CLAIM Note Parameters - ephemeral user creates the note, faucet validates
-                claim_note_creator_account_id: ephemeral_account_id,
-                agglayer_faucet_account_id: bridge_faucet_id,
-                output_note_tag,
-                p2id_serial_number,
-                destination_account_id: recipient_account_id,
-            };
-
-            let note = create_bridge_claim_note(claim_params, &mut rng)?;
-            info!(note_id = ?note.id(), "Created CLAIM note");
-
-            // Step 7: Build the transaction request from ephemeral user
-            let tx_request = build_claim_transaction_request(ephemeral_account_id, vec![note])?;
-            info!("Built transaction request for ephemeral user");
-
-            // Step 8: Submit the transaction from the ephemeral user
-            let miden_tx_id = submit_transaction(&mut client, ephemeral_account_id, tx_request).await?;
+            // Step 8: Submit the transaction FROM THE FAUCET
+            let miden_tx_id = submit_transaction(&mut client, faucet_id, tx_request).await?;
             info!(
                 miden_tx_id = %miden_tx_id,
-                ephemeral_user = ?ephemeral_account_id,
+                faucet_id = ?faucet_id,
+                recipient = ?recipient_account_id,
+                amount = claim_data.amount,
                 block_num = block_num,
-                "Transaction submitted successfully from ephemeral user"
+                "P2ID mint transaction submitted successfully"
             );
 
             Ok::<u64, ClientError>(block_num as u64)
@@ -592,59 +443,6 @@ fn generate_rng_seed() -> [u64; 4] {
     let h4 = hasher.finish();
 
     [h1, h2, h3, h4]
-}
-
-/// Convert an array of 32 32-byte values to Vec<Felt> (256 felts total).
-/// Each 32-byte value becomes 8 u32 felts (little-endian).
-fn bytes32_array_to_felts(array: &[[u8; 32]; 32]) -> Vec<Felt> {
-    let mut felts = Vec::with_capacity(256);
-    for bytes32 in array {
-        // Convert each 32-byte value to 8 u32 felts (little-endian chunks)
-        for chunk in bytes32.chunks(4) {
-            let value = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-            felts.push(Felt::new(value as u64));
-        }
-    }
-    felts
-}
-
-/// Convert a 32-byte U256 (big-endian) to [Felt; 8] array.
-/// Each felt contains a u32 limb, little-endian order.
-fn u256_bytes_to_felt_array(bytes: &[u8; 32]) -> [Felt; 8] {
-    let mut felts = [Felt::new(0); 8];
-    // Convert big-endian bytes to little-endian u32 limbs
-    for (i, chunk) in bytes.chunks(4).rev().enumerate() {
-        if i < 8 {
-            let value = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-            felts[i] = Felt::new(value as u64);
-        }
-    }
-    felts
-}
-
-/// Convert u64 to [Felt; 8] array (low limbs filled, rest zeros).
-fn u64_to_felt_array(value: u64) -> [Felt; 8] {
-    let mut felts = [Felt::new(0); 8];
-    // Split u64 into two u32 limbs
-    felts[0] = Felt::new((value & 0xFFFFFFFF) as u64);
-    felts[1] = Felt::new((value >> 32) as u64);
-    felts
-}
-
-/// Convert bytes to [Felt; 8] array, padding with zeros.
-/// Each 4 bytes becomes one felt (little-endian).
-fn bytes_to_felt_array_padded(bytes: &[u8], num_felts: usize) -> [Felt; 8] {
-    let mut felts = [Felt::new(0); 8];
-    let chunks: Vec<&[u8]> = bytes.chunks(4).collect();
-    for (i, chunk) in chunks.iter().enumerate() {
-        if i >= num_felts || i >= 8 {
-            break;
-        }
-        let mut buf = [0u8; 4];
-        buf[..chunk.len()].copy_from_slice(chunk);
-        felts[i] = Felt::new(u32::from_le_bytes(buf) as u64);
-    }
-    felts
 }
 
 /// Parse an AccountId from a hex string
@@ -1037,21 +835,9 @@ impl EthApiServer for EthApiImpl {
                 "Converted ERC20 amount (18 decimals) to Miden amount (3 decimals)"
             );
 
+            // Simplified claim data for P2ID mint approach
             let claim_data = ClaimSubmissionData {
-                // SMT Proof Data
-                smt_proof_local_exit_root: claim_params.smt_proof_local_exit_root,
-                smt_proof_rollup_exit_root: claim_params.smt_proof_rollup_exit_root,
-                global_index_bytes: claim_params.global_index_raw.to_be_bytes::<32>(),
-                mainnet_exit_root: claim_params.mainnet_exit_root,
-                rollup_exit_root: claim_params.rollup_exit_root,
-                // Leaf Data
-                origin_network: claim_params.origin_network,
-                origin_token_address: claim_params.origin_token_address.0 .0,
-                destination_network: claim_params.destination_network,
-                destination_address: claim_params.destination_address.0 .0,
                 amount: amount_u64,
-                metadata: claim_params.metadata.to_vec(),
-                // Recipient
                 recipient_account_bytes: miden_account_id.to_bytes(),
             };
 
