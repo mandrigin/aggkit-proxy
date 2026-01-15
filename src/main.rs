@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use std::path::PathBuf;
@@ -209,20 +208,28 @@ impl Default for MidenSubmissionConfig {
 pub struct EthApiImpl {
     state: Arc<BridgeState>,
     miden_config: Option<MidenSubmissionConfig>,
+    /// Miden node RPC URL for block height queries
+    miden_rpc_url: String,
+    /// Store path for miden client state
+    miden_store_path: PathBuf,
 }
 
 impl EthApiImpl {
-    pub fn new(state: Arc<BridgeState>) -> Self {
+    pub fn new(state: Arc<BridgeState>, miden_rpc_url: String) -> Self {
         Self {
             state,
             miden_config: None,
+            miden_rpc_url,
+            miden_store_path: PathBuf::from("/tmp/miden-rpc-proxy-client"),
         }
     }
 
-    pub fn with_miden_config(state: Arc<BridgeState>, config: MidenSubmissionConfig) -> Self {
+    pub fn with_miden_config(state: Arc<BridgeState>, config: MidenSubmissionConfig, miden_rpc_url: String) -> Self {
         Self {
             state,
             miden_config: Some(config),
+            miden_rpc_url,
+            miden_store_path: PathBuf::from("/tmp/miden-rpc-proxy-client"),
         }
     }
 }
@@ -402,19 +409,17 @@ fn bytes_to_account_id(bytes: &[u8; 15]) -> Result<AccountId, String> {
     Ok(AccountId::from(id_v0))
 }
 
-/// Poll the miden-node for the current block height
+/// Fetch the current block height from miden-node on-demand
 ///
-/// This function queries the miden-node via its gRPC API and returns the current
-/// block number. It creates a temporary client for each poll to avoid keeping
-/// long-lived connections.
-async fn poll_block_height(rpc_endpoint: &str, store_path: &PathBuf) -> Result<u32, ClientError> {
+/// This function creates a miden client, syncs state, and returns the block number.
+/// Uses spawn_blocking because miden_client::Client is !Send.
+async fn fetch_block_height(rpc_endpoint: &str, store_path: &PathBuf) -> Result<u32, ClientError> {
     use miden_client::rpc::Endpoint;
     use miden_client::builder::ClientBuilder;
     use miden_client_sqlite_store::SqliteStore;
 
-    debug!(rpc_endpoint = %rpc_endpoint, "Polling miden-node for block height");
+    debug!(rpc_endpoint = %rpc_endpoint, "Fetching block height from miden-node");
 
-    // Get a handle to the current runtime for use inside spawn_blocking
     let rpc_endpoint = rpc_endpoint.to_string();
     let store_path = store_path.clone();
     let runtime_handle = tokio::runtime::Handle::current();
@@ -422,6 +427,12 @@ async fn poll_block_height(rpc_endpoint: &str, store_path: &PathBuf) -> Result<u
     // Use spawn_blocking because miden_client::Client is !Send
     let result = tokio::task::spawn_blocking(move || {
         runtime_handle.block_on(async {
+            // Ensure the store path directory exists
+            if !store_path.exists() {
+                std::fs::create_dir_all(&store_path)
+                    .map_err(|e| ClientError::InitializationError(format!("Failed to create store dir: {}", e)))?;
+            }
+
             // Initialize SQLite store
             let store = SqliteStore::new(store_path.clone())
                 .await
@@ -454,62 +465,6 @@ async fn poll_block_height(rpc_endpoint: &str, store_path: &PathBuf) -> Result<u
     .map_err(|e| ClientError::SyncError(format!("Task join error: {}", e)))?;
 
     result
-}
-
-/// Start a background task that polls the miden-node for block height
-///
-/// This task periodically queries the miden-node and updates the BridgeState
-/// with the current block height. The interval is configurable.
-fn start_block_height_poller(
-    state: Arc<BridgeState>,
-    rpc_endpoint: String,
-    poll_interval: Duration,
-) {
-    let store_path = PathBuf::from("/tmp/miden-block-height-poller-store");
-
-    // Ensure the store path is a directory (remove if it's a file from previous runs)
-    if store_path.exists() && !store_path.is_dir() {
-        if let Err(e) = std::fs::remove_file(&store_path) {
-            warn!(error = %e, path = %store_path.display(), "Failed to remove stale store path file");
-        }
-    }
-    // Create the directory if it doesn't exist
-    if !store_path.exists() {
-        if let Err(e) = std::fs::create_dir_all(&store_path) {
-            warn!(error = %e, path = %store_path.display(), "Failed to create store directory");
-        }
-    }
-
-    tokio::spawn(async move {
-        info!(
-            rpc_endpoint = %rpc_endpoint,
-            poll_interval_secs = poll_interval.as_secs(),
-            "Starting block height poller"
-        );
-
-        loop {
-            match poll_block_height(&rpc_endpoint, &store_path).await {
-                Ok(block_num) => {
-                    let old_height = state.get_block_height();
-                    state.set_block_height(block_num as u64);
-                    if block_num as u64 != old_height {
-                        info!(
-                            block_height = block_num,
-                            old_height = old_height,
-                            "Updated block height from miden-node"
-                        );
-                    } else {
-                        debug!(block_height = block_num, "Block height unchanged");
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to poll block height from miden-node");
-                }
-            }
-
-            tokio::time::sleep(poll_interval).await;
-        }
-    });
 }
 
 #[async_trait]
@@ -920,14 +875,26 @@ impl EthApiServer for EthApiImpl {
     }
 
     async fn block_number(&self) -> Result<String, ErrorObjectOwned> {
-        let height = self.state.get_block_height();
-        let height_hex = format!("{:#x}", height);
-        info!(
-            block_number = height,
-            block_number_hex = %height_hex,
-            "eth_blockNumber: Returning current Miden block height"
-        );
-        Ok(height_hex)
+        // Fetch block height on-demand from miden-node
+        match fetch_block_height(&self.miden_rpc_url, &self.miden_store_path).await {
+            Ok(height) => {
+                let height_hex = format!("{:#x}", height);
+                info!(
+                    block_number = height,
+                    block_number_hex = %height_hex,
+                    "eth_blockNumber: Fetched current Miden block height"
+                );
+                Ok(height_hex)
+            }
+            Err(e) => {
+                error!(error = %e, "eth_blockNumber: Failed to fetch block height from miden-node");
+                Err(ErrorObjectOwned::owned(
+                    -32000,
+                    format!("Failed to fetch block height: {}", e),
+                    None::<()>,
+                ))
+            }
+        }
     }
 }
 
@@ -956,29 +923,30 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(BridgeState::new());
     info!("Bridge state initialized successfully");
 
-    // Start block height polling if MIDEN_RPC_URL is configured
+    // Get miden-node RPC URL from environment
     let miden_rpc_url = std::env::var("MIDEN_RPC_URL")
         .unwrap_or_else(|_| "http://localhost:57291".to_string());
-    let poll_interval_secs: u64 = std::env::var("BLOCK_HEIGHT_POLL_INTERVAL_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(5);
+    let store_path = PathBuf::from("/tmp/miden-rpc-proxy-client");
 
-    info!(
-        miden_rpc_url = %miden_rpc_url,
-        poll_interval_secs = poll_interval_secs,
-        "Block height polling configured"
-    );
+    info!(miden_rpc_url = %miden_rpc_url, "Miden node RPC URL configured");
 
-    // Clone state for the poller before passing to EthApiImpl
-    let state_for_poller = Arc::clone(&state);
-    start_block_height_poller(
-        state_for_poller,
-        miden_rpc_url,
-        Duration::from_secs(poll_interval_secs),
-    );
+    // Pre-flight check: verify we can connect to miden-node
+    // Server MUST crash if miden-node is unreachable - fail fast and loud
+    info!("Performing pre-flight check: connecting to miden-node...");
+    match fetch_block_height(&miden_rpc_url, &store_path).await {
+        Ok(block_num) => {
+            info!(
+                block_number = block_num,
+                "Pre-flight check PASSED: miden-node is reachable, current block: {}", block_num
+            );
+        }
+        Err(e) => {
+            error!(error = %e, "Pre-flight check FAILED: cannot connect to miden-node");
+            panic!("FATAL: Cannot connect to miden-node at {}. Error: {}", miden_rpc_url, e);
+        }
+    }
 
-    let rpc_impl = EthApiImpl::new(state);
+    let rpc_impl = EthApiImpl::new(state, miden_rpc_url);
     info!("EthApi implementation created");
 
     // Get listen address from environment or use defaults
