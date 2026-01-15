@@ -57,8 +57,7 @@ parking_lot = "0.12"
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"
-# Enable testing feature for miden-protocol in tests (for AccountId::dummy)
-miden-protocol = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1", features = ["std", "testing"] }
+rand = "0.9"
 
 [profile.release]
 lto = true
