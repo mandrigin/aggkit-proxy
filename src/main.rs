@@ -829,29 +829,29 @@ impl EthApiServer for EthApiImpl {
             "=== CLAIM PROCESSING COMPLETE (pending Miden submission) ==="
         );
 
-        // Step 10: Submit to Miden network in background task
+        // Step 10: Submit to Miden network (blocking - errors propagate to RPC client)
         if let Some(ref config) = self.miden_config {
-            // Convert U256 amount from 18 decimals (ERC20 wei) to 8 decimals (Miden)
-            // Scale factor: 10^10 (18 - 8 = 10 decimal places)
-            // This is necessary because ERC20 amounts can exceed u64::MAX
-            const DECIMAL_SCALE: u128 = 10_000_000_000; // 10^10
-            const MIDEN_MAX_AMOUNT: u64 = 9_223_372_034_707_292_160; // ~2^63, Miden's max
+            // Convert U256 amount from 18 decimals (ERC20 wei) to 3 decimals (genesis faucet)
+            // Scale factor: 10^15 (18 - 3 = 15 decimal places)
+            // Genesis faucet config: decimals=3, max_supply=100_000_000
+            const DECIMAL_SCALE: u128 = 1_000_000_000_000_000; // 10^15
+            const MIDEN_MAX_AMOUNT: u64 = 100_000_000; // Genesis faucet max_supply
 
             let scaled_amount = claim_params.amount / alloy_primitives::U256::from(DECIMAL_SCALE);
             let amount_u64: u64 = scaled_amount.try_into().unwrap_or_else(|_| {
                 warn!(
                     original_amount = %claim_params.amount,
                     scaled_amount = %scaled_amount,
-                    "Scaled amount still exceeds u64::MAX, capping at Miden max"
+                    "Scaled amount still exceeds u64::MAX, capping at genesis faucet max"
                 );
                 MIDEN_MAX_AMOUNT
             });
-            // Cap at Miden's max if needed
+            // Cap at genesis faucet max if needed
             let amount_u64 = amount_u64.min(MIDEN_MAX_AMOUNT);
             info!(
                 original_wei = %claim_params.amount,
                 scaled_miden = amount_u64,
-                "Converted ERC20 amount (18 decimals) to Miden amount (8 decimals)"
+                "Converted ERC20 amount (18 decimals) to Miden amount (3 decimals)"
             );
 
             let claim_data = ClaimSubmissionData {
@@ -859,47 +859,42 @@ impl EthApiServer for EthApiImpl {
                 amount: amount_u64,
             };
 
-            let config_clone = config.clone();
-            let state_clone = self.state.clone();
-            let tx_hash_clone = tx_hash.clone();
-
-            // Spawn background task for Miden submission
-            tokio::spawn(async move {
-                info!(
-                    tx_hash = %tx_hash_clone,
-                    "Starting background Miden submission"
-                );
-
-                match submit_claim_to_miden(config_clone, claim_data).await {
-                    Ok(block_num) => {
-                        info!(
-                            tx_hash = %tx_hash_clone,
-                            block_num = block_num,
-                            "Miden submission SUCCEEDED"
-                        );
-                        state_clone.record_tx(
-                            tx_hash_clone,
-                            TxStatus::Confirmed { block_number: block_num },
-                        );
-                    }
-                    Err(e) => {
-                        error!(
-                            tx_hash = %tx_hash_clone,
-                            error = %e,
-                            "Miden submission FAILED"
-                        );
-                        state_clone.record_tx(
-                            tx_hash_clone,
-                            TxStatus::Failed { reason: e.to_string() },
-                        );
-                    }
-                }
-            });
-
             info!(
                 tx_hash = %tx_hash,
-                "Background Miden submission task spawned"
+                "Submitting to Miden network (blocking)..."
             );
+
+            // Blocking submission - errors propagate back to RPC client
+            match submit_claim_to_miden(config.clone(), claim_data).await {
+                Ok(block_num) => {
+                    info!(
+                        tx_hash = %tx_hash,
+                        block_num = block_num,
+                        "Miden submission SUCCEEDED"
+                    );
+                    self.state.record_tx(
+                        tx_hash.clone(),
+                        TxStatus::Confirmed { block_number: block_num },
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        tx_hash = %tx_hash,
+                        error = %e,
+                        "Miden submission FAILED"
+                    );
+                    self.state.record_tx(
+                        tx_hash.clone(),
+                        TxStatus::Failed { reason: e.to_string() },
+                    );
+                    // Return error to RPC client instead of silently failing
+                    return Err(ErrorObjectOwned::owned(
+                        -32000,
+                        format!("Miden transaction failed: {}", e),
+                        None::<()>,
+                    ));
+                }
+            }
         } else {
             warn!(
                 tx_hash = %tx_hash,
