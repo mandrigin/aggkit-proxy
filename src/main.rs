@@ -220,7 +220,7 @@ impl EthApiImpl {
             state,
             miden_config: None,
             miden_rpc_url,
-            miden_store_path: PathBuf::from("/tmp/miden-rpc-proxy-client"),
+            miden_store_path: PathBuf::from("/app/data/miden-client"),
         }
     }
 
@@ -229,7 +229,7 @@ impl EthApiImpl {
             state,
             miden_config: Some(config),
             miden_rpc_url,
-            miden_store_path: PathBuf::from("/tmp/miden-rpc-proxy-client"),
+            miden_store_path: PathBuf::from("/app/data/miden-client"),
         }
     }
 }
@@ -427,13 +427,15 @@ async fn fetch_block_height(rpc_endpoint: &str, store_path: &PathBuf) -> Result<
     // Use spawn_blocking because miden_client::Client is !Send
     let result = tokio::task::spawn_blocking(move || {
         runtime_handle.block_on(async {
-            // Ensure the store path directory exists
-            if !store_path.exists() {
-                std::fs::create_dir_all(&store_path)
-                    .map_err(|e| ClientError::InitializationError(format!("Failed to create store dir: {}", e)))?;
+            // Ensure the PARENT directory exists (SqliteStore creates the actual store)
+            if let Some(parent) = store_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| ClientError::InitializationError(format!("Failed to create parent dir {}: {}", parent.display(), e)))?;
             }
 
-            // Initialize SQLite store
+            debug!(store_path = %store_path.display(), "Initializing SQLite store");
+
+            // Initialize SQLite store (store_path should be a DIRECTORY where SqliteStore creates its files)
             let store = SqliteStore::new(store_path.clone())
                 .await
                 .map_err(|e| ClientError::InitializationError(e.to_string()))?;
@@ -442,8 +444,10 @@ async fn fetch_block_height(rpc_endpoint: &str, store_path: &PathBuf) -> Result<
             let endpoint = Endpoint::try_from(rpc_endpoint.as_str())
                 .map_err(|e| ClientError::InitializationError(format!("Invalid endpoint: {}", e)))?;
 
-            // Build a minimal client
-            let keystore_path = store_path.join("keystore");
+            // Keystore goes in a sibling directory to avoid conflict with SqliteStore
+            let keystore_path = store_path.parent()
+                .map(|p| p.join("keystore"))
+                .unwrap_or_else(|| PathBuf::from("/app/data/keystore"));
             let keystore_path_str = keystore_path.to_string_lossy();
             let mut client: miden_client::Client<miden_client::keystore::FilesystemKeyStore> =
                 ClientBuilder::new()
@@ -926,7 +930,7 @@ async fn main() -> anyhow::Result<()> {
     // Get miden-node RPC URL from environment
     let miden_rpc_url = std::env::var("MIDEN_RPC_URL")
         .unwrap_or_else(|_| "http://localhost:57291".to_string());
-    let store_path = PathBuf::from("/tmp/miden-rpc-proxy-client");
+    let store_path = PathBuf::from("/app/data/miden-client");
 
     info!(miden_rpc_url = %miden_rpc_url, "Miden node RPC URL configured");
 

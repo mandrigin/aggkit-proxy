@@ -35,6 +35,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+# Create data directory for miden client SQLite storage
+RUN mkdir -p /app/data
+
 COPY --from=builder /app/target/release/miden-rpc-proxy /usr/local/bin/
 
 # Configuration file location
