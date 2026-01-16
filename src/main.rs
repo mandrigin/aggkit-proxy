@@ -269,88 +269,6 @@ struct ClaimSubmissionData {
     recipient_account_bytes: [u8; 15],
 }
 
-/// Deploy an account to the Miden network
-///
-/// This function deploys an account by:
-/// 1. Getting the auth procedure MAST root from the account code
-/// 2. Compiling an auth script that calls into the account
-/// 3. Building and submitting a deployment transaction
-///
-/// Reference: https://github.com/0xMiden/miden-client/blob/e235c726/bin/miden-cli/src/commands/new_account.rs#L393-L428
-async fn deploy_account<AUTH: miden_tx::auth::TransactionAuthenticator + Sync + 'static>(
-    client: &mut miden_client::Client<AUTH>,
-    account: &miden_protocol::account::Account,
-    account_name: &str,
-) -> Result<(), ClientError> {
-    use miden_client::transaction::TransactionRequestBuilder;
-
-    let account_id = account.id();
-    info!("  Deploying {} to network...", account_name);
-
-    let auth_procedure_mast_root = account
-        .code()
-        .get(0)
-        .ok_or_else(|| ClientError::InitializationError(format!(
-            "{} code should contain at least one procedure", account_name
-        )))?
-        .mast_root();
-    info!("    - Auth procedure MAST root: {:?}", auth_procedure_mast_root);
-
-    let auth_script = client
-        .code_builder()
-        .compile_tx_script(
-            "
-                    begin
-                        # [AUTH_PROCEDURE_MAST_ROOT]
-                        mem_storew_be.4000 push.4000
-                        # [auth_procedure_mast_root_ptr]
-                        dyncall
-                    end",
-        )
-        .map_err(|e| ClientError::InitializationError(format!(
-            "Failed to compile {} auth script: {}", account_name, e
-        )))?;
-    info!("    - Auth script compiled");
-
-    let deploy_tx_request = TransactionRequestBuilder::new()
-        .script_arg(*auth_procedure_mast_root)
-        .custom_script(auth_script)
-        .build()
-        .map_err(|e| ClientError::InitializationError(format!(
-            "Failed to build {} deploy transaction: {}", account_name, e
-        )))?;
-    info!("    - Deploy transaction request built");
-
-    let deploy_result = client.submit_new_transaction(account_id, deploy_tx_request).await;
-    info!("    - Deploy result: {:?}", deploy_result.as_ref().map(|_| "Ok"));
-
-    if let Err(ref e) = deploy_result {
-        error!("  ✗ Failed to deploy {}", account_name);
-        error!("    - Account ID: {}", account_id);
-        error!("    - Error (Display): {}", e);
-        error!("    - Error (Debug): {:#?}", e);
-        let mut source = std::error::Error::source(e);
-        let mut depth = 0;
-        while let Some(s) = source {
-            depth += 1;
-            error!("    - Cause {}: {}", depth, s);
-            error!("    - Cause {} (debug): {:?}", depth, s);
-            source = std::error::Error::source(s);
-        }
-    }
-
-    match deploy_result {
-        Ok(result) => {
-            info!("  ✓ {} deployed to network", account_name);
-            debug!("    - Deploy tx result: {:?}", result);
-            Ok(())
-        }
-        Err(e) => Err(ClientError::InitializationError(format!(
-            "Failed to deploy {}: {}", account_name, e
-        ))),
-    }
-}
-
 /// Submit a claim to the Miden network using CLAIM notes
 ///
 /// Uses `create_bridge_claim_note()` from miden-agglayer to create a CLAIM note
@@ -406,25 +324,12 @@ async fn submit_claim_to_miden(
             info!(recipient_account_id = ?recipient_account_id, "Converted recipient to AccountId");
 
             // Step 3: Initialize the Miden client
-            // Create keystore first so we can use the same instance for adding keys later
-            use miden_client::keystore::FilesystemKeyStore;
-            use std::sync::Arc;
-            let keystore_path = config.store_path
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join("keystore");
-            info!("Creating keystore at: {}", keystore_path.display());
-            let keystore = Arc::new(FilesystemKeyStore::new(keystore_path.clone())
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to create keystore: {}", e
-                )))?);
-
             let client_config = MidenClientConfig {
                 rpc_endpoint: config.rpc_endpoint.clone(),
                 store_path: config.store_path.clone(),
                 bridge_faucet_id: configured_faucet_id,  // Note: actual agglayer faucet created later
             };
-            let mut client = init_client(&client_config, keystore.clone()).await?;
+            let mut client = init_client(&client_config).await?;
             info!("Miden client initialized");
 
             // Step 4: Sync state to get current block info
@@ -476,27 +381,16 @@ async fn submit_claim_to_miden(
             info!("  ✓ Ephemeral account built successfully");
             info!("  → Account ID: {}", ephemeral_account_id);
 
-            // Add account to client
-            info!("  Adding ephemeral account to client...");
+            // Add account to client (local only, deployed on first tx)
+            info!("  Adding ephemeral account to client (local only, not deployed yet)...");
             client.add_account(&ephemeral_account, false).await
                 .map_err(|e| ClientError::InitializationError(format!(
                     "Failed to add ephemeral account to client: {}", e
                 )))?;
             info!("  ✓ Ephemeral account added to client");
 
-            // Add key pair to keystore for signing
-            info!("  Adding ephemeral key pair to keystore...");
-            keystore.add_key(&key_pair)
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to add ephemeral key to keystore: {}", e
-                )))?;
-            info!("  ✓ Ephemeral key pair added to keystore");
-
-            // Deploy ephemeral account to network
-            deploy_account(&mut client, &ephemeral_account, "ephemeral account").await?;
-
-            // Sync state after deployment
-            info!("  Syncing state after ephemeral deployment...");
+            // Sync state after adding ephemeral account so client tracks it properly
+            info!("  Syncing state after adding ephemeral account...");
             let sync_after_ephemeral = client.sync_state().await
                 .map_err(|e| ClientError::SyncError(e.to_string()))?;
             info!("  ✓ Sync complete at block {}", sync_after_ephemeral.block_num.as_u32());
@@ -543,10 +437,7 @@ async fn submit_claim_to_miden(
                 .map_err(|e| ClientError::InitializationError(format!(
                     "Failed to add bridge account to client: {}", e
                 )))?;
-            info!("  ✓ Bridge account added to client");
-
-            // Deploy bridge account to network
-            deploy_account(&mut client, &bridge_account, "bridge account").await?;
+            info!("  ✓ Bridge account added to client (local only)");
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 3: Creating agglayer faucet                                ║");
@@ -569,7 +460,7 @@ async fn submit_claim_to_miden(
             };
             info!("  Faucet seed Word: {:?}", faucet_seed);
 
-            // Create agglayer faucet using library function
+            // Create agglayer faucet using the library function
             info!("  Calling create_agglayer_faucet() with:");
             info!("    - Symbol: LUMIA");
             info!("    - Decimals: 8");
@@ -595,8 +486,67 @@ async fn submit_claim_to_miden(
                 )))?;
             info!("  ✓ Agglayer faucet added to client");
 
-            // Deploy agglayer faucet to network
-            deploy_account(&mut client, &agglayer_faucet, "agglayer faucet").await?;
+            // Deploy the agglayer faucet to the network
+            // Reference: https://github.com/0xMiden/miden-client/blob/e235c726/bin/miden-cli/src/commands/new_account.rs#L393-L428
+            info!("  Deploying agglayer faucet to network...");
+            let auth_procedure_mast_root = agglayer_faucet
+                .code()
+                .get(0)
+                .expect("faucet code should contain at least one procedure")
+                .mast_root();
+            info!("    - Auth procedure MAST root: {:?}", auth_procedure_mast_root);
+
+            let auth_script = client
+                .code_builder()
+                .compile_tx_script(
+                    "begin
+                        mem_storew_be.4000 push.4000
+                        dyncall
+                    end",
+                )
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to compile auth script: {}", e
+                )))?;
+            info!("    - Auth script compiled");
+
+            let deploy_tx_request = TransactionRequestBuilder::new()
+                .script_arg(*auth_procedure_mast_root)
+                .custom_script(auth_script)
+                .build()
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to build deploy transaction: {}", e
+                )))?;
+            info!("    - Deploy transaction request built");
+
+            let faucet_deploy_result = client.submit_new_transaction(agglayer_faucet_id, deploy_tx_request).await;
+            // Log before match to ensure error details are captured
+            info!("    - Faucet deploy result: {:?}", faucet_deploy_result.as_ref().map(|_| "Ok"));
+            if let Err(ref e) = faucet_deploy_result {
+                error!("  ✗ Failed to deploy agglayer faucet");
+                error!("    - Account ID: {}", agglayer_faucet_id);
+                error!("    - Error (Display): {}", e);
+                error!("    - Error (Debug): {:#?}", e);
+                // Try to get source error chain
+                let mut source = std::error::Error::source(e);
+                let mut depth = 0;
+                while let Some(s) = source {
+                    depth += 1;
+                    error!("    - Cause {}: {}", depth, s);
+                    error!("    - Cause {} (debug): {:?}", depth, s);
+                    source = std::error::Error::source(s);
+                }
+            }
+            match faucet_deploy_result {
+                Ok(result) => {
+                    info!("  ✓ Agglayer faucet deployed to network");
+                    debug!("    - Deploy tx result: {:?}", result);
+                }
+                Err(e) => {
+                    return Err(ClientError::InitializationError(format!(
+                        "Failed to deploy agglayer faucet: {}", e
+                    )));
+                }
+            }
 
             // Sync state to ensure client tracks the deployed faucet
             info!("  Syncing state after deploying agglayer faucet...");
