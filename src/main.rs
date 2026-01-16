@@ -23,6 +23,9 @@ use alloy_primitives::{Address, Bytes};
 // Miden protocol types
 use miden_protocol::account::{AccountId, AccountIdV0};
 
+// Miden agglayer function for AccountId -> 20-byte destination conversion
+use miden_agglayer::account_id_to_destination_bytes;
+
 /// Miden chain ID (placeholder - configure as needed)
 const MIDEN_CHAIN_ID: u64 = 0x4d494445; // "MIDE" in hex
 
@@ -979,6 +982,9 @@ impl EthApiServer for EthApiImpl {
         );
 
         // Step 6: Resolve Ethereum address to Miden AccountId
+        // Uses AddressMapper for deterministic derivation (Eth address -> seed -> AccountId)
+        // Note: evm_address_to_account_id from miden-agglayer is for reconstructing AccountIds
+        // that were previously converted to 20-byte format, not for arbitrary Eth addresses.
         let eth_address = EthAddress::from_alloy(&claim_params.destination_address);
         info!(
             eth_address = %eth_address,
@@ -1014,6 +1020,14 @@ impl EthApiServer for EthApiImpl {
                 ));
             }
         };
+
+        // Log the round-trip conversion for debugging (using miden-agglayer functions)
+        let dest_bytes_20 = account_id_to_destination_bytes(miden_account_id.inner());
+        debug!(
+            miden_account_id = %miden_account_id,
+            destination_bytes_20 = hex::encode(&dest_bytes_20),
+            "AccountId -> 20-byte destination conversion (for reference)"
+        );
 
         // Step 7: Generate synthetic transaction hash
         // Hash the claim parameters to create a deterministic tx hash
