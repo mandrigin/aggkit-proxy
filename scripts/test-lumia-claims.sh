@@ -14,6 +14,22 @@ set -e
 
 PROXY_URL="${PROXY_URL:-http://localhost:8546}"
 
+# Function to dump logs on error
+# Saves both miden-node and miden-proxy logs to /tmp with matching timestamps
+dump_logs_on_error() {
+    local DT=$(date +%Y%m%d%H%M%S)
+    local NODE_LOG="/tmp/miden-node-${DT}.log"
+    local PROXY_LOG="/tmp/miden-proxy-${DT}.log"
+
+    echo ""
+    echo "Dumping logs to /tmp for debugging..."
+    docker logs miden-miden-node-1 > "$NODE_LOG" 2>&1 || true
+    docker logs miden-proxy-1 > "$PROXY_LOG" 2>&1 || true
+
+    echo "  Node logs:  $NODE_LOG"
+    echo "  Proxy logs: $PROXY_LOG"
+}
+
 # Test vectors from src/decode.rs - real Lumia claimAsset transactions
 # All have: destination_network=7, origin_network=0, origin_token=LUMIA
 #
@@ -195,6 +211,7 @@ if ! preflight_check; then
     echo ""
     echo "Pre-flight checks FAILED. Aborting tests."
     echo "Please ensure the proxy is running and responding."
+    dump_logs_on_error
     exit 1
 fi
 

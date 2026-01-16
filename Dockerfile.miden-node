@@ -93,6 +93,11 @@ RUN printf '%s\n' \
     '        --accounts-directory "$ACCOUNTS_DIR" \' \
     '        --genesis-config-file "$GENESIS_FILE"' \
     '    echo "Bootstrap complete."' \
+    '    echo ""' \
+    '    echo "=== Accounts Created at Bootstrap ==="' \
+    '    ls -la "$ACCOUNTS_DIR"' \
+    '    echo "=== End Accounts List ==="' \
+    '    echo ""' \
     'fi' \
     '' \
     'echo "Starting miden-node on $RPC_URL..."' \

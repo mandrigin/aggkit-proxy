@@ -127,6 +127,33 @@ node submission step. The proxy implementation is correct.
 
 ## Logging & Debugging
 
+### Dump Logs on Error
+On ANY error in scripts (start-all.sh, test scripts), dump both miden-node and miden-proxy logs to /tmp with matching timestamps:
+
+```bash
+# Function to dump logs on error
+dump_logs_on_error() {
+    local DT=$(date +%Y%m%d%H%M%S)
+    local NODE_LOG="/tmp/miden-node-${DT}.log"
+    local PROXY_LOG="/tmp/miden-proxy-${DT}.log"
+
+    echo ""
+    echo "Dumping logs to /tmp for debugging..."
+    docker logs miden-miden-node-1 > "$NODE_LOG" 2>&1 || true
+    docker logs miden-proxy-1 > "$PROXY_LOG" 2>&1 || true
+
+    echo "  Node logs:  $NODE_LOG"
+    echo "  Proxy logs: $PROXY_LOG"
+}
+```
+
+**Key points:**
+- Use SAME timestamp for both logs (save `DT` in a variable first)
+- Use `|| true` to prevent script exit if container doesn't exist
+- Call this function before any `exit 1` in error handling
+
+This helps users debug issues independently without needing to re-run failed scripts.
+
 ### Log Claim Details
 When processing claimAsset transactions, always log:
 - Transaction hash

@@ -15,6 +15,22 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_DIR"
 
+# Function to dump logs on error
+# Saves both miden-node and miden-proxy logs to /tmp with matching timestamps
+dump_logs_on_error() {
+    local DT=$(date +%Y%m%d%H%M%S)
+    local NODE_LOG="/tmp/miden-node-${DT}.log"
+    local PROXY_LOG="/tmp/miden-proxy-${DT}.log"
+
+    echo ""
+    echo "Dumping logs to /tmp for debugging..."
+    docker logs miden-miden-node-1 > "$NODE_LOG" 2>&1 || true
+    docker logs miden-proxy-1 > "$PROXY_LOG" 2>&1 || true
+
+    echo "  Node logs:  $NODE_LOG"
+    echo "  Proxy logs: $PROXY_LOG"
+}
+
 # Use local compose file (minimal dependencies)
 COMPOSE_FILE="docker-compose.local.yml"
 
@@ -85,6 +101,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
         echo ""
         echo "Logs:"
         docker compose -f "$COMPOSE_FILE" logs miden-node
+        dump_logs_on_error
         exit 1
     fi
 
@@ -98,6 +115,7 @@ if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
     echo ""
     echo "Logs:"
     docker compose -f "$COMPOSE_FILE" logs miden-node
+    dump_logs_on_error
     exit 1
 fi
 
@@ -153,6 +171,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
         echo ""
         echo "Logs:"
         docker compose -f "$COMPOSE_FILE" logs proxy
+        dump_logs_on_error
         exit 1
     fi
 
@@ -166,6 +185,7 @@ if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
     echo ""
     echo "Logs:"
     docker compose -f "$COMPOSE_FILE" logs proxy
+    dump_logs_on_error
     exit 1
 fi
 
