@@ -370,6 +370,12 @@ async fn submit_claim_to_miden(
                 )))?;
             info!("Ephemeral account added to client");
 
+            // Sync state after adding ephemeral account so client tracks it properly
+            info!("Syncing state after adding ephemeral account...");
+            let sync_after_ephemeral = client.sync_state().await
+                .map_err(|e| ClientError::SyncError(e.to_string()))?;
+            info!(block_num = sync_after_ephemeral.block_num.as_u32(), "Sync after ephemeral account complete");
+
             // Add signing key to keystore
             let keystore_path = config.store_path
                 .parent()

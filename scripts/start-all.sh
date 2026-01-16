@@ -4,8 +4,9 @@
 # This script starts miden-node and proxy in background mode.
 #
 # Usage:
-#   ./start-all.sh           # start services in background
-#   ./start-all.sh --clean   # clean volumes first, then start
+#   ./start-all.sh                                    # start services in background
+#   ./start-all.sh --clean                            # clean volumes first, then start
+#   ./start-all.sh --proxy-port 8547 --node-port 57292  # use custom ports
 
 set -e
 
@@ -17,14 +18,45 @@ cd "$PROJECT_DIR"
 # Use local compose file (minimal dependencies)
 COMPOSE_FILE="docker-compose.local.yml"
 
-# Export GIT_COMMIT for Docker build args
-export GIT_COMMIT=$(git rev-parse --short HEAD)
+# Export GIT_COMMIT for Docker build args (full hash for GitHub URL)
+export GIT_COMMIT=$(git rev-parse HEAD)
 
-# Check for --clean flag
-if [ "$1" = "--clean" ]; then
+# Default ports
+PROXY_PORT=8546
+NODE_PORT=57291
+CLEAN_VOLUMES=false
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --clean)
+            CLEAN_VOLUMES=true
+            shift
+            ;;
+        --proxy-port)
+            PROXY_PORT="$2"
+            shift 2
+            ;;
+        --node-port)
+            NODE_PORT="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            echo "Usage: $0 [--clean] [--proxy-port PORT] [--node-port PORT]"
+            exit 1
+            ;;
+    esac
+done
+
+# Export ports for docker-compose
+export PROXY_PORT
+export NODE_PORT
+
+# Clean volumes if requested
+if [ "$CLEAN_VOLUMES" = true ]; then
     echo "Cleaning up existing volumes..."
     docker compose -f "$COMPOSE_FILE" down -v
-    shift
     echo ""
 fi
 
@@ -53,7 +85,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
 
     RETRY_COUNT=$((RETRY_COUNT + 1))
     echo "  Waiting... ($RETRY_COUNT/$MAX_RETRIES)"
-    sleep 5
+    sleep 2
 done
 
 if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
@@ -119,7 +151,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
 
     RETRY_COUNT=$((RETRY_COUNT + 1))
     echo "  Waiting... ($RETRY_COUNT/$MAX_RETRIES)"
-    sleep 5
+    sleep 2
 done
 
 if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
@@ -135,8 +167,8 @@ echo "============================================"
 echo "Ready! Services running."
 echo ""
 echo "Endpoints:"
-echo "  Miden node:  http://localhost:57291"
-echo "  Proxy:       http://localhost:8546"
+echo "  Miden node:  http://localhost:$NODE_PORT"
+echo "  Proxy:       http://localhost:$PROXY_PORT"
 echo ""
 echo "Commands:"
 echo "  View logs:   docker compose -f $COMPOSE_FILE logs -f"

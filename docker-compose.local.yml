@@ -11,7 +11,7 @@ services:
       context: .
       dockerfile: Dockerfile.miden-node
     ports:
-      - "57291:57291"
+      - "${NODE_PORT:-57291}:57291"
     volumes:
       - miden_node_data:/data
       - miden_node_accounts:/accounts
@@ -37,7 +37,7 @@ services:
       BRIDGE_FAUCET_ACCOUNT_FILE: /accounts/faucet_miden.mac
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
     ports:
-      - "8546:8546"
+      - "${PROXY_PORT:-8546}:8546"
     volumes:
       - ./config/config.docker.toml:/app/config.toml:ro
       - miden_node_accounts:/accounts:ro
