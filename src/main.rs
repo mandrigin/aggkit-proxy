@@ -344,7 +344,9 @@ async fn submit_claim_to_miden(
             use miden_standards::account::auth::AuthRpoFalcon512;
             use rand::RngCore;
 
-            info!("Creating ephemeral user account for CLAIM note submission...");
+            info!("╔══════════════════════════════════════════════════════════════════╗");
+            info!("║  STEP 1: Creating ephemeral user account                         ║");
+            info!("╚══════════════════════════════════════════════════════════════════╝");
 
             // Generate account seed
             let mut init_seed = [0u8; 32];
@@ -365,7 +367,7 @@ async fn submit_claim_to_miden(
                 )))?;
 
             let ephemeral_account_id = ephemeral_account.id();
-            info!(ephemeral_account_id = ?ephemeral_account_id, "Ephemeral account built");
+            info!("  → Ephemeral account ID: {}", ephemeral_account_id);
 
             // Add account to client (local only, deployed on first tx)
             client.add_account(&ephemeral_account, false).await
@@ -398,17 +400,9 @@ async fn submit_claim_to_miden(
             let submitter_account_id = ephemeral_account_id;
             info!(submitter_account_id = ?submitter_account_id, "Using ephemeral account as CLAIM note submitter");
 
-            // Step 6: Create agglayer faucet locally (instead of importing from network)
-            // The network faucet is a standard NetworkFungibleFaucet without agglayer procedures.
-            // We create an agglayer-enabled faucet that can process CLAIM notes.
-            //
-            // TODO(infrastructure): For e2e testing, miden-node needs to be modified to create
-            // agglayer faucets in genesis. Currently, the node has BasicFungibleFaucet which
-            // doesn't support CLAIM notes. The proxy creates the correct agglayer faucet locally,
-            // but node submission fails because the faucet doesn't exist on the node.
-            // See best-practices.md "CLAIM Note Flow Requirements" for details.
-            info!("Creating agglayer faucet locally (with CLAIM note support)...");
-
+            info!("╔══════════════════════════════════════════════════════════════════╗");
+            info!("║  STEP 2: Creating bridge account                                 ║");
+            info!("╚══════════════════════════════════════════════════════════════════╝");
             // Create bridge account first (required for agglayer faucet validation)
             // Derive deterministic seed from configured faucet ID for reproducibility
             let bridge_seed: Word = {
@@ -427,7 +421,7 @@ async fn submit_claim_to_miden(
 
             let bridge_account = create_bridge_account(bridge_seed);
             let bridge_account_id = bridge_account.id();
-            info!(bridge_account_id = ?bridge_account_id, "Bridge account created");
+            info!("  → Bridge account ID: {}", bridge_account_id);
 
             // Add bridge account to client
             client.add_account(&bridge_account, false).await
@@ -435,7 +429,9 @@ async fn submit_claim_to_miden(
                     "Failed to add bridge account to client: {}", e
                 )))?;
 
-            // Create agglayer faucet with bridge account reference
+            info!("╔══════════════════════════════════════════════════════════════════╗");
+            info!("║  STEP 3: Creating agglayer faucet                                ║");
+            info!("╚══════════════════════════════════════════════════════════════════╝");
             // Derive deterministic seed from configured faucet ID
             let faucet_seed: Word = {
                 let mut seed_bytes = [0u8; 32];
@@ -461,7 +457,7 @@ async fn submit_claim_to_miden(
 
             // Override the faucet ID from config with the locally created faucet's ID
             let agglayer_faucet_id = agglayer_faucet.id();
-            info!(agglayer_faucet_id = ?agglayer_faucet_id, "Agglayer faucet created with CLAIM note support");
+            info!("  → Agglayer faucet ID: {}", agglayer_faucet_id);
 
             // Add agglayer faucet to client
             client.add_account(&agglayer_faucet, false).await
@@ -540,16 +536,16 @@ async fn submit_claim_to_miden(
                 destination_account_id: recipient_account_id,
             };
 
-            info!(
-                creator = ?submitter_account_id,
-                faucet = ?agglayer_faucet_id,
-                destination = ?recipient_account_id,
-                "Creating CLAIM note with SMT proofs..."
-            );
+            info!("╔══════════════════════════════════════════════════════════════════╗");
+            info!("║  STEP 4: Creating CLAIM note                                     ║");
+            info!("╚══════════════════════════════════════════════════════════════════╝");
+            info!("  Creator:     {}", submitter_account_id);
+            info!("  Faucet:      {}", agglayer_faucet_id);
+            info!("  Destination: {}", recipient_account_id);
 
             // Step 8: Create the CLAIM note using miden-agglayer
             let claim_note = create_bridge_claim_note(bridge_claim_params, &mut rng)?;
-            info!(note_id = ?claim_note.id(), "CLAIM note created successfully");
+            info!("  → CLAIM note ID: {}", claim_note.id());
 
             // Step 9: Build transaction request with the CLAIM note as output
             // The CLAIM note is sent TO the agglayer faucet
@@ -559,19 +555,19 @@ async fn submit_claim_to_miden(
                 .map_err(|e| ClientError::TransactionError(format!(
                     "Failed to build transaction request: {}", e
                 )))?;
-            info!("Built CLAIM note transaction request");
+            info!("╔══════════════════════════════════════════════════════════════════╗");
+            info!("║  STEP 5: Submitting transaction                                  ║");
+            info!("╚══════════════════════════════════════════════════════════════════╝");
+            info!("  Submitter: {}", submitter_account_id);
+            info!("  Amount:    {} (Miden units)", claim_data.amount);
 
             // Step 10: Submit the transaction from the faucet account
             let miden_tx_id = submit_transaction(&mut client, submitter_account_id, tx_request).await?;
-            info!(
-                miden_tx_id = %miden_tx_id,
-                submitter = ?submitter_account_id,
-                agglayer_faucet = ?agglayer_faucet_id,
-                recipient = ?recipient_account_id,
-                amount = claim_data.amount,
-                block_num = block_num,
-                "CLAIM note transaction submitted successfully"
-            );
+            info!("  → Miden TX ID: {}", miden_tx_id);
+            info!("  Block: {}", block_num);
+            info!("╔══════════════════════════════════════════════════════════════════╗");
+            info!("║  CLAIM NOTE SUBMISSION COMPLETE                                  ║");
+            info!("╚══════════════════════════════════════════════════════════════════╝");
 
             Ok::<u64, ClientError>(block_num as u64)
         })
