@@ -104,10 +104,26 @@ The CLAIM note approach (using `miden_agglayer::create_claim_note()`) requires s
    client.sync_state().await?;  // Required! Otherwise vault witness errors occur
    ```
 
-**Test limitation**: Local testing with `test-lumia-claims.sh` uses real Lumia mainnet
-claim data, but the local miden-node doesn't have an agglayer faucet with bridged assets.
-End-to-end testing requires a miden-node configured with an agglayer faucet that has
-received L1 bridge deposits.
+**Current status**: The proxy correctly creates agglayer faucets locally using
+`create_agglayer_faucet()`. CLAIM notes are created and transactions are proven
+successfully (~2-6 seconds). However, submission to the miden-node fails because:
+
+1. **Node has standard faucet** - The miden-node genesis creates `BasicFungibleFaucet`,
+   not an agglayer faucet. The node doesn't have the agglayer procedures needed to
+   process CLAIM notes.
+
+2. **Account mismatch** - The locally-created agglayer faucet has a different ID than
+   the genesis faucet. The node rejects transactions referencing unknown accounts.
+
+**Infrastructure TODO** (for full e2e testing):
+1. Modify miden-node's genesis config to support `[[agglayer_faucet]]` entries
+2. This requires adding `miden-agglayer` dependency to `miden-node-store` crate
+3. Add `AgglayerFaucetConfig` struct that uses `create_agglayer_faucet_component()`
+4. Update `genesis.toml` to create an agglayer faucet instead of standard faucet
+5. Ensure proxy uses the same faucet ID as the genesis-created agglayer faucet
+
+Until this infrastructure work is done, CLAIM note e2e testing is blocked at the
+node submission step. The proxy implementation is correct.
 
 ## Logging & Debugging
 

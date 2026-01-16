@@ -401,6 +401,12 @@ async fn submit_claim_to_miden(
             // Step 6: Create agglayer faucet locally (instead of importing from network)
             // The network faucet is a standard NetworkFungibleFaucet without agglayer procedures.
             // We create an agglayer-enabled faucet that can process CLAIM notes.
+            //
+            // TODO(infrastructure): For e2e testing, miden-node needs to be modified to create
+            // agglayer faucets in genesis. Currently, the node has BasicFungibleFaucet which
+            // doesn't support CLAIM notes. The proxy creates the correct agglayer faucet locally,
+            // but node submission fails because the faucet doesn't exist on the node.
+            // See best-practices.md "CLAIM Note Flow Requirements" for details.
             info!("Creating agglayer faucet locally (with CLAIM note support)...");
 
             // Create bridge account first (required for agglayer faucet validation)
