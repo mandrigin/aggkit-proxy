@@ -31,7 +31,14 @@ if ! grep -q "miden_agglayer" "$GENESIS_FILE"; then
 use miden_agglayer::{create_agglayer_faucet_component, create_bridge_account};' "$GENESIS_FILE"
 fi
 
-# 4. Add agglayer_faucet field to GenesisConfig struct
+# 4. Make fungible_faucet optional (add #[serde(default)])
+echo "Making fungible_faucet optional..."
+if ! grep -q '#\[serde(default)\]' "$GENESIS_FILE" || ! grep -B1 'fungible_faucet: Vec<FungibleFaucetConfig>,' "$GENESIS_FILE" | grep -q 'serde(default)'; then
+    sed -i '/fungible_faucet: Vec<FungibleFaucetConfig>,/i\
+    #[serde(default)]' "$GENESIS_FILE"
+fi
+
+# 5. Add agglayer_faucet field to GenesisConfig struct
 echo "Adding agglayer_faucet field to GenesisConfig..."
 if ! grep -q "agglayer_faucet:" "$GENESIS_FILE"; then
     sed -i '/fungible_faucet: Vec<FungibleFaucetConfig>,/a\
