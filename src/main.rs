@@ -276,13 +276,10 @@ async fn submit_claim_to_miden(
     claim_data: ClaimSubmissionData,
 ) -> Result<u64, ClientError> {
     use miden_client::keystore::FilesystemKeyStore;
-    use miden_client::transaction::{OutputNote, TransactionRequestBuilder};
+    use miden_client::transaction::TransactionRequestBuilder;
     use miden_protocol::account::AccountFile;
     use miden_protocol::asset::FungibleAsset;
-    use miden_protocol::crypto::rand::RpoRandomCoin;
     use miden_protocol::note::NoteType;
-    use miden_protocol::{Felt, FieldElement};
-    use miden_standards::note::create_p2id_note;
 
     info!(
         recipient = hex::encode(&claim_data.recipient_account_bytes),
@@ -362,36 +359,26 @@ async fn submit_claim_to_miden(
             }
             info!(num_keys = account_file.auth_secret_keys.len(), "Secret keys added to keystore");
 
-            // Step 6: Create a P2ID note from faucet to recipient
-            let seed = generate_rng_seed();
-            let mut rng = RpoRandomCoin::new(seed.map(Felt::new).into());
+            // Step 6: Create mint transaction using build_mint_fungible_asset
+            // This is the proper way to mint from a faucet - the faucet creates new tokens
+            // (not transferring existing tokens from its vault)
 
             // Create the fungible asset to mint
             let asset = FungibleAsset::new(faucet_id, claim_data.amount)
                 .map_err(|e| ClientError::NoteCreationError(format!(
                     "Failed to create fungible asset: {:?}", e
                 )))?;
-            info!(faucet_id = ?faucet_id, recipient = ?recipient_account_id, amount = claim_data.amount, "Creating P2ID note for mint");
+            info!(faucet_id = ?faucet_id, recipient = ?recipient_account_id, amount = claim_data.amount, "Building mint transaction request");
 
-            // Create P2ID note: faucet sends newly minted tokens to recipient
-            let note = create_p2id_note(
-                faucet_id,
-                recipient_account_id,
-                vec![asset.into()],
-                NoteType::Public,
-                FieldElement::ZERO,
-                &mut rng,
-            ).map_err(|e| ClientError::NoteCreationError(format!("Failed to create P2ID note: {}", e)))?;
-            info!(note_id = ?note.id(), "Created P2ID note for mint");
-
-            // Step 7: Build transaction request with own_output_notes
+            // Step 7: Build mint transaction request
+            // build_mint_fungible_asset handles the faucet mint properly - it creates new tokens
+            // rather than trying to transfer from the faucet's vault
             let tx_request = TransactionRequestBuilder::new()
-                .own_output_notes(vec![OutputNote::Full(note)])
-                .build()
+                .build_mint_fungible_asset(asset, recipient_account_id, NoteType::Public, client.rng())
                 .map_err(|e| ClientError::TransactionError(format!(
-                    "Failed to build transaction request: {}", e
+                    "Failed to build mint request: {}", e
                 )))?;
-            info!("Built transaction request for faucet mint");
+            info!("Built mint transaction request");
 
             // Step 8: Submit the transaction FROM THE FAUCET
             let miden_tx_id = submit_transaction(&mut client, faucet_id, tx_request).await?;
@@ -411,38 +398,6 @@ async fn submit_claim_to_miden(
     .map_err(|e| ClientError::TransactionError(format!("Task join error: {}", e)))?;
 
     result
-}
-
-/// Generate a random seed for RpoRandomCoin
-///
-/// Uses system time and thread ID as entropy sources
-fn generate_rng_seed() -> [u64; 4] {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-
-    let mut hasher = DefaultHasher::new();
-    now.as_nanos().hash(&mut hasher);
-    std::thread::current().id().hash(&mut hasher);
-    let h1 = hasher.finish();
-
-    hasher = DefaultHasher::new();
-    (now.as_nanos() ^ 0xDEADBEEF).hash(&mut hasher);
-    let h2 = hasher.finish();
-
-    hasher = DefaultHasher::new();
-    (now.as_secs() * 1000000000 + now.subsec_nanos() as u64).hash(&mut hasher);
-    let h3 = hasher.finish();
-
-    hasher = DefaultHasher::new();
-    (h1 ^ h2 ^ h3).hash(&mut hasher);
-    let h4 = hasher.finish();
-
-    [h1, h2, h3, h4]
 }
 
 /// Parse an AccountId from a hex string
