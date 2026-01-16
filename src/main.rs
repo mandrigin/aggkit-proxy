@@ -297,7 +297,7 @@ async fn submit_claim_to_miden(
     use miden_protocol::note::{NoteExecutionMode, NoteTag};
     use miden_protocol::{Felt, FieldElement, Word};
     use miden_rpc_proxy::{create_bridge_claim_note, BridgeClaimParams};
-    use miden_agglayer::{create_agglayer_faucet_builder, create_bridge_account};
+    use miden_agglayer::{create_agglayer_faucet, create_bridge_account};
 
     info!(
         recipient = hex::encode(&claim_data.recipient_account_bytes),
@@ -460,30 +460,22 @@ async fn submit_claim_to_miden(
             };
             info!("  Faucet seed Word: {:?}", faucet_seed);
 
-            // Create agglayer faucet with proper auth for deployment signing
-            info!("  Generating auth key pair for agglayer faucet...");
-            let faucet_key_pair = AuthSecretKey::new_falcon512_rpo();
-            let faucet_auth_component = AuthRpoFalcon512::new(faucet_key_pair.public_key().to_commitment());
-            info!("    - Key pair generated");
-
-            info!("  Calling create_agglayer_faucet_builder() with:");
+            // Create agglayer faucet using the library function
+            info!("  Calling create_agglayer_faucet() with:");
             info!("    - Symbol: LUMIA");
             info!("    - Decimals: 8");
             info!("    - Max supply: {} (u64::MAX)", u64::MAX);
             info!("    - Bridge account ID: {}", bridge_account_id);
-            let agglayer_faucet = create_agglayer_faucet_builder(
+            let agglayer_faucet = create_agglayer_faucet(
                 faucet_seed,
                 "LUMIA",  // Token symbol (could be made configurable)
                 8,        // Decimals matching ERC20 (18 decimals scaled to 8 for Miden)
                 Felt::new(u64::MAX),  // Max supply
                 bridge_account_id,     // Bridge account for validation
-            )
-            .with_auth_component(faucet_auth_component)
-            .build()
-            .expect("Agglayer faucet with auth should be valid");
+            );
 
             let agglayer_faucet_id = agglayer_faucet.id();
-            info!("  ✓ Agglayer faucet created (with Falcon512 auth)");
+            info!("  ✓ Agglayer faucet created");
             info!("  → Agglayer faucet ID: {}", agglayer_faucet_id);
 
             // Add agglayer faucet to client
@@ -493,23 +485,6 @@ async fn submit_claim_to_miden(
                     "Failed to add agglayer faucet to client: {}", e
                 )))?;
             info!("  ✓ Agglayer faucet added to client");
-
-            // Add faucet key pair to keystore for deployment signing
-            use miden_client::keystore::FilesystemKeyStore;
-            let keystore_path = config.store_path
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join("keystore");
-            info!("  Adding faucet key pair to keystore at: {}", keystore_path.display());
-            let keystore = FilesystemKeyStore::new(keystore_path.clone())
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to open keystore: {}", e
-                )))?;
-            keystore.add_key(&faucet_key_pair)
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to add faucet key to keystore: {}", e
-                )))?;
-            info!("  ✓ Faucet key pair added to keystore");
 
             // Deploy the agglayer faucet to the network
             // Reference: https://github.com/0xMiden/miden-client/blob/e235c726/bin/miden-cli/src/commands/new_account.rs#L393-L428
