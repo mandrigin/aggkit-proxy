@@ -9,7 +9,11 @@ symbol     = "MIDEN"
 [fee_parameters]
 verification_base_fee = 0
 
-[[agglayer_faucet]]
+# Note: Using standard fungible_faucet because agglayer_faucet requires
+# upstream miden-node changes. The proxy creates an agglayer faucet locally
+# for CLAIM note testing. Full e2e flow with node requires miden-node
+# to support agglayer faucets natively.
+[[fungible_faucet]]
 decimals     = 8
 max_supply   = 1_000_000_000_000
 storage_mode = "public"
