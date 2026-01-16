@@ -47,10 +47,10 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8546/"]
-      interval: 10s
+      interval: 2s
       timeout: 5s
       retries: 10
-      start_period: 10s
+      start_period: 2s
 
 volumes:
   miden_node_data:
