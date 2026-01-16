@@ -66,13 +66,38 @@ Polling for block numbers doesn't work reliably. Instead:
 The CLAIM note approach (using `miden_agglayer::create_claim_note()`) requires specific infrastructure:
 
 1. **Agglayer-enabled faucet** - The faucet must be an agglayer faucet, not a standard
-   `NetworkFungibleFaucet`. Standard faucets don't understand CLAIM notes.
+   `NetworkFungibleFaucet`. Standard faucets don't understand CLAIM notes. The proxy
+   creates an agglayer faucet locally using `create_agglayer_faucet()`:
+   ```rust
+   use miden_agglayer::{create_agglayer_faucet, create_bridge_account};
 
-2. **L1 bridge deposits first** - The faucet must have received L1 bridge deposits before
+   // Create bridge account first (required for faucet validation)
+   let bridge_account = create_bridge_account(bridge_seed);
+
+   // Create agglayer faucet with CLAIM note support
+   let agglayer_faucet = create_agglayer_faucet(
+       faucet_seed,
+       "LUMIA",           // Token symbol
+       8,                 // Decimals
+       Felt::new(u64::MAX), // Max supply
+       bridge_account.id(), // Bridge account for validation
+   );
+
+   // Add both to client
+   client.add_account(&bridge_account, false).await?;
+   client.add_account(&agglayer_faucet, false).await?;
+   ```
+
+2. **Node must have matching faucet** - For end-to-end flow, the miden-node must have
+   the same agglayer faucet in its genesis state. The proxy creates the faucet locally
+   with deterministic seeds derived from `BRIDGE_FAUCET_ID`, but the node needs to be
+   bootstrapped with the same faucet.
+
+3. **L1 bridge deposits first** - The faucet must have received L1 bridge deposits before
    claims can be processed. The CLAIM note tells the faucet "release these bridged tokens
    to me", but the tokens must exist in the faucet's vault first.
 
-3. **Ephemeral account sync** - After creating an ephemeral account for CLAIM submission,
+4. **Ephemeral account sync** - After creating an ephemeral account for CLAIM submission,
    you MUST call `client.sync_state().await` to ensure the client properly tracks it:
    ```rust
    client.add_account(&ephemeral_account, false).await?;
@@ -80,8 +105,9 @@ The CLAIM note approach (using `miden_agglayer::create_claim_note()`) requires s
    ```
 
 **Test limitation**: Local testing with `test-lumia-claims.sh` uses real Lumia mainnet
-claim data, but the local genesis faucet doesn't have bridged LUMIA tokens. End-to-end
-testing requires an agglayer testnet with actual L1→Miden bridge deposits.
+claim data, but the local miden-node doesn't have an agglayer faucet with bridged assets.
+End-to-end testing requires a miden-node configured with an agglayer faucet that has
+received L1 bridge deposits.
 
 ## Logging & Debugging
 

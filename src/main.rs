@@ -294,6 +294,7 @@ async fn submit_claim_to_miden(
     use miden_protocol::note::{NoteExecutionMode, NoteTag};
     use miden_protocol::{Felt, FieldElement, Word};
     use miden_rpc_proxy::{create_bridge_claim_note, BridgeClaimParams};
+    use miden_agglayer::{create_agglayer_faucet, create_bridge_account};
 
     info!(
         recipient = hex::encode(&claim_data.recipient_account_bytes),
@@ -306,10 +307,13 @@ async fn submit_claim_to_miden(
 
     let result = tokio::task::spawn_blocking(move || {
         runtime_handle.block_on(async {
-            // Step 1: Parse the agglayer faucet ID from hex
-            let agglayer_faucet_id = parse_account_id_from_hex(&config.bridge_faucet_id_hex)
-                .map_err(|e| ClientError::InitializationError(format!("Invalid agglayer faucet ID: {}", e)))?;
-            info!(agglayer_faucet_id = ?agglayer_faucet_id, "Parsed agglayer faucet account ID");
+            // Step 1: Parse the configured faucet ID (used for seed derivation and client config)
+            // Note: We create an agglayer faucet locally instead of using the network faucet,
+            // because the network faucet is a standard NetworkFungibleFaucet without CLAIM support.
+            // The configured ID is used for: (1) client config, (2) deterministic seed derivation
+            let configured_faucet_id = parse_account_id_from_hex(&config.bridge_faucet_id_hex)
+                .map_err(|e| ClientError::InitializationError(format!("Invalid configured faucet ID: {}", e)))?;
+            info!(configured_faucet_id = %config.bridge_faucet_id_hex, "Parsed configured faucet ID (will create agglayer faucet locally)");
 
             // Step 2: Convert recipient bytes to AccountId
             let recipient_account_id = bytes_to_account_id(&claim_data.recipient_account_bytes)
@@ -320,7 +324,7 @@ async fn submit_claim_to_miden(
             let client_config = MidenClientConfig {
                 rpc_endpoint: config.rpc_endpoint.clone(),
                 store_path: config.store_path.clone(),
-                bridge_faucet_id: agglayer_faucet_id,
+                bridge_faucet_id: configured_faucet_id,  // Note: actual agglayer faucet created later
             };
             let mut client = init_client(&client_config).await?;
             info!("Miden client initialized");
@@ -394,20 +398,77 @@ async fn submit_claim_to_miden(
             let submitter_account_id = ephemeral_account_id;
             info!(submitter_account_id = ?submitter_account_id, "Using ephemeral account as CLAIM note submitter");
 
-            // Step 6: Import faucet from network for vault state
-            // The CLAIM note references the faucet's assets, so client needs vault state
-            info!(faucet_id = ?agglayer_faucet_id, "Importing faucet account from network (for vault state)...");
-            client.import_account_by_id(agglayer_faucet_id).await
-                .map_err(|e| ClientError::AccountNotFound(format!(
-                    "Failed to import faucet account from network: {}", e
-                )))?;
-            info!("Faucet account imported from network");
+            // Step 6: Create agglayer faucet locally (instead of importing from network)
+            // The network faucet is a standard NetworkFungibleFaucet without agglayer procedures.
+            // We create an agglayer-enabled faucet that can process CLAIM notes.
+            info!("Creating agglayer faucet locally (with CLAIM note support)...");
 
-            // Sync again to fetch the faucet's vault merkle paths
-            info!("Syncing state to fetch faucet vault merkle paths...");
+            // Create bridge account first (required for agglayer faucet validation)
+            // Derive deterministic seed from configured faucet ID for reproducibility
+            let bridge_seed: Word = {
+                let mut seed_bytes = [0u8; 32];
+                // Use hash of "bridge" + faucet_id for deterministic seed
+                let seed_input = format!("bridge:{}", config.bridge_faucet_id_hex);
+                let hash = sha3::Keccak256::digest(seed_input.as_bytes());
+                seed_bytes.copy_from_slice(&hash[..32]);
+                Word::new([
+                    Felt::new(u64::from_le_bytes(seed_bytes[0..8].try_into().unwrap())),
+                    Felt::new(u64::from_le_bytes(seed_bytes[8..16].try_into().unwrap())),
+                    Felt::new(u64::from_le_bytes(seed_bytes[16..24].try_into().unwrap())),
+                    Felt::new(u64::from_le_bytes(seed_bytes[24..32].try_into().unwrap())),
+                ])
+            };
+
+            let bridge_account = create_bridge_account(bridge_seed);
+            let bridge_account_id = bridge_account.id();
+            info!(bridge_account_id = ?bridge_account_id, "Bridge account created");
+
+            // Add bridge account to client
+            client.add_account(&bridge_account, false).await
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to add bridge account to client: {}", e
+                )))?;
+
+            // Create agglayer faucet with bridge account reference
+            // Derive deterministic seed from configured faucet ID
+            let faucet_seed: Word = {
+                let mut seed_bytes = [0u8; 32];
+                let seed_input = format!("agglayer_faucet:{}", config.bridge_faucet_id_hex);
+                let hash = sha3::Keccak256::digest(seed_input.as_bytes());
+                seed_bytes.copy_from_slice(&hash[..32]);
+                Word::new([
+                    Felt::new(u64::from_le_bytes(seed_bytes[0..8].try_into().unwrap())),
+                    Felt::new(u64::from_le_bytes(seed_bytes[8..16].try_into().unwrap())),
+                    Felt::new(u64::from_le_bytes(seed_bytes[16..24].try_into().unwrap())),
+                    Felt::new(u64::from_le_bytes(seed_bytes[24..32].try_into().unwrap())),
+                ])
+            };
+
+            // Create agglayer faucet: token symbol from config or default, 8 decimals to match ERC20
+            let agglayer_faucet = create_agglayer_faucet(
+                faucet_seed,
+                "LUMIA",  // Token symbol (could be made configurable)
+                8,        // Decimals matching ERC20 (18 decimals scaled to 8 for Miden)
+                Felt::new(u64::MAX),  // Max supply
+                bridge_account_id,     // Bridge account for validation
+            );
+
+            // Override the faucet ID from config with the locally created faucet's ID
+            let agglayer_faucet_id = agglayer_faucet.id();
+            info!(agglayer_faucet_id = ?agglayer_faucet_id, "Agglayer faucet created with CLAIM note support");
+
+            // Add agglayer faucet to client
+            client.add_account(&agglayer_faucet, false).await
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to add agglayer faucet to client: {}", e
+                )))?;
+            info!("Agglayer faucet added to client");
+
+            // Sync state to ensure client tracks the new accounts
+            info!("Syncing state after creating agglayer faucet...");
             let sync_result2 = client.sync_state().await
                 .map_err(|e| ClientError::SyncError(e.to_string()))?;
-            info!(block_num = sync_result2.block_num.as_u32(), "Second sync complete - vault state fetched");
+            info!(block_num = sync_result2.block_num.as_u32(), "Sync complete - agglayer faucet ready");
 
             // Step 7: Convert SMT proofs from bytes to Felts
             // Each 32-byte hash becomes 8 Felt values (4 bytes each as u32)
