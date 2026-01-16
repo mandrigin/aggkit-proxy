@@ -62,6 +62,27 @@ Polling for block numbers doesn't work reliably. Instead:
 - Fetch block height on-demand when needed
 - Crash on startup if miden-node is unreachable (fail fast)
 
+### CLAIM Note Flow Requirements
+The CLAIM note approach (using `miden_agglayer::create_claim_note()`) requires specific infrastructure:
+
+1. **Agglayer-enabled faucet** - The faucet must be an agglayer faucet, not a standard
+   `NetworkFungibleFaucet`. Standard faucets don't understand CLAIM notes.
+
+2. **L1 bridge deposits first** - The faucet must have received L1 bridge deposits before
+   claims can be processed. The CLAIM note tells the faucet "release these bridged tokens
+   to me", but the tokens must exist in the faucet's vault first.
+
+3. **Ephemeral account sync** - After creating an ephemeral account for CLAIM submission,
+   you MUST call `client.sync_state().await` to ensure the client properly tracks it:
+   ```rust
+   client.add_account(&ephemeral_account, false).await?;
+   client.sync_state().await?;  // Required! Otherwise vault witness errors occur
+   ```
+
+**Test limitation**: Local testing with `test-lumia-claims.sh` uses real Lumia mainnet
+claim data, but the local genesis faucet doesn't have bridged LUMIA tokens. End-to-end
+testing requires an agglayer testnet with actual L1→Miden bridge deposits.
+
 ## Logging & Debugging
 
 ### Log Claim Details
