@@ -28,7 +28,7 @@ GENESIS_FILE="crates/store/src/genesis/config/mod.rs"
 if ! grep -q "miden_agglayer" "$GENESIS_FILE"; then
     # Add import after miden_node_utils import
     sed -i '/use miden_node_utils::crypto::get_rpo_random_coin;/a\
-use miden_agglayer::{create_agglayer_faucet_component, create_bridge_account};' "$GENESIS_FILE"
+use miden_agglayer::{create_agglayer_faucet, create_bridge_account};' "$GENESIS_FILE"
 fi
 
 # 4. Make fungible_faucet optional (add #[serde(default)])
@@ -90,11 +90,10 @@ impl AgglayerFaucetConfig {
     fn build_account(self) -> Result<(Account, Account, miden_protocol::crypto::dsa::falcon512_rpo::SecretKey), GenesisConfigError> {
         use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey as RpoSecretKey;
 
-        let AgglayerFaucetConfig { symbol, decimals, max_supply, storage_mode } = self;
+        let AgglayerFaucetConfig { symbol, decimals, max_supply, storage_mode: _ } = self;
 
         let mut rng = ChaCha20Rng::from_seed(rand::random());
         let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
-        let auth = AuthRpoFalcon512::new(secret_key.public_key().into());
 
         // Create bridge account first (needed for agglayer faucet)
         let bridge_seed: [u8; 32] = rng.random();
@@ -106,24 +105,24 @@ impl AgglayerFaucetConfig {
         ]);
         let bridge_account = create_bridge_account(bridge_word);
 
+        // Create faucet seed as Word
         let faucet_seed: [u8; 32] = rng.random();
+        let faucet_word = miden_protocol::Word::new([
+            Felt::new(u64::from_le_bytes(faucet_seed[0..8].try_into().unwrap())),
+            Felt::new(u64::from_le_bytes(faucet_seed[8..16].try_into().unwrap())),
+            Felt::new(u64::from_le_bytes(faucet_seed[16..24].try_into().unwrap())),
+            Felt::new(u64::from_le_bytes(faucet_seed[24..32].try_into().unwrap())),
+        ]);
         let max_supply_felt = Felt::try_from(max_supply).expect("max_supply fits in Felt");
 
-        // Create agglayer faucet component with bridge account reference
-        let agglayer_component = create_agglayer_faucet_component(
+        // Use create_agglayer_faucet which creates a complete faucet with all required components
+        let faucet_account = create_agglayer_faucet(
+            faucet_word,
             &symbol.raw,
             decimals,
             max_supply_felt,
             bridge_account.id(),
         );
-
-        // Build the agglayer faucet account
-        let faucet_account = AccountBuilder::new(faucet_seed)
-            .account_type(AccountType::FungibleFaucet)
-            .storage_mode(storage_mode.into())
-            .with_auth_component(auth)
-            .with_component(agglayer_component)
-            .build()?;
 
         Ok((faucet_account, bridge_account, secret_key))
     }
