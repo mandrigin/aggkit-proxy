@@ -232,72 +232,84 @@ impl EthApiImpl {
     }
 }
 
-/// Data needed for Miden claim submission (must be Send + 'static for spawn_blocking)
+/// Data needed for Miden CLAIM note submission (must be Send + 'static for spawn_blocking)
 #[derive(Debug, Clone)]
-/// Simplified claim data for P2ID mint approach
 struct ClaimSubmissionData {
-    /// Amount to mint (scaled to Miden decimals)
+    // === SMT Proof Data (from claimAsset calldata) ===
+    /// SMT proof for local exit root (32 siblings, each 32 bytes)
+    smt_proof_local_exit_root: Vec<[u8; 32]>,
+    /// SMT proof for rollup exit root (32 siblings, each 32 bytes)
+    smt_proof_rollup_exit_root: Vec<[u8; 32]>,
+    /// Global index (uint256)
+    global_index: [u8; 32],
+    /// Mainnet exit root hash (32 bytes)
+    mainnet_exit_root: [u8; 32],
+    /// Rollup exit root hash (32 bytes)
+    rollup_exit_root: [u8; 32],
+
+    // === Leaf Data ===
+    /// Origin network identifier (uint32)
+    origin_network: u32,
+    /// Origin token address (20 bytes)
+    origin_token_address: [u8; 20],
+    /// Destination network identifier (uint32)
+    destination_network: u32,
+    /// Destination address (20 bytes)
+    destination_address: [u8; 20],
+    /// Amount (scaled to Miden decimals)
     amount: u64,
+    /// Metadata bytes
+    metadata: Vec<u8>,
+
+    // === Miden-specific ===
     /// Recipient's Miden account ID (15 bytes)
     recipient_account_bytes: [u8; 15],
 }
 
-/// Submit a claim to the Miden network using spawn_blocking
+/// Submit a claim to the Miden network using CLAIM notes
 ///
-/// Uses `build_mint_fungible_asset` from miden-client: the faucet directly
-/// mints new tokens and sends them to the recipient via a P2ID note.
+/// Uses `create_bridge_claim_note()` from miden-agglayer to create a CLAIM note
+/// that instructs the agglayer faucet to mint tokens to the destination account.
 ///
-/// # Current Status
+/// # CLAIM Note Flow
 ///
-/// The transaction is successfully built, proven locally (~6 seconds), but
-/// submission to miden-node fails with "partial smt does not track merkle path"
-/// error. This is a miden-client/miden-node agglayer-v0.1 compatibility issue
-/// where the node cannot verify the proven transaction's vault witnesses during
-/// re-execution.
+/// 1. Create ephemeral user account (submitter of the CLAIM note)
+/// 2. Build BridgeClaimParams from claimAsset calldata (SMT proofs, roots, etc.)
+/// 3. Call create_bridge_claim_note() to create the CLAIM note
+/// 4. Submit transaction from ephemeral user with the CLAIM note as output
+/// 5. Agglayer faucet consumes CLAIM note, validates SMT proofs, mints to recipient
 ///
-/// The flow works correctly up to submission:
-/// 1. Import faucet from network (for vault state) ✓
-/// 2. Sync to fetch vault merkle paths ✓
-/// 3. Build mint transaction with FungibleAsset ✓
-/// 4. Transaction proven locally ✓
-/// 5. Submit to node ✗ - fails to verify vault witnesses
+/// # Infrastructure Requirement
 ///
-/// # TODO: CLAIM Note Implementation (Future Milestone)
-///
-/// The full bridge flow should use CLAIM notes via `miden_agglayer::create_claim_note()`:
-/// 1. Ephemeral user creates CLAIM note with SMT proofs from claimAsset calldata
-/// 2. Ephemeral user submits CLAIM note TO the agglayer faucet
-/// 3. Agglayer faucet validates SMT proofs against bridge MMR
-/// 4. Agglayer faucet mints tokens to destination account
-///
-/// The CLAIM note code is preserved in `client.rs`:
-/// - `BridgeClaimParams` struct with all SMT proof fields
-/// - `create_bridge_claim_note()` function wrapping miden-agglayer
+/// CLAIM notes require an agglayer-enabled faucet with `agglayer_faucet_component`
+/// procedures. The standard `NetworkFungibleFaucet` from genesis.toml will NOT work.
+/// If testing with a native faucet, CLAIM note submission will fail.
 async fn submit_claim_to_miden(
     config: MidenSubmissionConfig,
     claim_data: ClaimSubmissionData,
 ) -> Result<u64, ClientError> {
-    use miden_client::keystore::FilesystemKeyStore;
-    use miden_client::transaction::TransactionRequestBuilder;
-    use miden_protocol::account::AccountFile;
-    use miden_protocol::asset::FungibleAsset;
-    use miden_protocol::note::NoteType;
+    use miden_client::crypto::FeltRng;
+    use miden_client::transaction::{OutputNote, TransactionRequestBuilder};
+    use miden_protocol::crypto::rand::RpoRandomCoin;
+    use miden_protocol::note::{NoteExecutionMode, NoteTag};
+    use miden_protocol::{Felt, FieldElement, Word};
+    use miden_rpc_proxy::{create_bridge_claim_note, BridgeClaimParams};
 
     info!(
         recipient = hex::encode(&claim_data.recipient_account_bytes),
         amount = claim_data.amount,
         rpc_endpoint = %config.rpc_endpoint,
-        "Starting Miden claim submission (P2ID mint approach)"
+        "Starting Miden claim submission (CLAIM note approach)"
     );
 
     let runtime_handle = tokio::runtime::Handle::current();
 
     let result = tokio::task::spawn_blocking(move || {
         runtime_handle.block_on(async {
-            // Step 1: Parse the bridge faucet ID from hex
-            let bridge_faucet_id = parse_account_id_from_hex(&config.bridge_faucet_id_hex)
-                .map_err(|e| ClientError::InitializationError(format!("Invalid bridge faucet ID: {}", e)))?;
-            info!(bridge_faucet_id = ?bridge_faucet_id, "Parsed bridge faucet account ID");
+            // Step 1: Parse the agglayer faucet ID from hex
+            let agglayer_faucet_id = parse_account_id_from_hex(&config.bridge_faucet_id_hex)
+                .map_err(|e| ClientError::InitializationError(format!("Invalid agglayer faucet ID: {}", e)))?;
+            info!(agglayer_faucet_id = ?agglayer_faucet_id, "Parsed agglayer faucet account ID");
 
             // Step 2: Convert recipient bytes to AccountId
             let recipient_account_id = bytes_to_account_id(&claim_data.recipient_account_bytes)
@@ -308,7 +320,7 @@ async fn submit_claim_to_miden(
             let client_config = MidenClientConfig {
                 rpc_endpoint: config.rpc_endpoint.clone(),
                 store_path: config.store_path.clone(),
-                bridge_faucet_id,
+                bridge_faucet_id: agglayer_faucet_id,
             };
             let mut client = init_client(&client_config).await?;
             info!("Miden client initialized");
@@ -319,85 +331,106 @@ async fn submit_claim_to_miden(
             let block_num = sync_result.block_num.as_u32();
             info!(block_num = block_num, "State synced with network");
 
-            // Step 5: Load faucet account from file (for keys) and network (for vault state)
-            // For P2ID mint, the FAUCET submits the transaction directly.
-            // We need: (1) secret keys from file for signing, (2) current vault state from network
-            let faucet_account_file = config.faucet_account_file.as_ref()
-                .ok_or_else(|| ClientError::InitializationError(
-                    "Faucet account file required for P2ID mint approach".to_string()
-                ))?;
-            info!(account_file = %faucet_account_file.display(), "Loading faucet account file (for keys)...");
+            // Step 5: Use the faucet account to submit the CLAIM note
+            // The faucet is already imported via init_client, so we use it as the submitter
+            let submitter_account_id = agglayer_faucet_id;
+            info!(submitter_account_id = ?submitter_account_id, "Using faucet account as CLAIM note submitter");
 
-            let account_file = AccountFile::read(faucet_account_file)
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to read account file {}: {}", faucet_account_file.display(), e
-                )))?;
-            let faucet_id = account_file.account.id();
-            info!(faucet_id = ?faucet_id, num_keys = account_file.auth_secret_keys.len(), "Account file loaded");
+            // Step 6: Convert SMT proofs from bytes to Felts
+            // Each 32-byte hash becomes 8 Felt values (4 bytes each as u32)
+            let smt_proof_local: Vec<Felt> = claim_data.smt_proof_local_exit_root
+                .iter()
+                .flat_map(|hash| bytes_to_felts_32(hash))
+                .collect();
+            let smt_proof_rollup: Vec<Felt> = claim_data.smt_proof_rollup_exit_root
+                .iter()
+                .flat_map(|hash| bytes_to_felts_32(hash))
+                .collect();
 
-            // Import faucet from NETWORK to get current vault state with merkle paths
-            // This is essential - add_account from file doesn't have network vault state
-            info!(faucet_id = ?faucet_id, "Importing faucet account from network (for vault state)...");
-            client.import_account_by_id(faucet_id).await
-                .map_err(|e| ClientError::AccountNotFound(format!(
-                    "Failed to import faucet account from network: {}", e
-                )))?;
-            info!("Faucet account imported from network");
+            // Convert global_index (32 bytes) to 8 Felts
+            let global_index: [Felt; 8] = bytes_to_felts_32(&claim_data.global_index);
 
-            // Sync AGAIN after import to fetch the faucet's vault state
-            // import_account_by_id adds it to tracking, sync fetches the actual vault data
-            info!("Syncing state to fetch faucet vault merkle paths...");
-            let sync_result2 = client.sync_state().await
-                .map_err(|e| ClientError::SyncError(e.to_string()))?;
-            info!(block_num = sync_result2.block_num.as_u32(), "Second sync complete - vault state fetched");
+            // Convert amount to 8 Felts (treat as u256, but we only use lower bits)
+            let amount_felts: [Felt; 8] = {
+                let mut felts = [Felt::ZERO; 8];
+                // Put the amount in the lowest Felt (little-endian)
+                felts[0] = Felt::new(claim_data.amount);
+                felts
+            };
 
-            // Add secret keys to keystore for signing
-            let keystore_path = config.store_path
-                .parent()
-                .unwrap_or(std::path::Path::new("/app/data"))
-                .join("keystore");
-            let keystore = FilesystemKeyStore::new(keystore_path.clone())
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to open keystore at {}: {}", keystore_path.display(), e
-                )))?;
-            for key in &account_file.auth_secret_keys {
-                keystore.add_key(key)
-                    .map_err(|e| ClientError::InitializationError(format!(
-                        "Failed to add key to keystore: {}", e
-                    )))?;
-            }
-            info!(num_keys = account_file.auth_secret_keys.len(), "Secret keys added to keystore");
+            // Metadata as 8 Felts (pad or truncate)
+            let metadata_felts: [Felt; 8] = {
+                let mut felts = [Felt::ZERO; 8];
+                for (i, chunk) in claim_data.metadata.chunks(8).take(8).enumerate() {
+                    let mut bytes = [0u8; 8];
+                    bytes[..chunk.len()].copy_from_slice(chunk);
+                    felts[i] = Felt::new(u64::from_le_bytes(bytes));
+                }
+                felts
+            };
 
-            // Step 6: Create mint transaction using build_mint_fungible_asset
-            // This is the proper way to mint from a faucet - the faucet creates new tokens
-            // (not transferring existing tokens from its vault)
+            // Generate random P2ID serial number
+            let seed = generate_rng_seed();
+            let mut rng = RpoRandomCoin::new(seed.map(Felt::new).into());
+            let p2id_serial_number: Word = [
+                rng.draw_element(),
+                rng.draw_element(),
+                rng.draw_element(),
+                rng.draw_element(),
+            ].into();
 
-            // Create the fungible asset to mint
-            let asset = FungibleAsset::new(faucet_id, claim_data.amount)
-                .map_err(|e| ClientError::NoteCreationError(format!(
-                    "Failed to create fungible asset: {:?}", e
-                )))?;
-            info!(faucet_id = ?faucet_id, recipient = ?recipient_account_id, amount = claim_data.amount, "Building mint transaction request");
+            // Step 7: Build BridgeClaimParams
+            let bridge_claim_params = BridgeClaimParams {
+                smt_proof_local_exit_root: smt_proof_local,
+                smt_proof_rollup_exit_root: smt_proof_rollup,
+                global_index,
+                mainnet_exit_root: claim_data.mainnet_exit_root,
+                rollup_exit_root: claim_data.rollup_exit_root,
+                origin_network: Felt::new(claim_data.origin_network as u64),
+                origin_token_address: claim_data.origin_token_address,
+                destination_network: Felt::new(claim_data.destination_network as u64),
+                destination_address: claim_data.destination_address,
+                amount: amount_felts,
+                metadata: metadata_felts,
+                claim_note_creator_account_id: submitter_account_id,
+                agglayer_faucet_account_id: agglayer_faucet_id,
+                output_note_tag: NoteTag::for_public_use_case(0, 0, NoteExecutionMode::Local)
+                    .map_err(|e| ClientError::NoteCreationError(format!("Failed to create note tag: {:?}", e)))?,
+                p2id_serial_number,
+                destination_account_id: recipient_account_id,
+            };
 
-            // Step 7: Build mint transaction request
-            // build_mint_fungible_asset handles the faucet mint properly - it creates new tokens
-            // rather than trying to transfer from the faucet's vault
+            info!(
+                creator = ?submitter_account_id,
+                faucet = ?agglayer_faucet_id,
+                destination = ?recipient_account_id,
+                "Creating CLAIM note with SMT proofs..."
+            );
+
+            // Step 8: Create the CLAIM note using miden-agglayer
+            let claim_note = create_bridge_claim_note(bridge_claim_params, &mut rng)?;
+            info!(note_id = ?claim_note.id(), "CLAIM note created successfully");
+
+            // Step 9: Build transaction request with the CLAIM note as output
+            // The CLAIM note is sent TO the agglayer faucet
             let tx_request = TransactionRequestBuilder::new()
-                .build_mint_fungible_asset(asset, recipient_account_id, NoteType::Public, client.rng())
+                .own_output_notes(vec![OutputNote::Full(claim_note)])
+                .build()
                 .map_err(|e| ClientError::TransactionError(format!(
-                    "Failed to build mint request: {}", e
+                    "Failed to build transaction request: {}", e
                 )))?;
-            info!("Built mint transaction request");
+            info!("Built CLAIM note transaction request");
 
-            // Step 8: Submit the transaction FROM THE FAUCET
-            let miden_tx_id = submit_transaction(&mut client, faucet_id, tx_request).await?;
+            // Step 10: Submit the transaction from the faucet account
+            let miden_tx_id = submit_transaction(&mut client, submitter_account_id, tx_request).await?;
             info!(
                 miden_tx_id = %miden_tx_id,
-                faucet_id = ?faucet_id,
+                submitter = ?submitter_account_id,
+                agglayer_faucet = ?agglayer_faucet_id,
                 recipient = ?recipient_account_id,
                 amount = claim_data.amount,
                 block_num = block_num,
-                "P2ID mint transaction submitted successfully"
+                "CLAIM note transaction submitted successfully"
             );
 
             Ok::<u64, ClientError>(block_num as u64)
@@ -432,6 +465,51 @@ fn bytes_to_account_id(bytes: &[u8; 15]) -> Result<AccountId, String> {
 
     // Convert AccountIdV0 to AccountId
     Ok(AccountId::from(id_v0))
+}
+
+/// Convert 32-byte hash to 8 Felt values
+///
+/// Each Felt holds 4 bytes (as u32) from the hash
+fn bytes_to_felts_32(bytes: &[u8; 32]) -> [miden_protocol::Felt; 8] {
+    use miden_protocol::{Felt, FieldElement};
+    let mut felts = [<Felt as FieldElement>::ZERO; 8];
+    for (i, chunk) in bytes.chunks(4).enumerate() {
+        let value = u32::from_le_bytes(chunk.try_into().unwrap_or([0; 4]));
+        felts[i] = Felt::new(value as u64);
+    }
+    felts
+}
+
+/// Generate a random seed for RpoRandomCoin
+///
+/// Uses system time and thread ID as entropy sources
+fn generate_rng_seed() -> [u64; 4] {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let mut hasher = DefaultHasher::new();
+    now.as_nanos().hash(&mut hasher);
+    std::thread::current().id().hash(&mut hasher);
+    let h1 = hasher.finish();
+
+    hasher = DefaultHasher::new();
+    (now.as_nanos() ^ 0xDEADBEEF).hash(&mut hasher);
+    let h2 = hasher.finish();
+
+    hasher = DefaultHasher::new();
+    (now.as_secs() * 1000000000 + now.subsec_nanos() as u64).hash(&mut hasher);
+    let h3 = hasher.finish();
+
+    hasher = DefaultHasher::new();
+    (h1 ^ h2 ^ h3).hash(&mut hasher);
+    let h4 = hasher.finish();
+
+    [h1, h2, h3, h4]
 }
 
 /// Fetch the current block height from miden-node on-demand
@@ -799,9 +877,25 @@ impl EthApiServer for EthApiImpl {
                 "Converted ERC20 amount (18 decimals) to Miden amount (3 decimals)"
             );
 
-            // Simplified claim data for P2ID mint approach
+            // Build full CLAIM note submission data from claimAsset calldata
             let claim_data = ClaimSubmissionData {
+                // SMT proof data - already [[u8; 32]; 32] arrays
+                smt_proof_local_exit_root: claim_params.smt_proof_local_exit_root.to_vec(),
+                smt_proof_rollup_exit_root: claim_params.smt_proof_rollup_exit_root.to_vec(),
+                // Convert global_index_raw U256 to [u8; 32]
+                global_index: claim_params.global_index_raw.to_be_bytes::<32>(),
+                // These are already [u8; 32]
+                mainnet_exit_root: claim_params.mainnet_exit_root,
+                rollup_exit_root: claim_params.rollup_exit_root,
+                // Leaf data
+                origin_network: claim_params.origin_network,
+                // Address has .0.0 to get [u8; 20] via FixedBytes<20>
+                origin_token_address: claim_params.origin_token_address.0 .0,
+                destination_network: claim_params.destination_network,
+                destination_address: claim_params.destination_address.0 .0,
                 amount: amount_u64,
+                metadata: claim_params.metadata.to_vec(),
+                // Miden-specific
                 recipient_account_bytes: miden_account_id.to_bytes(),
             };
 
