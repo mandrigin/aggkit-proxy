@@ -35,7 +35,7 @@ services:
       RUST_LOG: info
       MIDEN_RPC_URL: http://miden-node:57291
       BRIDGE_FAUCET_ID: ${BRIDGE_FAUCET_ID:-}
-      BRIDGE_FAUCET_ACCOUNT_FILE: /accounts/faucet_miden.mac
+      BRIDGE_FAUCET_ACCOUNT_FILE: /accounts/faucet_lumia.mac
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
     ports:
       - "${PROXY_PORT:-8546}:8546"
