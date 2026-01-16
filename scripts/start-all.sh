@@ -103,7 +103,7 @@ fi
 
 # Extract BRIDGE_FAUCET_ID from miden-node's database
 # The faucet accounts have "faucet" in their storage field
-# We take the first one (native MIDEN faucet from genesis.toml)
+# We skip the native faucet (first one) and take the fungible faucet (LUMIA)
 echo "Extracting BRIDGE_FAUCET_ID from miden-node..."
 
 # Get the docker volume name for miden-node data
@@ -111,13 +111,14 @@ VOLUME_NAME=$(docker compose -f "$COMPOSE_FILE" config --format json | \
     python3 -c "import sys, json; c=json.load(sys.stdin); print(c['services']['miden-node']['volumes'][0].split(':')[0])" 2>/dev/null || \
     echo "miden_miden_node_data")
 
-# Query the SQLite database to get the first faucet account ID
+# Query the SQLite database to get the fungible faucet account ID (LUMIA)
+# OFFSET 1 skips the native MIDEN faucet and returns the fungible faucet
 # Note: SQLite hex() returns variable-length output without 0x prefix
 # AccountIdV0::from_hex() requires exactly "0x" + 30 hex chars (15 bytes)
 RAW_HEX=$(docker run --rm -v "${VOLUME_NAME}:/data" alpine sh -c \
     "apk add --no-cache sqlite >/dev/null 2>&1 && \
      sqlite3 /data/miden-store.sqlite3 \
-     \"SELECT hex(account_id) FROM accounts WHERE is_latest = 1 AND storage LIKE '%faucet%' ORDER BY account_id LIMIT 1;\"" 2>/dev/null)
+     \"SELECT hex(account_id) FROM accounts WHERE is_latest = 1 AND storage LIKE '%faucet%' ORDER BY account_id LIMIT 1 OFFSET 1;\"" 2>/dev/null)
 
 if [ -z "$RAW_HEX" ]; then
     echo "WARNING: Could not extract BRIDGE_FAUCET_ID from miden-node database"

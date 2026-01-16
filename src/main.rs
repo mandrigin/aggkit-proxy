@@ -378,7 +378,6 @@ async fn submit_claim_to_miden(
             let ephemeral_account_id = ephemeral_account.id();
             info!("  ✓ Ephemeral account built successfully");
             info!("  → Account ID: {}", ephemeral_account_id);
-            info!("  → Account hash: {:?}", ephemeral_account.hash());
 
             // Add account to client (local only, deployed on first tx)
             info!("  Adding ephemeral account to client (local only, not deployed yet)...");
@@ -440,7 +439,6 @@ async fn submit_claim_to_miden(
             let bridge_account_id = bridge_account.id();
             info!("  ✓ Bridge account created");
             info!("  → Bridge account ID: {}", bridge_account_id);
-            info!("  → Bridge account hash: {:?}", bridge_account.hash());
 
             // Add bridge account to client
             info!("  Adding bridge account to client...");
@@ -489,7 +487,6 @@ async fn submit_claim_to_miden(
             let agglayer_faucet_id = agglayer_faucet.id();
             info!("  ✓ Agglayer faucet created");
             info!("  → Agglayer faucet ID: {}", agglayer_faucet_id);
-            info!("  → Agglayer faucet hash: {:?}", agglayer_faucet.hash());
 
             // Add agglayer faucet to client
             info!("  Adding agglayer faucet to client...");
