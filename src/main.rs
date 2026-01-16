@@ -244,9 +244,23 @@ struct ClaimSubmissionData {
 
 /// Submit a claim to the Miden network using spawn_blocking
 ///
-/// Uses P2ID mint approach: the faucet directly mints tokens and sends them
-/// to the recipient via a P2ID note. This works with native faucets that
-/// don't have agglayer procedures.
+/// Uses `build_mint_fungible_asset` from miden-client: the faucet directly
+/// mints new tokens and sends them to the recipient via a P2ID note.
+///
+/// # Current Status
+///
+/// The transaction is successfully built, proven locally (~6 seconds), but
+/// submission to miden-node fails with "partial smt does not track merkle path"
+/// error. This is a miden-client/miden-node agglayer-v0.1 compatibility issue
+/// where the node cannot verify the proven transaction's vault witnesses during
+/// re-execution.
+///
+/// The flow works correctly up to submission:
+/// 1. Import faucet from network (for vault state) ✓
+/// 2. Sync to fetch vault merkle paths ✓
+/// 3. Build mint transaction with FungibleAsset ✓
+/// 4. Transaction proven locally ✓
+/// 5. Submit to node ✗ - fails to verify vault witnesses
 ///
 /// # TODO: CLAIM Note Implementation (Future Milestone)
 ///
@@ -256,21 +270,9 @@ struct ClaimSubmissionData {
 /// 3. Agglayer faucet validates SMT proofs against bridge MMR
 /// 4. Agglayer faucet mints tokens to destination account
 ///
-/// **Infrastructure Requirement**: CLAIM notes require an agglayer-enabled faucet
-/// with `agglayer_faucet_component` procedures. The current test environment uses
-/// a standard `NetworkFungibleFaucet` from genesis.toml which does NOT have these
-/// procedures, causing "asset is not tracked in the partial vault" errors.
-///
 /// The CLAIM note code is preserved in `client.rs`:
 /// - `BridgeClaimParams` struct with all SMT proof fields
 /// - `create_bridge_claim_note()` function wrapping miden-agglayer
-/// - Helper functions for byte-to-Felt conversions
-///
-/// When agglayer faucet infrastructure is available:
-/// 1. Update genesis.toml to include agglayer faucet
-/// 2. Re-add CLAIM note imports to this file
-/// 3. Replace P2ID flow with ephemeral user + CLAIM note flow
-/// 4. Re-enable ClaimSubmissionData fields for SMT proofs
 async fn submit_claim_to_miden(
     config: MidenSubmissionConfig,
     claim_data: ClaimSubmissionData,
