@@ -324,12 +324,25 @@ async fn submit_claim_to_miden(
             info!(recipient_account_id = ?recipient_account_id, "Converted recipient to AccountId");
 
             // Step 3: Initialize the Miden client
+            // Create keystore first so we can use the same instance for adding keys later
+            use miden_client::keystore::FilesystemKeyStore;
+            use std::sync::Arc;
+            let keystore_path = config.store_path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("keystore");
+            info!("Creating keystore at: {}", keystore_path.display());
+            let keystore = Arc::new(FilesystemKeyStore::new(keystore_path.clone())
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to create keystore: {}", e
+                )))?);
+
             let client_config = MidenClientConfig {
                 rpc_endpoint: config.rpc_endpoint.clone(),
                 store_path: config.store_path.clone(),
                 bridge_faucet_id: configured_faucet_id,  // Note: actual agglayer faucet created later
             };
-            let mut client = init_client(&client_config).await?;
+            let mut client = init_client(&client_config, keystore.clone()).await?;
             info!("Miden client initialized");
 
             // Step 4: Sync state to get current block info
@@ -495,16 +508,8 @@ async fn submit_claim_to_miden(
             info!("  ✓ Agglayer faucet added to client");
 
             // Add faucet key pair to keystore for deployment signing
-            use miden_client::keystore::FilesystemKeyStore;
-            let keystore_path = config.store_path
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join("keystore");
+            // Use the same keystore instance that was passed to init_client
             info!("  Adding faucet key pair to keystore at: {}", keystore_path.display());
-            let keystore = FilesystemKeyStore::new(keystore_path.clone())
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to open keystore: {}", e
-                )))?;
             keystore.add_key(&faucet_key_pair)
                 .map_err(|e| ClientError::InitializationError(format!(
                     "Failed to add faucet key to keystore: {}", e

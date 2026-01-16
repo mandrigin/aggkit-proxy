@@ -250,20 +250,21 @@ pub fn build_claim_transaction_request(
     Ok(tx_request)
 }
 
-/// Initialize a Miden client with the given configuration
+/// Initialize a Miden client with the given configuration and keystore
 ///
 /// # Arguments
 /// * `config` - Client configuration including RPC endpoint and store path
+/// * `keystore` - Arc<FilesystemKeyStore> for key management (shared so caller can add keys)
 ///
 /// # Returns
 /// Initialized client or error
 pub async fn init_client(
     config: &MidenClientConfig,
-) -> Result<Client<impl miden_client::auth::TransactionAuthenticator>, ClientError> {
+    keystore: Arc<miden_client::keystore::FilesystemKeyStore>,
+) -> Result<Client<miden_client::keystore::FilesystemKeyStore>, ClientError> {
     use miden_client::builder::ClientBuilder;
     use miden_client::rpc::Endpoint;
     use miden_client_sqlite_store::SqliteStore;
-    use std::sync::Arc;
 
     info!(rpc_endpoint = %config.rpc_endpoint, "Initializing Miden client");
 
@@ -276,18 +277,11 @@ pub async fn init_client(
     let endpoint = Endpoint::try_from(config.rpc_endpoint.as_str())
         .map_err(|e| ClientError::InitializationError(format!("Invalid endpoint: {}", e)))?;
 
-    // Build the client using the new builder pattern
-    // Use parent directory of store_path (which is a file) for keystore
-    let keystore_path = config
-        .store_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("keystore");
-    let keystore_path_str = keystore_path.to_string_lossy();
+    // Build the client using the provided keystore via authenticator()
     let client: Client<miden_client::keystore::FilesystemKeyStore> = ClientBuilder::new()
         .grpc_client(&endpoint, Some(10_000))
         .store(Arc::new(store))
-        .filesystem_keystore(&keystore_path_str)
+        .authenticator(keystore)
         .build()
         .await
         .map_err(|e| ClientError::InitializationError(e.to_string()))?;
