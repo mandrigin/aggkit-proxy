@@ -340,7 +340,14 @@ async fn submit_claim_to_miden(
                 .map_err(|e| ClientError::AccountNotFound(format!(
                     "Failed to import faucet account from network: {}", e
                 )))?;
-            info!("Faucet account imported from network with current vault state");
+            info!("Faucet account imported from network");
+
+            // Sync AGAIN after import to fetch the faucet's vault state
+            // import_account_by_id adds it to tracking, sync fetches the actual vault data
+            info!("Syncing state to fetch faucet vault merkle paths...");
+            let sync_result2 = client.sync_state().await
+                .map_err(|e| ClientError::SyncError(e.to_string()))?;
+            info!(block_num = sync_result2.block_num.as_u32(), "Second sync complete - vault state fetched");
 
             // Add secret keys to keystore for signing
             let keystore_path = config.store_path
