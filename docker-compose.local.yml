@@ -34,14 +34,14 @@ services:
     environment:
       RUST_LOG: info
       MIDEN_RPC_URL: http://miden-node:57291
-      BRIDGE_FAUCET_ID: ${BRIDGE_FAUCET_ID:-}
-      BRIDGE_FAUCET_ACCOUNT_FILE: /accounts/faucet_lumia.mac
+      # BRIDGE_FAUCET_ID is used for deterministic seed derivation only
+      # The actual agglayer faucet is created locally at runtime
+      BRIDGE_FAUCET_ID: ${BRIDGE_FAUCET_ID:-0x000000000000000000000000000001}
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
     ports:
       - "${PROXY_PORT:-8546}:8546"
     volumes:
       - ./config/config.docker.toml:/app/config.toml:ro
-      - miden_node_accounts:/accounts:ro
     depends_on:
       miden-node:
         condition: service_healthy

@@ -9,15 +9,9 @@ symbol     = "MIDEN"
 [fee_parameters]
 verification_base_fee = 0
 
-# Note: Using standard fungible_faucet because agglayer_faucet requires
-# upstream miden-node changes. The proxy creates an agglayer faucet locally
-# for CLAIM note testing. Full e2e flow with node requires miden-node
-# to support agglayer faucets natively.
-[[fungible_faucet]]
-decimals     = 8
-max_supply   = 1_000_000_000_000
-storage_mode = "public"
-symbol       = "LUMIA"
+# No LUMIA faucet in genesis - the proxy creates an agglayer faucet locally
+# at runtime using create_agglayer_faucet(). This allows CLAIM note processing
+# without requiring upstream miden-node changes.
 
 [[wallet]]
 assets       = [{ amount = 999_000, symbol = "MIDEN" }]
@@ -25,8 +19,4 @@ storage_mode = "private"
 
 [[wallet]]
 assets       = [{ amount = 777, symbol = "MIDEN" }]
-storage_mode = "private"
-
-[[wallet]]
-assets       = [{ amount = 1_000_000_000, symbol = "LUMIA" }]
 storage_mode = "private"
