@@ -297,7 +297,7 @@ async fn submit_claim_to_miden(
     use miden_protocol::note::{NoteExecutionMode, NoteTag};
     use miden_protocol::{Felt, FieldElement, Word};
     use miden_rpc_proxy::{create_bridge_claim_note, BridgeClaimParams};
-    use miden_agglayer::{create_agglayer_faucet, create_bridge_account};
+    use miden_agglayer::{create_agglayer_faucet_builder, create_bridge_account};
 
     info!(
         recipient = hex::encode(&claim_data.recipient_account_bytes),
@@ -341,7 +341,6 @@ async fn submit_claim_to_miden(
             // Step 5: Create ephemeral user account for CLAIM note submission
             // Following https://docs.miden.xyz/miden-tutorials/rust-client/create_deploy_tutorial
             use miden_client::account::component::BasicWallet;
-            use miden_client::keystore::FilesystemKeyStore;
             use miden_protocol::account::{AccountBuilder, AccountStorageMode, AccountType};
             use miden_protocol::account::auth::AuthSecretKey;
             use miden_standards::account::auth::AuthRpoFalcon512;
@@ -396,22 +395,6 @@ async fn submit_claim_to_miden(
                 .map_err(|e| ClientError::SyncError(e.to_string()))?;
             info!("  ✓ Sync complete at block {}", sync_after_ephemeral.block_num.as_u32());
 
-            // Add signing key to keystore
-            let keystore_path = config.store_path
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join("keystore");
-            info!("  Adding signing key to keystore at: {}", keystore_path.display());
-            let keystore = FilesystemKeyStore::new(keystore_path.clone())
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to open keystore: {}", e
-                )))?;
-            keystore.add_key(&key_pair)
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to add key to keystore: {}", e
-                )))?;
-            info!("  ✓ Signing key added to keystore");
-
             let submitter_account_id = ephemeral_account_id;
             info!("  Using ephemeral account {} as CLAIM note submitter", submitter_account_id);
 
@@ -437,19 +420,24 @@ async fn submit_claim_to_miden(
             };
             info!("  Bridge seed Word: {:?}", bridge_seed);
 
+            // Create bridge account (NoAuth - only used as a local reference, not deployed)
+            // The bridge account provides the bridge_account_id needed for agglayer faucet creation.
+            // It doesn't need to be deployed because:
+            // 1. It's only referenced by the locally-created faucet
+            // 2. The actual bridge on the network would be in the miden-node genesis
             info!("  Calling create_bridge_account()...");
             let bridge_account = create_bridge_account(bridge_seed);
             let bridge_account_id = bridge_account.id();
-            info!("  ✓ Bridge account created");
+            info!("  ✓ Bridge account created (NoAuth - local reference only)");
             info!("  → Bridge account ID: {}", bridge_account_id);
 
-            // Add bridge account to client
+            // Add bridge account to client (local only, not deployed)
             info!("  Adding bridge account to client...");
             client.add_account(&bridge_account, false).await
                 .map_err(|e| ClientError::InitializationError(format!(
                     "Failed to add bridge account to client: {}", e
                 )))?;
-            info!("  ✓ Bridge account added to client");
+            info!("  ✓ Bridge account added to client (local only)");
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 3: Creating agglayer faucet                                ║");
@@ -472,23 +460,30 @@ async fn submit_claim_to_miden(
             };
             info!("  Faucet seed Word: {:?}", faucet_seed);
 
-            // Create agglayer faucet: token symbol from config or default, 8 decimals to match ERC20
-            info!("  Calling create_agglayer_faucet() with:");
+            // Create agglayer faucet with proper auth for deployment signing
+            info!("  Generating auth key pair for agglayer faucet...");
+            let faucet_key_pair = AuthSecretKey::new_falcon512_rpo();
+            let faucet_auth_component = AuthRpoFalcon512::new(faucet_key_pair.public_key().to_commitment());
+            info!("    - Key pair generated");
+
+            info!("  Calling create_agglayer_faucet_builder() with:");
             info!("    - Symbol: LUMIA");
             info!("    - Decimals: 8");
             info!("    - Max supply: {} (u64::MAX)", u64::MAX);
             info!("    - Bridge account ID: {}", bridge_account_id);
-            let agglayer_faucet = create_agglayer_faucet(
+            let agglayer_faucet = create_agglayer_faucet_builder(
                 faucet_seed,
                 "LUMIA",  // Token symbol (could be made configurable)
                 8,        // Decimals matching ERC20 (18 decimals scaled to 8 for Miden)
                 Felt::new(u64::MAX),  // Max supply
                 bridge_account_id,     // Bridge account for validation
-            );
+            )
+            .with_auth_component(faucet_auth_component)
+            .build()
+            .expect("Agglayer faucet with auth should be valid");
 
-            // Override the faucet ID from config with the locally created faucet's ID
             let agglayer_faucet_id = agglayer_faucet.id();
-            info!("  ✓ Agglayer faucet created");
+            info!("  ✓ Agglayer faucet created (with Falcon512 auth)");
             info!("  → Agglayer faucet ID: {}", agglayer_faucet_id);
 
             // Add agglayer faucet to client
@@ -499,11 +494,90 @@ async fn submit_claim_to_miden(
                 )))?;
             info!("  ✓ Agglayer faucet added to client");
 
-            // Sync state to ensure client tracks the new accounts
-            info!("  Syncing state after creating agglayer faucet...");
+            // Add faucet key pair to keystore for deployment signing
+            use miden_client::keystore::FilesystemKeyStore;
+            let keystore_path = config.store_path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("keystore");
+            info!("  Adding faucet key pair to keystore at: {}", keystore_path.display());
+            let keystore = FilesystemKeyStore::new(keystore_path.clone())
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to open keystore: {}", e
+                )))?;
+            keystore.add_key(&faucet_key_pair)
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to add faucet key to keystore: {}", e
+                )))?;
+            info!("  ✓ Faucet key pair added to keystore");
+
+            // Deploy the agglayer faucet to the network
+            // Reference: https://github.com/0xMiden/miden-client/blob/e235c726/bin/miden-cli/src/commands/new_account.rs#L393-L428
+            info!("  Deploying agglayer faucet to network...");
+            let auth_procedure_mast_root = agglayer_faucet
+                .code()
+                .get(0)
+                .expect("faucet code should contain at least one procedure")
+                .mast_root();
+            info!("    - Auth procedure MAST root: {:?}", auth_procedure_mast_root);
+
+            let auth_script = client
+                .code_builder()
+                .compile_tx_script(
+                    "begin
+                        mem_storew_be.4000 push.4000
+                        dyncall
+                    end",
+                )
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to compile auth script: {}", e
+                )))?;
+            info!("    - Auth script compiled");
+
+            let deploy_tx_request = TransactionRequestBuilder::new()
+                .script_arg(*auth_procedure_mast_root)
+                .custom_script(auth_script)
+                .build()
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to build deploy transaction: {}", e
+                )))?;
+            info!("    - Deploy transaction request built");
+
+            let faucet_deploy_result = client.submit_new_transaction(agglayer_faucet_id, deploy_tx_request).await;
+            // Log before match to ensure error details are captured
+            info!("    - Faucet deploy result: {:?}", faucet_deploy_result.as_ref().map(|_| "Ok"));
+            if let Err(ref e) = faucet_deploy_result {
+                error!("  ✗ Failed to deploy agglayer faucet");
+                error!("    - Account ID: {}", agglayer_faucet_id);
+                error!("    - Error (Display): {}", e);
+                error!("    - Error (Debug): {:#?}", e);
+                // Try to get source error chain
+                let mut source = std::error::Error::source(e);
+                let mut depth = 0;
+                while let Some(s) = source {
+                    depth += 1;
+                    error!("    - Cause {}: {}", depth, s);
+                    error!("    - Cause {} (debug): {:?}", depth, s);
+                    source = std::error::Error::source(s);
+                }
+            }
+            match faucet_deploy_result {
+                Ok(result) => {
+                    info!("  ✓ Agglayer faucet deployed to network");
+                    debug!("    - Deploy tx result: {:?}", result);
+                }
+                Err(e) => {
+                    return Err(ClientError::InitializationError(format!(
+                        "Failed to deploy agglayer faucet: {}", e
+                    )));
+                }
+            }
+
+            // Sync state to ensure client tracks the deployed faucet
+            info!("  Syncing state after deploying agglayer faucet...");
             let sync_result2 = client.sync_state().await
                 .map_err(|e| ClientError::SyncError(e.to_string()))?;
-            info!("  ✓ Sync complete at block {} - agglayer faucet ready", sync_result2.block_num.as_u32());
+            info!("  ✓ Sync complete at block {} - agglayer faucet deployed and ready", sync_result2.block_num.as_u32());
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 4: Preparing BridgeClaimParams                             ║");
