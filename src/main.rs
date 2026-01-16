@@ -331,12 +331,79 @@ async fn submit_claim_to_miden(
             let block_num = sync_result.block_num.as_u32();
             info!(block_num = block_num, "State synced with network");
 
-            // Step 5: Use the faucet account to submit the CLAIM note
-            // The faucet is already imported via init_client, so we use it as the submitter
-            let submitter_account_id = agglayer_faucet_id;
-            info!(submitter_account_id = ?submitter_account_id, "Using faucet account as CLAIM note submitter");
+            // Step 5: Create ephemeral user account for CLAIM note submission
+            // Following https://docs.miden.xyz/miden-tutorials/rust-client/create_deploy_tutorial
+            use miden_client::account::component::BasicWallet;
+            use miden_client::keystore::FilesystemKeyStore;
+            use miden_protocol::account::{AccountBuilder, AccountStorageMode, AccountType};
+            use miden_protocol::account::auth::AuthSecretKey;
+            use miden_standards::account::auth::AuthRpoFalcon512;
+            use rand::RngCore;
 
-            // Step 6: Convert SMT proofs from bytes to Felts
+            info!("Creating ephemeral user account for CLAIM note submission...");
+
+            // Generate account seed
+            let mut init_seed = [0u8; 32];
+            client.rng().fill_bytes(&mut init_seed);
+
+            // Generate key pair for signing
+            let key_pair = AuthSecretKey::new_falcon512_rpo();
+
+            // Build the ephemeral account
+            let ephemeral_account = AccountBuilder::new(init_seed)
+                .account_type(AccountType::RegularAccountUpdatableCode)
+                .storage_mode(AccountStorageMode::Public)
+                .with_auth_component(AuthRpoFalcon512::new(key_pair.public_key().to_commitment()))
+                .with_component(BasicWallet)
+                .build()
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to build ephemeral account: {}", e
+                )))?;
+
+            let ephemeral_account_id = ephemeral_account.id();
+            info!(ephemeral_account_id = ?ephemeral_account_id, "Ephemeral account built");
+
+            // Add account to client (local only, deployed on first tx)
+            client.add_account(&ephemeral_account, false).await
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to add ephemeral account to client: {}", e
+                )))?;
+            info!("Ephemeral account added to client");
+
+            // Add signing key to keystore
+            let keystore_path = config.store_path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("keystore");
+            let keystore = FilesystemKeyStore::new(keystore_path)
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to open keystore: {}", e
+                )))?;
+            keystore.add_key(&key_pair)
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to add key to keystore: {}", e
+                )))?;
+            info!("Signing key added to keystore");
+
+            let submitter_account_id = ephemeral_account_id;
+            info!(submitter_account_id = ?submitter_account_id, "Using ephemeral account as CLAIM note submitter");
+
+            // Step 6: Import faucet from network for vault state
+            // The CLAIM note references the faucet's assets, so client needs vault state
+            info!(faucet_id = ?agglayer_faucet_id, "Importing faucet account from network (for vault state)...");
+            client.import_account_by_id(agglayer_faucet_id).await
+                .map_err(|e| ClientError::AccountNotFound(format!(
+                    "Failed to import faucet account from network: {}", e
+                )))?;
+            info!("Faucet account imported from network");
+
+            // Sync again to fetch the faucet's vault merkle paths
+            info!("Syncing state to fetch faucet vault merkle paths...");
+            let sync_result2 = client.sync_state().await
+                .map_err(|e| ClientError::SyncError(e.to_string()))?;
+            info!(block_num = sync_result2.block_num.as_u32(), "Second sync complete - vault state fetched");
+
+            // Step 7: Convert SMT proofs from bytes to Felts
             // Each 32-byte hash becomes 8 Felt values (4 bytes each as u32)
             let smt_proof_local: Vec<Felt> = claim_data.smt_proof_local_exit_root
                 .iter()
