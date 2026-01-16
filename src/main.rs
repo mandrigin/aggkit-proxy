@@ -349,13 +349,22 @@ async fn submit_claim_to_miden(
             info!("╚══════════════════════════════════════════════════════════════════╝");
 
             // Generate account seed
+            info!("  Generating random account seed...");
             let mut init_seed = [0u8; 32];
             client.rng().fill_bytes(&mut init_seed);
+            info!("  Seed (hex): {}", hex::encode(&init_seed));
 
             // Generate key pair for signing
+            info!("  Generating Falcon512 key pair for signing...");
             let key_pair = AuthSecretKey::new_falcon512_rpo();
+            info!("  Public key commitment generated");
 
             // Build the ephemeral account
+            info!("  Building ephemeral account with:");
+            info!("    - Type: RegularAccountUpdatableCode");
+            info!("    - Storage: Public");
+            info!("    - Auth: RpoFalcon512");
+            info!("    - Component: BasicWallet");
             let ephemeral_account = AccountBuilder::new(init_seed)
                 .account_type(AccountType::RegularAccountUpdatableCode)
                 .storage_mode(AccountStorageMode::Public)
@@ -367,27 +376,31 @@ async fn submit_claim_to_miden(
                 )))?;
 
             let ephemeral_account_id = ephemeral_account.id();
-            info!("  → Ephemeral account ID: {}", ephemeral_account_id);
+            info!("  ✓ Ephemeral account built successfully");
+            info!("  → Account ID: {}", ephemeral_account_id);
+            info!("  → Account hash: {:?}", ephemeral_account.hash());
 
             // Add account to client (local only, deployed on first tx)
+            info!("  Adding ephemeral account to client (local only, not deployed yet)...");
             client.add_account(&ephemeral_account, false).await
                 .map_err(|e| ClientError::InitializationError(format!(
                     "Failed to add ephemeral account to client: {}", e
                 )))?;
-            info!("Ephemeral account added to client");
+            info!("  ✓ Ephemeral account added to client");
 
             // Sync state after adding ephemeral account so client tracks it properly
-            info!("Syncing state after adding ephemeral account...");
+            info!("  Syncing state after adding ephemeral account...");
             let sync_after_ephemeral = client.sync_state().await
                 .map_err(|e| ClientError::SyncError(e.to_string()))?;
-            info!(block_num = sync_after_ephemeral.block_num.as_u32(), "Sync after ephemeral account complete");
+            info!("  ✓ Sync complete at block {}", sync_after_ephemeral.block_num.as_u32());
 
             // Add signing key to keystore
             let keystore_path = config.store_path
                 .parent()
                 .unwrap_or(std::path::Path::new("."))
                 .join("keystore");
-            let keystore = FilesystemKeyStore::new(keystore_path)
+            info!("  Adding signing key to keystore at: {}", keystore_path.display());
+            let keystore = FilesystemKeyStore::new(keystore_path.clone())
                 .map_err(|e| ClientError::InitializationError(format!(
                     "Failed to open keystore: {}", e
                 )))?;
@@ -395,22 +408,24 @@ async fn submit_claim_to_miden(
                 .map_err(|e| ClientError::InitializationError(format!(
                     "Failed to add key to keystore: {}", e
                 )))?;
-            info!("Signing key added to keystore");
+            info!("  ✓ Signing key added to keystore");
 
             let submitter_account_id = ephemeral_account_id;
-            info!(submitter_account_id = ?submitter_account_id, "Using ephemeral account as CLAIM note submitter");
+            info!("  Using ephemeral account {} as CLAIM note submitter", submitter_account_id);
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 2: Creating bridge account                                 ║");
             info!("╚══════════════════════════════════════════════════════════════════╝");
             // Create bridge account first (required for agglayer faucet validation)
             // Derive deterministic seed from configured faucet ID for reproducibility
+            info!("  Deriving deterministic seed from configured faucet ID...");
+            let seed_input = format!("bridge:{}", config.bridge_faucet_id_hex);
+            info!("  Seed input: \"{}\"", seed_input);
             let bridge_seed: Word = {
                 let mut seed_bytes = [0u8; 32];
-                // Use hash of "bridge" + faucet_id for deterministic seed
-                let seed_input = format!("bridge:{}", config.bridge_faucet_id_hex);
                 let hash = sha3::Keccak256::digest(seed_input.as_bytes());
                 seed_bytes.copy_from_slice(&hash[..32]);
+                info!("  Keccak256 hash: {}", hex::encode(&seed_bytes));
                 Word::new([
                     Felt::new(u64::from_le_bytes(seed_bytes[0..8].try_into().unwrap())),
                     Felt::new(u64::from_le_bytes(seed_bytes[8..16].try_into().unwrap())),
@@ -418,26 +433,35 @@ async fn submit_claim_to_miden(
                     Felt::new(u64::from_le_bytes(seed_bytes[24..32].try_into().unwrap())),
                 ])
             };
+            info!("  Bridge seed Word: {:?}", bridge_seed);
 
+            info!("  Calling create_bridge_account()...");
             let bridge_account = create_bridge_account(bridge_seed);
             let bridge_account_id = bridge_account.id();
+            info!("  ✓ Bridge account created");
             info!("  → Bridge account ID: {}", bridge_account_id);
+            info!("  → Bridge account hash: {:?}", bridge_account.hash());
 
             // Add bridge account to client
+            info!("  Adding bridge account to client...");
             client.add_account(&bridge_account, false).await
                 .map_err(|e| ClientError::InitializationError(format!(
                     "Failed to add bridge account to client: {}", e
                 )))?;
+            info!("  ✓ Bridge account added to client");
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 3: Creating agglayer faucet                                ║");
             info!("╚══════════════════════════════════════════════════════════════════╝");
             // Derive deterministic seed from configured faucet ID
+            info!("  Deriving deterministic seed for agglayer faucet...");
+            let faucet_seed_input = format!("agglayer_faucet:{}", config.bridge_faucet_id_hex);
+            info!("  Seed input: \"{}\"", faucet_seed_input);
             let faucet_seed: Word = {
                 let mut seed_bytes = [0u8; 32];
-                let seed_input = format!("agglayer_faucet:{}", config.bridge_faucet_id_hex);
-                let hash = sha3::Keccak256::digest(seed_input.as_bytes());
+                let hash = sha3::Keccak256::digest(faucet_seed_input.as_bytes());
                 seed_bytes.copy_from_slice(&hash[..32]);
+                info!("  Keccak256 hash: {}", hex::encode(&seed_bytes));
                 Word::new([
                     Felt::new(u64::from_le_bytes(seed_bytes[0..8].try_into().unwrap())),
                     Felt::new(u64::from_le_bytes(seed_bytes[8..16].try_into().unwrap())),
@@ -445,8 +469,14 @@ async fn submit_claim_to_miden(
                     Felt::new(u64::from_le_bytes(seed_bytes[24..32].try_into().unwrap())),
                 ])
             };
+            info!("  Faucet seed Word: {:?}", faucet_seed);
 
             // Create agglayer faucet: token symbol from config or default, 8 decimals to match ERC20
+            info!("  Calling create_agglayer_faucet() with:");
+            info!("    - Symbol: LUMIA");
+            info!("    - Decimals: 8");
+            info!("    - Max supply: {} (u64::MAX)", u64::MAX);
+            info!("    - Bridge account ID: {}", bridge_account_id);
             let agglayer_faucet = create_agglayer_faucet(
                 faucet_seed,
                 "LUMIA",  // Token symbol (could be made configurable)
@@ -457,36 +487,51 @@ async fn submit_claim_to_miden(
 
             // Override the faucet ID from config with the locally created faucet's ID
             let agglayer_faucet_id = agglayer_faucet.id();
+            info!("  ✓ Agglayer faucet created");
             info!("  → Agglayer faucet ID: {}", agglayer_faucet_id);
+            info!("  → Agglayer faucet hash: {:?}", agglayer_faucet.hash());
 
             // Add agglayer faucet to client
+            info!("  Adding agglayer faucet to client...");
             client.add_account(&agglayer_faucet, false).await
                 .map_err(|e| ClientError::InitializationError(format!(
                     "Failed to add agglayer faucet to client: {}", e
                 )))?;
-            info!("Agglayer faucet added to client");
+            info!("  ✓ Agglayer faucet added to client");
 
             // Sync state to ensure client tracks the new accounts
-            info!("Syncing state after creating agglayer faucet...");
+            info!("  Syncing state after creating agglayer faucet...");
             let sync_result2 = client.sync_state().await
                 .map_err(|e| ClientError::SyncError(e.to_string()))?;
-            info!(block_num = sync_result2.block_num.as_u32(), "Sync complete - agglayer faucet ready");
+            info!("  ✓ Sync complete at block {} - agglayer faucet ready", sync_result2.block_num.as_u32());
+
+            info!("╔══════════════════════════════════════════════════════════════════╗");
+            info!("║  STEP 4: Preparing BridgeClaimParams                             ║");
+            info!("╚══════════════════════════════════════════════════════════════════╝");
 
             // Step 7: Convert SMT proofs from bytes to Felts
             // Each 32-byte hash becomes 8 Felt values (4 bytes each as u32)
+            info!("  Converting SMT proofs to Felts...");
+            info!("    - Local exit root proof: {} siblings", claim_data.smt_proof_local_exit_root.len());
             let smt_proof_local: Vec<Felt> = claim_data.smt_proof_local_exit_root
                 .iter()
                 .flat_map(|hash| bytes_to_felts_32(hash))
                 .collect();
+            info!("    - Rollup exit root proof: {} siblings", claim_data.smt_proof_rollup_exit_root.len());
             let smt_proof_rollup: Vec<Felt> = claim_data.smt_proof_rollup_exit_root
                 .iter()
                 .flat_map(|hash| bytes_to_felts_32(hash))
                 .collect();
+            info!("  ✓ SMT proofs converted: {} + {} Felts", smt_proof_local.len(), smt_proof_rollup.len());
 
             // Convert global_index (32 bytes) to 8 Felts
+            info!("  Converting global_index to Felts...");
+            info!("    - Global index (hex): {}", hex::encode(&claim_data.global_index));
             let global_index: [Felt; 8] = bytes_to_felts_32(&claim_data.global_index);
 
             // Convert amount to 8 Felts (treat as u256, but we only use lower bits)
+            info!("  Converting amount to Felts...");
+            info!("    - Amount (Miden units): {}", claim_data.amount);
             let amount_felts: [Felt; 8] = {
                 let mut felts = [Felt::ZERO; 8];
                 // Put the amount in the lowest Felt (little-endian)
@@ -495,6 +540,8 @@ async fn submit_claim_to_miden(
             };
 
             // Metadata as 8 Felts (pad or truncate)
+            info!("  Converting metadata to Felts...");
+            info!("    - Metadata length: {} bytes", claim_data.metadata.len());
             let metadata_felts: [Felt; 8] = {
                 let mut felts = [Felt::ZERO; 8];
                 for (i, chunk) in claim_data.metadata.chunks(8).take(8).enumerate() {
@@ -506,6 +553,7 @@ async fn submit_claim_to_miden(
             };
 
             // Generate random P2ID serial number
+            info!("  Generating P2ID serial number...");
             let seed = generate_rng_seed();
             let mut rng = RpoRandomCoin::new(seed.map(Felt::new).into());
             let p2id_serial_number: Word = [
@@ -514,8 +562,26 @@ async fn submit_claim_to_miden(
                 rng.draw_element(),
                 rng.draw_element(),
             ].into();
+            info!("  P2ID serial number: {:?}", p2id_serial_number);
 
-            // Step 7: Build BridgeClaimParams
+            // Create note tag
+            info!("  Creating note tag (public use case, local execution)...");
+            let note_tag = NoteTag::for_public_use_case(0, 0, NoteExecutionMode::Local)
+                .map_err(|e| ClientError::NoteCreationError(format!("Failed to create note tag: {:?}", e)))?;
+            info!("  Note tag: {:?}", note_tag);
+
+            // Build BridgeClaimParams
+            info!("  Building BridgeClaimParams...");
+            info!("    - Mainnet exit root: {}", hex::encode(&claim_data.mainnet_exit_root));
+            info!("    - Rollup exit root: {}", hex::encode(&claim_data.rollup_exit_root));
+            info!("    - Origin network: {}", claim_data.origin_network);
+            info!("    - Origin token: {}", hex::encode(&claim_data.origin_token_address));
+            info!("    - Destination network: {}", claim_data.destination_network);
+            info!("    - Destination address: {}", hex::encode(&claim_data.destination_address));
+            info!("    - Creator account: {}", submitter_account_id);
+            info!("    - Faucet account: {}", agglayer_faucet_id);
+            info!("    - Recipient account: {}", recipient_account_id);
+
             let bridge_claim_params = BridgeClaimParams {
                 smt_proof_local_exit_root: smt_proof_local,
                 smt_proof_rollup_exit_root: smt_proof_rollup,
@@ -530,43 +596,71 @@ async fn submit_claim_to_miden(
                 metadata: metadata_felts,
                 claim_note_creator_account_id: submitter_account_id,
                 agglayer_faucet_account_id: agglayer_faucet_id,
-                output_note_tag: NoteTag::for_public_use_case(0, 0, NoteExecutionMode::Local)
-                    .map_err(|e| ClientError::NoteCreationError(format!("Failed to create note tag: {:?}", e)))?,
+                output_note_tag: note_tag,
                 p2id_serial_number,
                 destination_account_id: recipient_account_id,
             };
+            info!("  ✓ BridgeClaimParams built successfully");
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!("║  STEP 4: Creating CLAIM note                                     ║");
+            info!("║  STEP 5: Creating CLAIM note                                     ║");
             info!("╚══════════════════════════════════════════════════════════════════╝");
-            info!("  Creator:     {}", submitter_account_id);
-            info!("  Faucet:      {}", agglayer_faucet_id);
-            info!("  Destination: {}", recipient_account_id);
+            info!("  Calling create_bridge_claim_note()...");
 
             // Step 8: Create the CLAIM note using miden-agglayer
             let claim_note = create_bridge_claim_note(bridge_claim_params, &mut rng)?;
+            info!("  ✓ CLAIM note created");
             info!("  → CLAIM note ID: {}", claim_note.id());
+            info!("  → Note assets: {:?}", claim_note.assets());
+            info!("  → Note tag: {:?}", claim_note.metadata().tag());
 
+            info!("╔══════════════════════════════════════════════════════════════════╗");
+            info!("║  STEP 6: Building transaction request                            ║");
+            info!("╚══════════════════════════════════════════════════════════════════╝");
             // Step 9: Build transaction request with the CLAIM note as output
             // The CLAIM note is sent TO the agglayer faucet
+            info!("  Building TransactionRequest with CLAIM note as output...");
+            info!("    - Output notes: 1 (CLAIM note)");
             let tx_request = TransactionRequestBuilder::new()
                 .own_output_notes(vec![OutputNote::Full(claim_note)])
                 .build()
                 .map_err(|e| ClientError::TransactionError(format!(
                     "Failed to build transaction request: {}", e
                 )))?;
+            info!("  ✓ TransactionRequest built successfully");
+
             info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!("║  STEP 5: Submitting transaction                                  ║");
+            info!("║  STEP 7: Submitting transaction to network                       ║");
             info!("╚══════════════════════════════════════════════════════════════════╝");
-            info!("  Submitter: {}", submitter_account_id);
-            info!("  Amount:    {} (Miden units)", claim_data.amount);
+            info!("  Transaction details:");
+            info!("    - Submitter account: {}", submitter_account_id);
+            info!("    - Amount (Miden units): {}", claim_data.amount);
+            info!("    - Recipient: {}", recipient_account_id);
+            info!("    - Faucet: {}", agglayer_faucet_id);
+            info!("  Calling submit_transaction()...");
+            info!("  (This may take several seconds for proving)");
 
             // Step 10: Submit the transaction from the faucet account
+            let start_time = std::time::Instant::now();
             let miden_tx_id = submit_transaction(&mut client, submitter_account_id, tx_request).await?;
+            let elapsed = start_time.elapsed();
+
+            info!("  ✓ Transaction submitted successfully!");
             info!("  → Miden TX ID: {}", miden_tx_id);
-            info!("  Block: {}", block_num);
+            info!("  → Proving time: {:.2}s", elapsed.as_secs_f64());
+            info!("  → Current block: {}", block_num);
+
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  CLAIM NOTE SUBMISSION COMPLETE                                  ║");
+            info!("╠══════════════════════════════════════════════════════════════════╣");
+            info!("║  Summary:                                                        ║");
+            info!("║    TX ID:      {}", miden_tx_id);
+            info!("║    Submitter:  {}", submitter_account_id);
+            info!("║    Faucet:     {}", agglayer_faucet_id);
+            info!("║    Recipient:  {}", recipient_account_id);
+            info!("║    Amount:     {} Miden units", claim_data.amount);
+            info!("║    Block:      {}", block_num);
+            info!("║    Time:       {:.2}s", elapsed.as_secs_f64());
             info!("╚══════════════════════════════════════════════════════════════════╝");
 
             Ok::<u64, ClientError>(block_num as u64)
