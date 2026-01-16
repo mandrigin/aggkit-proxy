@@ -125,11 +125,12 @@ AGGLAYER_EOF
 fi
 
 # 8. Add processing loop for agglayer faucets in into_state function
-# This adds code AFTER the wallet processing loop ends (after "// Wallets")
+# This adds code AFTER the first faucet loop (after native faucet ID extraction)
 echo "Adding agglayer faucet processing to into_state..."
 if ! grep -q "Setup agglayer faucets" "$GENESIS_FILE"; then
-    # Add processing after "// Wallets" section which is after faucet loop
-    sed -i '/\/\/ Wallets/i\
+    # Add processing after "let native_faucet_id =" line which is right after faucet creation loop
+    sed -i '/let native_faucet_id = faucet_accounts/a\
+\
         // Setup agglayer faucets with bridge account support\
         for agglayer_config in agglayer_faucet_configs {\
             let symbol = agglayer_config.symbol.clone();\
@@ -154,8 +155,7 @@ if ! grep -q "Setup agglayer faucets" "$GENESIS_FILE"; then
 \
             // Add bridge account to all_accounts list\
             wallet_accounts.push(bridge_account);\
-        }\
-' "$GENESIS_FILE"
+        }' "$GENESIS_FILE"
 fi
 
 echo "=== Agglayer faucet genesis patch complete ==="
