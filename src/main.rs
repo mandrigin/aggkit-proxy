@@ -450,7 +450,66 @@ async fn submit_claim_to_miden(
                 .map_err(|e| ClientError::InitializationError(format!(
                     "Failed to add bridge account to client: {}", e
                 )))?;
-            info!("  ✓ Bridge account added to client (local only)");
+            info!("  ✓ Bridge account added to client");
+
+            // Deploy the bridge account to the network
+            info!("  Deploying bridge account to network...");
+            let bridge_auth_mast_root = bridge_account
+                .code()
+                .get(0)
+                .expect("bridge account code should contain at least one procedure")
+                .mast_root();
+            info!("    - Bridge auth procedure MAST root: {:?}", bridge_auth_mast_root);
+
+            let bridge_auth_script = client
+                .code_builder()
+                .compile_tx_script(
+                    "begin
+                        mem_storew_be.4000 push.4000
+                        dyncall
+                    end",
+                )
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to compile bridge auth script: {}", e
+                )))?;
+            info!("    - Bridge auth script compiled");
+
+            let bridge_deploy_tx = TransactionRequestBuilder::new()
+                .script_arg(*bridge_auth_mast_root)
+                .custom_script(bridge_auth_script)
+                .build()
+                .map_err(|e| ClientError::InitializationError(format!(
+                    "Failed to build bridge deploy transaction: {}", e
+                )))?;
+            info!("    - Bridge deploy transaction request built");
+
+            let bridge_deploy_result = client.submit_new_transaction(bridge_account_id, bridge_deploy_tx).await;
+            info!("    - Bridge deploy result: {:?}", bridge_deploy_result.as_ref().map(|_| "Ok"));
+            if let Err(ref e) = bridge_deploy_result {
+                error!("  ✗ Failed to deploy bridge account");
+                error!("    - Account ID: {}", bridge_account_id);
+                error!("    - Error (Display): {}", e);
+                error!("    - Error (Debug): {:#?}", e);
+                let mut source = std::error::Error::source(e);
+                let mut depth = 0;
+                while let Some(s) = source {
+                    depth += 1;
+                    error!("    - Cause {}: {}", depth, s);
+                    error!("    - Cause {} (debug): {:?}", depth, s);
+                    source = std::error::Error::source(s);
+                }
+            }
+            match bridge_deploy_result {
+                Ok(result) => {
+                    info!("  ✓ Bridge account deployed to network");
+                    debug!("    - Deploy tx result: {:?}", result);
+                }
+                Err(e) => {
+                    return Err(ClientError::InitializationError(format!(
+                        "Failed to deploy bridge account: {}", e
+                    )));
+                }
+            }
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 3: Creating agglayer faucet                                ║");
