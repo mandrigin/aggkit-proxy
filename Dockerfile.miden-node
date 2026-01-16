@@ -15,8 +15,13 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /build
 
 # Clone miden-node at the agglayer-v0.1 tag
+# Source: https://github.com/0xMiden/miden-node/tree/agglayer-v0.1
 RUN git clone --depth 1 --branch agglayer-v0.1 \
     https://github.com/0xMiden/miden-node.git .
+
+# Save the miden-node commit SHA for labeling
+RUN git rev-parse HEAD > /tmp/miden-node-commit.txt && \
+    echo "Miden-node commit: $(cat /tmp/miden-node-commit.txt)"
 
 # Copy and apply agglayer faucet genesis patch
 COPY patches/add-agglayer-genesis.sh /tmp/
@@ -27,6 +32,9 @@ RUN cargo build --release --bin miden-node
 
 # Runtime stage
 FROM debian:bookworm-slim
+
+# Copy the miden-node commit SHA from builder
+COPY --from=builder /tmp/miden-node-commit.txt /app/miden-node-commit.txt
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
@@ -39,6 +47,10 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 COPY --from=builder /build/target/release/miden-node /usr/local/bin/
+
+# Add label with miden-node source info
+LABEL org.opencontainers.image.source="https://github.com/0xMiden/miden-node" \
+      org.opencontainers.image.ref.name="agglayer-v0.1"
 
 # Copy genesis config
 COPY config/genesis.toml /app/genesis.toml

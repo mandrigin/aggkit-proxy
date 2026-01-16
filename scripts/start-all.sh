@@ -18,8 +18,13 @@ cd "$PROJECT_DIR"
 # Use local compose file (minimal dependencies)
 COMPOSE_FILE="docker-compose.local.yml"
 
-# Export GIT_COMMIT for Docker build args (full hash for GitHub URL)
+# Export GIT_COMMIT for proxy Docker build args (full hash for GitHub URL)
 export GIT_COMMIT=$(git rev-parse HEAD)
+
+# Export MIDEN_NODE_COMMIT for miden-node image tag
+# This is the tag/branch name from https://github.com/0xMiden/miden-node
+# The actual commit SHA (c932d27) is captured during Docker build
+export MIDEN_NODE_COMMIT="agglayer-v0.1"
 
 # Default ports
 PROXY_PORT=8546
@@ -127,7 +132,8 @@ fi
 
 # Start proxy now that miden-node is healthy
 echo "Starting proxy..."
-echo "  GIT_COMMIT: $GIT_COMMIT"
+echo "  Proxy GIT_COMMIT: $GIT_COMMIT"
+echo "  Miden-node tag:   $MIDEN_NODE_COMMIT"
 docker compose -f "$COMPOSE_FILE" up -d --build proxy
 
 # Wait for proxy to be healthy
