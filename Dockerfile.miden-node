@@ -14,9 +14,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
-# Clone miden-node at the agglayer-v0.1 tag
-# Source: https://github.com/0xMiden/miden-node/tree/agglayer-v0.1
-RUN git clone --depth 1 --branch agglayer-v0.1 \
+# Clone miden-node from main branch (has auto-genesis in bootstrap)
+# Source: https://github.com/0xMiden/miden-node
+RUN git clone --depth 1 --branch main \
     https://github.com/0xMiden/miden-node.git .
 
 # Save the miden-node commit SHA for labeling
@@ -46,7 +46,7 @@ COPY --from=builder /build/target/release/miden-node /usr/local/bin/
 
 # Add label with miden-node source info
 LABEL org.opencontainers.image.source="https://github.com/0xMiden/miden-node" \
-      org.opencontainers.image.ref.name="agglayer-v0.1"
+      org.opencontainers.image.ref.name="main"
 
 # gRPC port
 EXPOSE 57291
