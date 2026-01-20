@@ -9,14 +9,12 @@ symbol     = "MIDEN"
 [fee_parameters]
 verification_base_fee = 0
 
-# No LUMIA faucet in genesis - the proxy creates an agglayer faucet locally
-# at runtime using create_agglayer_faucet(). This allows CLAIM note processing
-# without requiring upstream miden-node changes.
+[[fungible_faucet]]
+decimals     = 3
+max_supply   = 100_000_000
+storage_mode = "public"
+symbol       = "POC"
 
 [[wallet]]
 assets       = [{ amount = 999_000, symbol = "MIDEN" }]
-storage_mode = "private"
-
-[[wallet]]
-assets       = [{ amount = 777, symbol = "MIDEN" }]
 storage_mode = "private"
