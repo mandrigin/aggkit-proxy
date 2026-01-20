@@ -23,10 +23,6 @@ RUN git clone --depth 1 --branch agglayer-v0.1 \
 RUN git rev-parse HEAD > /tmp/miden-node-commit.txt && \
     echo "Miden-node commit: $(cat /tmp/miden-node-commit.txt)"
 
-# Copy and apply agglayer faucet genesis patch
-COPY patches/add-agglayer-genesis.sh /tmp/
-RUN chmod +x /tmp/add-agglayer-genesis.sh && /tmp/add-agglayer-genesis.sh
-
 # Build the node binary
 RUN cargo build --release --bin miden-node
 
