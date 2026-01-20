@@ -48,9 +48,6 @@ COPY --from=builder /build/target/release/miden-node /usr/local/bin/
 LABEL org.opencontainers.image.source="https://github.com/0xMiden/miden-node" \
       org.opencontainers.image.ref.name="agglayer-v0.1"
 
-# Copy genesis config
-COPY config/genesis.toml /app/genesis.toml
-
 # gRPC port
 EXPOSE 57291
 
@@ -65,7 +62,6 @@ RUN printf '%s\n' \
     'DATA_DIR="${MIDEN_NODE_DATA_DIRECTORY:-/data}"' \
     'ACCOUNTS_DIR="${MIDEN_NODE_ACCOUNTS_DIRECTORY:-/accounts}"' \
     'RPC_URL="${MIDEN_NODE_RPC_URL:-http://0.0.0.0:57291}"' \
-    'GENESIS_FILE="/app/genesis.toml"' \
     '' \
     '# Log miden-node version info' \
     'echo "=== Miden Node Startup ==="' \
@@ -73,21 +69,12 @@ RUN printf '%s\n' \
     '    echo "Miden-node commit: $(cat /app/miden-node-commit.txt)"' \
     'fi' \
     '' \
-    '# Dump genesis.toml contents for debugging' \
-    'echo ""' \
-    'echo "=== Genesis Config ($GENESIS_FILE) ==="' \
-    'cat "$GENESIS_FILE"' \
-    'echo ""' \
-    'echo "=== End Genesis Config ==="' \
-    'echo ""' \
-    '' \
     '# Bootstrap if data directory is empty (no database yet)' \
     'if [ ! -d "$DATA_DIR/db" ]; then' \
     '    echo "Bootstrapping miden-node..."' \
     '    miden-node bundled bootstrap \' \
     '        --data-directory "$DATA_DIR" \' \
-    '        --accounts-directory "$ACCOUNTS_DIR" \' \
-    '        --genesis-config-file "$GENESIS_FILE"' \
+    '        --accounts-directory "$ACCOUNTS_DIR"' \
     '    echo "Bootstrap complete."' \
     '    echo ""' \
     '    echo "=== Accounts Created at Bootstrap ==="' \
