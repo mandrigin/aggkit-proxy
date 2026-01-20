@@ -14,9 +14,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
-# Clone miden-node from main branch (has auto-genesis in bootstrap)
+# Clone miden-node from agglayer-v0.1 branch
 # Source: https://github.com/0xMiden/miden-node
-RUN git clone --depth 1 --branch main \
+RUN git clone --depth 1 --branch agglayer-v0.1 \
     https://github.com/0xMiden/miden-node.git .
 
 # Save the miden-node commit SHA for labeling
@@ -44,9 +44,12 @@ WORKDIR /app
 
 COPY --from=builder /build/target/release/miden-node /usr/local/bin/
 
+# Copy genesis config
+COPY config/genesis.toml /app/genesis.toml
+
 # Add label with miden-node source info
 LABEL org.opencontainers.image.source="https://github.com/0xMiden/miden-node" \
-      org.opencontainers.image.ref.name="main"
+      org.opencontainers.image.ref.name="agglayer-v0.1"
 
 # gRPC port
 EXPOSE 57291
@@ -73,6 +76,7 @@ RUN printf '%s\n' \
     'if [ ! -d "$DATA_DIR/db" ]; then' \
     '    echo "Bootstrapping miden-node..."' \
     '    miden-node bundled bootstrap \' \
+    '        --genesis-config-file /app/genesis.toml \' \
     '        --data-directory "$DATA_DIR" \' \
     '        --accounts-directory "$ACCOUNTS_DIR"' \
     '    echo "Bootstrap complete."' \
