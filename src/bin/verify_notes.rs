@@ -133,9 +133,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Note ID: {}", note_id_str);
         println!();
 
-        // Parse note ID (accepts hex string with or without 0x prefix)
-        let note_id_hex = note_id_str.strip_prefix("0x").unwrap_or(&note_id_str);
-        let note_id = NoteId::try_from_hex(note_id_hex)
+        // Parse note ID (try_from_hex expects 0x prefix)
+        let note_id_hex = if note_id_str.starts_with("0x") {
+            note_id_str.clone()
+        } else {
+            format!("0x{}", note_id_str)
+        };
+        let note_id = NoteId::try_from_hex(&note_id_hex)
             .map_err(|e| format!("Invalid note ID '{}': {:?}", note_id_str, e))?;
 
         // Try to import/fetch the note from the node
