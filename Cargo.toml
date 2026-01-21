@@ -58,6 +58,9 @@ parking_lot = "0.12"
 # Random number generation
 rand = "0.9"
 
+# CLI argument parsing
+clap = { version = "4", features = ["derive", "env"] }
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"
@@ -65,6 +68,10 @@ rand = "0.9"
 k256 = "0.13"
 # Enable testing feature for miden-protocol in tests (for AccountId::dummy)
 miden-protocol = { version = "0.13", features = ["std", "testing"] }
+
+[[bin]]
+name = "verify-notes"
+path = "src/bin/verify_notes.rs"
 
 [[example]]
 name = "gen_signed_tx"
