@@ -66,6 +66,10 @@ k256 = "0.13"
 # Enable testing feature for miden-protocol in tests (for AccountId::dummy)
 miden-protocol = { version = "0.13", features = ["std", "testing"] }
 
+[[bin]]
+name = "verify-notes"
+path = "src/bin/verify_notes.rs"
+
 [[example]]
 name = "gen_signed_tx"
 path = "examples/gen_signed_tx.rs"
