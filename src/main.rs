@@ -371,6 +371,12 @@ async fn submit_claim_to_miden(
             let key_pair = AuthSecretKey::new_falcon512_rpo();
             info!("  Public key commitment generated");
 
+            // Add key to keystore so it can be used for signing transactions
+            info!("  Adding key to keystore...");
+            keystore.add_key(&key_pair)
+                .map_err(|e| ClientError::InitializationError(format!("Failed to add key to keystore: {}", e)))?;
+            info!("  ✓ Key added to keystore");
+
             // Build the ephemeral account
             info!("  Building ephemeral account with:");
             info!("    - Type: RegularAccountUpdatableCode");
