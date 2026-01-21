@@ -6,12 +6,11 @@
 
 use miden_agglayer::{create_agglayer_faucet, create_bridge_account};
 use miden_client::keystore::FilesystemKeyStore;
-use miden_client::transaction::TransactionRequestBuilder;
 use miden_client::Client;
 use miden_protocol::account::AccountId;
 use miden_protocol::{Felt, Word};
 use sha3::{Digest, Keccak256};
-use tracing::{debug, error, info};
+use tracing::info;
 
 use crate::ClientError;
 
@@ -118,89 +117,10 @@ pub async fn create_and_deploy_agglayer_faucet(
         })?;
     info!("  ✓ Agglayer faucet added to client");
 
-    // Deploy the agglayer faucet to the network
-    // Reference: https://github.com/0xMiden/miden-client/blob/e235c726/bin/miden-cli/src/commands/new_account.rs#L393-L428
-    info!("  Deploying agglayer faucet to network...");
-    let auth_procedure_mast_root = agglayer_faucet
-        .code()
-        .get(0)
-        .expect("faucet code should contain at least one procedure")
-        .mast_root();
-    info!(
-        "    - Auth procedure MAST root: {:?}",
-        auth_procedure_mast_root
-    );
-
-    let auth_script = client
-        .code_builder()
-        .compile_tx_script(
-            "begin
-                mem_storew_be.4000 push.4000
-                dyncall
-            end",
-        )
-        .map_err(|e| {
-            ClientError::InitializationError(format!("Failed to compile auth script: {}", e))
-        })?;
-    info!("    - Auth script compiled");
-
-    let deploy_tx_request = TransactionRequestBuilder::new()
-        .script_arg(*auth_procedure_mast_root)
-        .custom_script(auth_script)
-        .build()
-        .map_err(|e| {
-            ClientError::InitializationError(format!("Failed to build deploy transaction: {}", e))
-        })?;
-    info!("    - Deploy transaction request built");
-
-    let faucet_deploy_result = client
-        .submit_new_transaction(agglayer_faucet_id, deploy_tx_request)
-        .await;
-
-    // Log before match to ensure error details are captured
-    info!(
-        "    - Faucet deploy result: {:?}",
-        faucet_deploy_result.as_ref().map(|_| "Ok")
-    );
-    if let Err(ref e) = faucet_deploy_result {
-        error!("  ✗ Failed to deploy agglayer faucet");
-        error!("    - Account ID: {}", agglayer_faucet_id);
-        error!("    - Error (Display): {}", e);
-        error!("    - Error (Debug): {:#?}", e);
-        // Try to get source error chain
-        let mut source = std::error::Error::source(e);
-        let mut depth = 0;
-        while let Some(s) = source {
-            depth += 1;
-            error!("    - Cause {}: {}", depth, s);
-            error!("    - Cause {} (debug): {:?}", depth, s);
-            source = std::error::Error::source(s);
-        }
-    }
-
-    match faucet_deploy_result {
-        Ok(result) => {
-            info!("  ✓ Agglayer faucet deployed to network");
-            debug!("    - Deploy tx result: {:?}", result);
-        }
-        Err(e) => {
-            return Err(ClientError::InitializationError(format!(
-                "Failed to deploy agglayer faucet: {}",
-                e
-            )));
-        }
-    }
-
-    // Sync state to ensure client tracks the deployed faucet
-    info!("  Syncing state after deploying agglayer faucet...");
-    let sync_result = client
-        .sync_state()
-        .await
-        .map_err(|e| ClientError::SyncError(e.to_string()))?;
-    info!(
-        "  ✓ Sync complete at block {} - agglayer faucet deployed and ready",
-        sync_result.block_num.as_u32()
-    );
+    // Note: We do NOT deploy the faucet to the network here.
+    // The agglayer faucet should already exist in the miden-node genesis.
+    // We only create a local reference for tracking purposes.
+    info!("  ✓ Agglayer faucet created locally (not deployed - expects existing faucet in genesis)");
 
     Ok(AgglayerFaucetResult {
         faucet_id: agglayer_faucet_id,
