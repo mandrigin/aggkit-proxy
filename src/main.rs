@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 // Import library modules for claim processing (P2ID mint approach)
 use miden_rpc_proxy::{
-    create_and_deploy_agglayer_faucet, decode_transaction, init_client, is_claim_asset,
+    create_agglayer_faucet_local, decode_transaction, init_client, is_claim_asset,
     parse_claim_asset, submit_transaction, AddressMapper, AddressMapperConfig, ClaimTracker,
     ClientError, EthAddress, MidenClientConfig, CLAIM_ASSET_SELECTOR,
 };
@@ -408,8 +408,8 @@ async fn submit_claim_to_miden(
             let submitter_account_id = ephemeral_account_id;
             info!("  Using ephemeral account {} as CLAIM note submitter", submitter_account_id);
 
-            // Step 2 & 3: Create and deploy agglayer faucet
-            let faucet_result = create_and_deploy_agglayer_faucet(
+            // Step 2 & 3: Create agglayer faucet locally (not deployed to network)
+            let faucet_result = create_agglayer_faucet_local(
                 &mut client,
                 &config.bridge_faucet_id_hex,
             ).await?;

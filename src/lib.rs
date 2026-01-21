@@ -18,7 +18,7 @@ pub mod types;
 
 // Re-exports for convenience
 pub use address_mapper::{AddressMapper, AddressMapperConfig, EthAddress, MidenAccountId};
-pub use agglayer_faucet::{create_and_deploy_agglayer_faucet, AgglayerFaucetResult};
+pub use agglayer_faucet::{create_agglayer_faucet_local, AgglayerFaucetResult};
 pub use claim_tracker::ClaimTracker;
 pub use config::{ConfigError, ProxyConfig};
 pub use decode::{
