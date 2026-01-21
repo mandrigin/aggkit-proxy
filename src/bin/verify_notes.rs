@@ -67,6 +67,49 @@ fn format_note_state(note: &InputNoteRecord) -> String {
     }
 }
 
+/// Print detailed note information
+fn print_note_details(note: &InputNoteRecord, indent: &str) {
+    println!("{}ID:      {}", indent, format_note_id(&note.id()));
+    println!("{}State:   {}", indent, format_note_state(note));
+
+    // Print metadata if available
+    if let Some(metadata) = note.metadata() {
+        println!("{}Sender:  {}", indent, metadata.sender());
+        println!("{}Type:    {:?}", indent, metadata.note_type());
+        println!("{}Tag:     0x{:08x}", indent, metadata.tag().as_u32());
+    }
+
+    // Print assets
+    let details = note.details();
+    let assets = details.assets();
+    if assets.num_assets() > 0 {
+        println!("{}Assets:  {} asset(s)", indent, assets.num_assets());
+        for asset in assets.iter() {
+            println!("{}  - {}", indent, format_asset(&asset));
+        }
+    } else {
+        println!("{}Assets:  (none)", indent);
+    }
+
+    // Print note inputs (important for agglayer notes)
+    let recipient = details.recipient();
+    let inputs = recipient.inputs();
+    let input_values = inputs.values();
+    if !input_values.is_empty() {
+        println!("{}Inputs:  {} value(s)", indent, input_values.len());
+        for (i, value) in input_values.iter().enumerate() {
+            // Format each Felt as hex
+            println!("{}  [{}]: 0x{:016x}", indent, i, value.as_int());
+        }
+    }
+
+    // Print script root (hash)
+    let script = recipient.script();
+    let root = script.root();
+    println!("{}Script:  0x{:016x}{:016x}{:016x}{:016x}", indent,
+        root[0].as_int(), root[1].as_int(), root[2].as_int(), root[3].as_int());
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
@@ -204,18 +247,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(note) = input_notes.iter().find(|n| n.id() == note_id) {
             println!("✓ Note found in local store!");
             println!();
-            println!("  Note ID: {}", format_note_id(&note.id()));
-            println!("  State:   {}", format_note_state(note));
-            let details = note.details();
-            let assets = details.assets();
-            if assets.num_assets() > 0 {
-                println!("  Assets:  {} asset(s)", assets.num_assets());
-                for asset in assets.iter() {
-                    println!("    - {}", format_asset(&asset));
-                }
-            } else {
-                println!("  Assets:  (none)");
-            }
+            print_note_details(note, "  ");
             println!();
         } else {
             // Try to import/fetch the note from the node
@@ -237,19 +269,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .map_err(|e| format!("Failed to get input notes: {}", e))?;
 
                         for imported_id in &imported_ids {
-                            println!("  Note ID: {}", format_note_id(imported_id));
                             if let Some(note) = input_notes.iter().find(|n| n.id() == *imported_id) {
-                                println!("  State:   {}", format_note_state(note));
-                                let details = note.details();
-                                let assets = details.assets();
-                                if assets.num_assets() > 0 {
-                                    println!("  Assets:  {} asset(s)", assets.num_assets());
-                                    for asset in assets.iter() {
-                                        println!("    - {}", format_asset(&asset));
-                                    }
-                                } else {
-                                    println!("  Assets:  (none)");
-                                }
+                                print_note_details(note, "  ");
+                            } else {
+                                println!("  Note ID: {}", format_note_id(imported_id));
+                                println!("  (details not available)");
                             }
                             println!();
                         }
@@ -284,17 +308,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         for (i, note) in input_notes.iter().enumerate() {
             println!("  Note #{}:", i + 1);
-            println!("    ID:     {}", format_note_id(&note.id()));
-            println!("    State:  {}", format_note_state(note));
-            // Try to get assets if available
-            let details = note.details();
-            let assets = details.assets();
-            if assets.num_assets() > 0 {
-                println!("    Assets: {} asset(s)", assets.num_assets());
-                for asset in assets.iter() {
-                    println!("      - {}", format_asset(&asset));
-                }
-            }
+            print_note_details(note, "    ");
             println!();
         }
     }
