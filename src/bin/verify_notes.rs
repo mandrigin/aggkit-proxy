@@ -1,10 +1,11 @@
 //! Verify Notes - Query Miden node state and list notes
 //!
 //! This binary connects to a miden-node, syncs state, and lists available notes.
-//! Useful for verifying node connectivity and debugging.
+//! Can also query specific notes by ID directly from the node.
 //!
 //! Usage:
-//!   verify-notes
+//!   verify-notes                      # List all tracked notes
+//!   verify-notes --note-id <id>       # Query a specific note from the node
 //!
 //! Environment variables:
 //!   MIDEN_RPC_URL - Node RPC endpoint (default: http://localhost:57291)
@@ -15,10 +16,12 @@ use std::sync::Arc;
 
 use miden_client::builder::ClientBuilder;
 use miden_client::keystore::FilesystemKeyStore;
+use miden_client::notes::NoteFile;
 use miden_client::rpc::Endpoint;
 use miden_client::store::NoteFilter;
 use miden_client::Client;
 use miden_client_sqlite_store::SqliteStore;
+use miden_protocol::note::NoteId;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -30,6 +33,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|_| EnvFilter::new("warn"))
         )
         .init();
+
+    // Parse command-line arguments
+    let args: Vec<String> = std::env::args().collect();
+    let mut note_id_to_query: Option<String> = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--note-id" | "-n" => {
+                if i + 1 < args.len() {
+                    note_id_to_query = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --note-id requires an argument");
+                    std::process::exit(1);
+                }
+            }
+            "--help" | "-h" => {
+                println!("Usage: verify-notes [OPTIONS]");
+                println!();
+                println!("Options:");
+                println!("  --note-id, -n <ID>  Query a specific note from the node by its ID");
+                println!("  --help, -h          Show this help");
+                println!();
+                println!("Environment variables:");
+                println!("  MIDEN_RPC_URL       Node RPC endpoint (default: http://localhost:57291)");
+                println!("  MIDEN_STORE_PATH    Client store path (default: /tmp/verify-notes-store)");
+                return Ok(());
+            }
+            _ => {
+                eprintln!("Unknown argument: {}", args[i]);
+                std::process::exit(1);
+            }
+        }
+    }
 
     // Parse configuration from environment
     let rpc_url = std::env::var("MIDEN_RPC_URL")
@@ -85,6 +123,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("✓ Synced to block {}", sync_result.block_num.as_u32());
     println!();
+
+    // If querying a specific note by ID
+    if let Some(note_id_str) = note_id_to_query {
+        println!("═══════════════════════════════════════════════════════════════════");
+        println!("                    QUERYING NOTE BY ID                             ");
+        println!("═══════════════════════════════════════════════════════════════════");
+        println!();
+        println!("  Note ID: {}", note_id_str);
+        println!();
+
+        // Parse note ID (accepts hex string with or without 0x prefix)
+        let note_id_hex = note_id_str.strip_prefix("0x").unwrap_or(&note_id_str);
+        let note_id = NoteId::try_from_hex(note_id_hex)
+            .map_err(|e| format!("Invalid note ID '{}': {:?}", note_id_str, e))?;
+
+        // Try to import/fetch the note from the node
+        println!("Querying node for note...");
+        let note_files = vec![NoteFile::NoteId(note_id)];
+        match client.import_notes(&note_files).await {
+            Ok(imported_ids) => {
+                if imported_ids.is_empty() {
+                    println!("✗ Note not found on node");
+                } else {
+                    println!("✓ Note found on node!");
+                    println!();
+                    for imported_id in &imported_ids {
+                        println!("  Imported Note ID: {}", imported_id);
+                    }
+
+                    // Try to get the note details from local store now that it's imported
+                    let input_notes = client.get_input_notes(NoteFilter::All).await
+                        .map_err(|e| format!("Failed to get input notes: {}", e))?;
+
+                    for imported_id in &imported_ids {
+                        if let Some(note) = input_notes.iter().find(|n| n.id() == *imported_id) {
+                            println!("  State:  {:?}", note.state());
+                            let details = note.details();
+                            let assets = details.assets();
+                            if assets.num_assets() > 0 {
+                                println!("  Assets: {} asset(s)", assets.num_assets());
+                                for asset in assets.iter() {
+                                    println!("    - {:?}", asset);
+                                }
+                            }
+                        }
+                    }
+                }
+                println!();
+            }
+            Err(e) => {
+                println!("✗ Note not found or error fetching:");
+                println!("  {}", e);
+                println!();
+                println!("Note: The node only returns public notes or notes you have");
+                println!("the proper authentication to access.");
+            }
+        }
+
+        println!();
+        println!("✓ Query complete");
+        return Ok(());
+    }
 
     // Get input notes (notes we can consume)
     println!("═══════════════════════════════════════════════════════════════════");
