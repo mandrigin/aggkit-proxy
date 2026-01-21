@@ -23,15 +23,16 @@ alloy-rlp = "0.3"
 alloy-rpc-types = "0.8"
 alloy-consensus = { version = "0.8", features = ["k256"] }
 
-# Miden crates (agglayer-v0.1 tag for compatibility)
-miden-client = { git = "https://github.com/0xMiden/miden-client", tag = "agglayer-v0.1", features = ["tonic", "std"] }
-miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client", tag = "agglayer-v0.1" }
+# Miden crates (exp-agglayer-v0.2 tag)
+miden-client = { git = "https://github.com/0xMiden/miden-client", tag = "exp-agglayer-v0.2", features = ["testing", "tonic"] }
+miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client", tag = "exp-agglayer-v0.2", package = "miden-client-sqlite-store" }
 
-# Miden base crates
-miden-protocol = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1", features = ["std"] }
-miden-standards = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1" }
-miden-agglayer = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1" }
-miden-tx = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1" }
+# Miden base crates (0.13 release)
+miden-protocol = { version = "0.13", features = ["std"] }
+miden-standards = { version = "0.13" }
+miden-agglayer = { version = "0.13" }
+miden-tx = { version = "0.13" }
+miden-assembly = "0.20"
 
 # Additional dependencies
 sha3 = "0.10"
@@ -63,7 +64,7 @@ tempfile = "3"
 rand = "0.9"
 k256 = "0.13"
 # Enable testing feature for miden-protocol in tests (for AccountId::dummy)
-miden-protocol = { git = "https://github.com/0xMiden/miden-base", tag = "agglayer-v0.1", features = ["std", "testing"] }
+miden-protocol = { version = "0.13", features = ["std", "testing"] }
 
 [[example]]
 name = "gen_signed_tx"

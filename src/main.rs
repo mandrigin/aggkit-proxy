@@ -24,7 +24,7 @@ use alloy_primitives::{Address, Bytes};
 use miden_protocol::account::{AccountId, AccountIdV0};
 
 // Miden agglayer function for AccountId -> 20-byte destination conversion
-use miden_agglayer::account_id_to_destination_bytes;
+use miden_agglayer::EthAddressFormat;
 
 /// Miden chain ID (placeholder - configure as needed)
 const MIDEN_CHAIN_ID: u64 = 0x4d494445; // "MIDE" in hex
@@ -294,7 +294,7 @@ async fn submit_claim_to_miden(
     use miden_client::crypto::FeltRng;
     use miden_client::transaction::{OutputNote, TransactionRequestBuilder};
     use miden_protocol::crypto::rand::RpoRandomCoin;
-    use miden_protocol::note::{NoteExecutionMode, NoteTag};
+    use miden_protocol::note::NoteTag;
     use miden_protocol::{Felt, FieldElement, Word};
     use miden_rpc_proxy::{create_bridge_claim_note, BridgeClaimParams};
     use miden_agglayer::{create_agglayer_faucet, create_bridge_account};
@@ -329,7 +329,18 @@ async fn submit_claim_to_miden(
                 store_path: config.store_path.clone(),
                 bridge_faucet_id: configured_faucet_id,  // Note: actual agglayer faucet created later
             };
-            let mut client = init_client(&client_config).await?;
+
+            // Create keystore for the client
+            let keystore_path = config.store_path.parent()
+                .map(|p| p.join("keystore"))
+                .unwrap_or_else(|| PathBuf::from("/app/data/keystore"));
+            std::fs::create_dir_all(&keystore_path)
+                .map_err(|e| ClientError::InitializationError(format!("Failed to create keystore dir: {}", e)))?;
+            let keystore = miden_client::keystore::FilesystemKeyStore::new(keystore_path)
+                .map_err(|e| ClientError::InitializationError(format!("Failed to create keystore: {}", e)))?;
+            let keystore = Arc::new(keystore);
+
+            let mut client = init_client(&client_config, keystore.clone()).await?;
             info!("Miden client initialized");
 
             // Step 4: Sync state to get current block info
@@ -343,7 +354,7 @@ async fn submit_claim_to_miden(
             use miden_client::account::component::BasicWallet;
             use miden_protocol::account::{AccountBuilder, AccountStorageMode, AccountType};
             use miden_protocol::account::auth::AuthSecretKey;
-            use miden_standards::account::auth::AuthRpoFalcon512;
+            use miden_standards::account::auth::AuthFalcon512Rpo;
             use rand::RngCore;
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
@@ -370,7 +381,7 @@ async fn submit_claim_to_miden(
             let ephemeral_account = AccountBuilder::new(init_seed)
                 .account_type(AccountType::RegularAccountUpdatableCode)
                 .storage_mode(AccountStorageMode::Public)
-                .with_auth_component(AuthRpoFalcon512::new(key_pair.public_key().to_commitment()))
+                .with_auth_component(AuthFalcon512Rpo::new(key_pair.public_key().to_commitment()))
                 .with_component(BasicWallet)
                 .build()
                 .map_err(|e| ClientError::InitializationError(format!(
@@ -613,10 +624,9 @@ async fn submit_claim_to_miden(
             ].into();
             info!("  P2ID serial number: {:?}", p2id_serial_number);
 
-            // Create note tag
-            info!("  Creating note tag (public use case, local execution)...");
-            let note_tag = NoteTag::for_public_use_case(0, 0, NoteExecutionMode::Local)
-                .map_err(|e| ClientError::NoteCreationError(format!("Failed to create note tag: {:?}", e)))?;
+            // Create note tag - use a simple public tag
+            info!("  Creating note tag...");
+            let note_tag = NoteTag::new(0);
             info!("  Note tag: {:?}", note_tag);
 
             // Build BridgeClaimParams
@@ -1071,7 +1081,7 @@ impl EthApiServer for EthApiImpl {
         };
 
         // Log the round-trip conversion for debugging (using miden-agglayer functions)
-        let dest_bytes_20 = account_id_to_destination_bytes(miden_account_id.inner());
+        let dest_bytes_20 = EthAddressFormat::from_account_id(miden_account_id.inner()).into_bytes();
         debug!(
             miden_account_id = %miden_account_id,
             destination_bytes_20 = hex::encode(&dest_bytes_20),

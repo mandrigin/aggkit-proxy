@@ -6,7 +6,7 @@
 //! - Transaction submission via TransactionRequestBuilder
 //! - State synchronization for confirmation tracking
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
