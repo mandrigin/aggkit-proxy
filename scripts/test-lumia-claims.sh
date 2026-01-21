@@ -6,13 +6,18 @@
 # bridging LUMIA tokens to network 7 (Lumia L2).
 #
 # Usage:
-#   ./scripts/test-lumia-claims.sh           # Test all 10 vectors
-#   ./scripts/test-lumia-claims.sh 1         # Test only vector 1
-#   ./scripts/test-lumia-claims.sh 1 3 5     # Test vectors 1, 3, and 5
+#   ./scripts/test-lumia-claims.sh                    # Test all 10 vectors
+#   ./scripts/test-lumia-claims.sh 1                  # Test only vector 1
+#   ./scripts/test-lumia-claims.sh 1 3 5              # Test vectors 1, 3, and 5
+#   ./scripts/test-lumia-claims.sh --wait-receipt 1   # Test vector 1 and wait for receipt
+#   ./scripts/test-lumia-claims.sh -w 1               # Short form
 
 set -e
 
 PROXY_URL="${PROXY_URL:-http://localhost:8546}"
+WAIT_RECEIPT=false
+RECEIPT_TIMEOUT=60  # seconds to wait for receipt
+RECEIPT_POLL_INTERVAL=2  # seconds between polls
 
 # Function to dump logs on error
 # Saves both miden-node and miden-proxy logs to /tmp with matching timestamps
@@ -28,6 +33,37 @@ dump_logs_on_error() {
 
     echo "  Node logs:  $NODE_LOG"
     echo "  Proxy logs: $PROXY_LOG"
+}
+
+# Function to wait for a transaction receipt
+wait_for_receipt() {
+    local tx_hash=$1
+    local elapsed=0
+
+    echo "Waiting for receipt (timeout: ${RECEIPT_TIMEOUT}s)..."
+
+    while [ $elapsed -lt $RECEIPT_TIMEOUT ]; do
+        local receipt_response=$(curl -sf -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getTransactionReceipt\",\"params\":[\"$tx_hash\"],\"id\":1}" \
+            "$PROXY_URL" 2>&1)
+
+        if [ $? -eq 0 ] && [ -n "$receipt_response" ]; then
+            local result=$(echo "$receipt_response" | jq -r '.result' 2>/dev/null)
+            if [ "$result" != "null" ] && [ -n "$result" ]; then
+                echo "Receipt received!"
+                echo "$receipt_response" | jq . 2>/dev/null || echo "$receipt_response"
+                return 0
+            fi
+        fi
+
+        sleep $RECEIPT_POLL_INTERVAL
+        elapsed=$((elapsed + RECEIPT_POLL_INTERVAL))
+        echo "  ... polling ($elapsed/${RECEIPT_TIMEOUT}s)"
+    done
+
+    echo "Timeout waiting for receipt after ${RECEIPT_TIMEOUT}s"
+    return 1
 }
 
 # Test vectors from src/decode.rs - real Lumia claimAsset transactions
@@ -127,6 +163,18 @@ EOF
     echo "Response:"
     echo "$response" | jq . 2>/dev/null || echo "$response"
     echo ""
+
+    # Wait for receipt if enabled
+    if [ "$WAIT_RECEIPT" = true ]; then
+        # Extract tx hash from response (it should be in result field)
+        local result_hash=$(echo "$response" | jq -r '.result' 2>/dev/null)
+        if [ "$result_hash" != "null" ] && [ -n "$result_hash" ]; then
+            wait_for_receipt "$result_hash"
+        else
+            echo "No transaction hash in response, skipping receipt wait"
+        fi
+        echo ""
+    fi
 }
 
 # Pre-flight checks
@@ -200,10 +248,44 @@ preflight_check() {
     return 0
 }
 
+# Parse arguments
+TX_INDICES=()
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --wait-receipt|-w)
+            WAIT_RECEIPT=true
+            shift
+            ;;
+        --timeout)
+            RECEIPT_TIMEOUT="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "Usage: $0 [OPTIONS] [indices...]"
+            echo ""
+            echo "Options:"
+            echo "  --wait-receipt, -w   Wait for transaction receipt after sending"
+            echo "  --timeout SECONDS    Receipt timeout (default: 60)"
+            echo "  --help, -h           Show this help"
+            echo ""
+            echo "Examples:"
+            echo "  $0                   # Test all 10 vectors"
+            echo "  $0 1 3 5             # Test vectors 1, 3, and 5"
+            echo "  $0 --wait-receipt 1  # Test vector 1 and wait for receipt"
+            exit 0
+            ;;
+        *)
+            TX_INDICES+=("$1")
+            shift
+            ;;
+    esac
+done
+
 # Main
 echo "Lumia claimAsset Test Vectors"
 echo "=============================="
 echo "Proxy URL: $PROXY_URL"
+echo "Wait for receipt: $WAIT_RECEIPT"
 echo ""
 
 # Run pre-flight checks first
@@ -222,8 +304,8 @@ echo "  - origin_token: 0xD9343a049D5DBd89CD19DC6BcA8c48fB3a0a42a7 (LUMIA)"
 echo ""
 
 # Check if specific indices were provided
-if [ $# -gt 0 ]; then
-    for arg in "$@"; do
+if [ ${#TX_INDICES[@]} -gt 0 ]; then
+    for arg in "${TX_INDICES[@]}"; do
         idx=$((arg - 1))
         if [ $idx -ge 0 ] && [ $idx -lt 10 ]; then
             send_tx $idx
