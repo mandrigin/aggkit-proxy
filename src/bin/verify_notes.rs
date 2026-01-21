@@ -185,46 +185,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let note_id = NoteId::try_from_hex(&note_id_hex)
             .map_err(|e| format!("Invalid note ID '{}': {:?}", note_id_str, e))?;
 
-        // Try to import/fetch the note from the node
-        println!("Querying node for note...");
-        let note_files = vec![NoteFile::NoteId(note_id)];
-        match client.import_notes(&note_files).await {
-            Ok(imported_ids) => {
-                if imported_ids.is_empty() {
-                    println!("✗ Note not found on node");
-                } else {
-                    println!("✓ Note found on node!");
-                    println!();
+        // First check if note is already in local store
+        let input_notes = client.get_input_notes(NoteFilter::All).await
+            .map_err(|e| format!("Failed to get input notes: {}", e))?;
 
-                    // Try to get the note details from local store now that it's imported
-                    let input_notes = client.get_input_notes(NoteFilter::All).await
-                        .map_err(|e| format!("Failed to get input notes: {}", e))?;
-
-                    for imported_id in &imported_ids {
-                        println!("  Note ID: {}", format_note_id(imported_id));
-                        if let Some(note) = input_notes.iter().find(|n| n.id() == *imported_id) {
-                            println!("  State:   {}", format_note_state(note));
-                            let details = note.details();
-                            let assets = details.assets();
-                            if assets.num_assets() > 0 {
-                                println!("  Assets:  {} asset(s)", assets.num_assets());
-                                for asset in assets.iter() {
-                                    println!("    - {}", format_asset(&asset));
-                                }
-                            } else {
-                                println!("  Assets:  (none)");
-                            }
-                        }
+        if let Some(note) = input_notes.iter().find(|n| n.id() == note_id) {
+            println!("✓ Note found in local store!");
+            println!();
+            println!("  Note ID: {}", format_note_id(&note.id()));
+            println!("  State:   {}", format_note_state(note));
+            let details = note.details();
+            let assets = details.assets();
+            if assets.num_assets() > 0 {
+                println!("  Assets:  {} asset(s)", assets.num_assets());
+                for asset in assets.iter() {
+                    println!("    - {}", format_asset(&asset));
+                }
+            } else {
+                println!("  Assets:  (none)");
+            }
+            println!();
+        } else {
+            // Try to import/fetch the note from the node
+            println!("Note not in local store, querying node...");
+            let note_files = vec![NoteFile::NoteId(note_id)];
+            match client.import_notes(&note_files).await {
+                Ok(imported_ids) => {
+                    if imported_ids.is_empty() {
+                        println!("✗ Note not found on node");
                         println!();
+                        println!("Note: The node only returns public notes. Private notes");
+                        println!("require the full note details to be imported.");
+                    } else {
+                        println!("✓ Note found and imported from node!");
+                        println!();
+
+                        // Refresh the list after import
+                        let input_notes = client.get_input_notes(NoteFilter::All).await
+                            .map_err(|e| format!("Failed to get input notes: {}", e))?;
+
+                        for imported_id in &imported_ids {
+                            println!("  Note ID: {}", format_note_id(imported_id));
+                            if let Some(note) = input_notes.iter().find(|n| n.id() == *imported_id) {
+                                println!("  State:   {}", format_note_state(note));
+                                let details = note.details();
+                                let assets = details.assets();
+                                if assets.num_assets() > 0 {
+                                    println!("  Assets:  {} asset(s)", assets.num_assets());
+                                    for asset in assets.iter() {
+                                        println!("    - {}", format_asset(&asset));
+                                    }
+                                } else {
+                                    println!("  Assets:  (none)");
+                                }
+                            }
+                            println!();
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                println!("✗ Note not found or error fetching:");
-                println!("  {}", e);
-                println!();
-                println!("Note: The node only returns public notes or notes you have");
-                println!("the proper authentication to access.");
+                Err(e) => {
+                    println!("✗ Error fetching note:");
+                    println!("  {}", e);
+                    println!();
+                    println!("Note: The node only returns public notes or notes you have");
+                    println!("the proper authentication to access.");
+                }
             }
         }
 
