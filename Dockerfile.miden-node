@@ -14,9 +14,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
-# Clone miden-node from agglayer-v0.1 branch
+# Clone miden-node from exp-agglayer-v0.2 branch
 # Source: https://github.com/0xMiden/miden-node
-RUN git clone --depth 1 --branch agglayer-v0.1 \
+RUN git clone --depth 1 --branch exp-agglayer-v0.2 \
     https://github.com/0xMiden/miden-node.git .
 
 # Save the miden-node commit SHA for labeling
@@ -49,7 +49,7 @@ COPY config/genesis.toml /app/genesis.toml
 
 # Add label with miden-node source info
 LABEL org.opencontainers.image.source="https://github.com/0xMiden/miden-node" \
-      org.opencontainers.image.ref.name="agglayer-v0.1"
+      org.opencontainers.image.ref.name="exp-agglayer-v0.2"
 
 # gRPC port
 EXPOSE 57291
