@@ -21,8 +21,51 @@ use miden_client::rpc::Endpoint;
 use miden_client::store::NoteFilter;
 use miden_client::Client;
 use miden_client_sqlite_store::SqliteStore;
+use miden_protocol::asset::Asset;
 use miden_protocol::note::NoteId;
 use tracing_subscriber::EnvFilter;
+
+use miden_client::store::InputNoteRecord;
+
+/// Format a NoteId as hex with 0x prefix
+fn format_note_id(id: &NoteId) -> String {
+    // NoteId's Display impl shows hex
+    format!("{}", id)
+}
+
+/// Format an asset in a human-readable format
+fn format_asset(asset: &Asset) -> String {
+    match asset {
+        Asset::Fungible(fungible) => {
+            format!(
+                "Fungible {{ faucet: {}, amount: {} }}",
+                fungible.faucet_id(),
+                fungible.amount()
+            )
+        }
+        Asset::NonFungible(non_fungible) => {
+            format!(
+                "NonFungible {{ faucet_prefix: {:?} }}",
+                non_fungible.faucet_id_prefix()
+            )
+        }
+    }
+}
+
+/// Format note state in a user-friendly way
+fn format_note_state(note: &InputNoteRecord) -> String {
+    let state = note.state();
+    let state_name = format!("{:?}", state);
+    // Extract just the variant name (e.g., "Committed" from "Committed(...)")
+    let variant = state_name.split('(').next().unwrap_or(&state_name);
+
+    // Try to get block number if committed
+    if let Some(proof) = note.inclusion_proof() {
+        format!("{} (block {})", variant, proof.location().block_num().as_u32())
+    } else {
+        variant.to_string()
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -152,29 +195,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     println!("✓ Note found on node!");
                     println!();
-                    for imported_id in &imported_ids {
-                        println!("  Imported Note ID: {}", imported_id);
-                    }
 
                     // Try to get the note details from local store now that it's imported
                     let input_notes = client.get_input_notes(NoteFilter::All).await
                         .map_err(|e| format!("Failed to get input notes: {}", e))?;
 
                     for imported_id in &imported_ids {
+                        println!("  Note ID: {}", format_note_id(imported_id));
                         if let Some(note) = input_notes.iter().find(|n| n.id() == *imported_id) {
-                            println!("  State:  {:?}", note.state());
+                            println!("  State:   {}", format_note_state(note));
                             let details = note.details();
                             let assets = details.assets();
                             if assets.num_assets() > 0 {
-                                println!("  Assets: {} asset(s)", assets.num_assets());
+                                println!("  Assets:  {} asset(s)", assets.num_assets());
                                 for asset in assets.iter() {
-                                    println!("    - {:?}", asset);
+                                    println!("    - {}", format_asset(&asset));
                                 }
+                            } else {
+                                println!("  Assets:  (none)");
                             }
                         }
+                        println!();
                     }
                 }
-                println!();
             }
             Err(e) => {
                 println!("✗ Note not found or error fetching:");
@@ -204,15 +247,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         for (i, note) in input_notes.iter().enumerate() {
             println!("  Note #{}:", i + 1);
-            println!("    ID:     {}", note.id());
-            println!("    State:  {:?}", note.state());
+            println!("    ID:     {}", format_note_id(&note.id()));
+            println!("    State:  {}", format_note_state(note));
             // Try to get assets if available
             let details = note.details();
             let assets = details.assets();
             if assets.num_assets() > 0 {
                 println!("    Assets: {} asset(s)", assets.num_assets());
                 for asset in assets.iter() {
-                    println!("      - {:?}", asset);
+                    println!("      - {}", format_asset(&asset));
                 }
             }
             println!();
@@ -233,13 +276,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         for (i, note) in output_notes.iter().enumerate() {
             println!("  Note #{}:", i + 1);
-            println!("    ID:     {}", note.id());
-            println!("    State:  {:?}", note.state());
+            println!("    ID:     {}", format_note_id(&note.id()));
+            // Output notes have different state representation
+            let state = format!("{:?}", note.state());
+            let state_name = state.split('(').next().unwrap_or(&state);
+            println!("    State:  {}", state_name);
             let assets = note.assets();
             if assets.num_assets() > 0 {
                 println!("    Assets: {} asset(s)", assets.num_assets());
                 for asset in assets.iter() {
-                    println!("      - {:?}", asset);
+                    println!("      - {}", format_asset(&asset));
                 }
             }
             println!();
