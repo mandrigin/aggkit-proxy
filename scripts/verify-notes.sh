@@ -23,6 +23,7 @@ STORE_PATH="${MIDEN_STORE_PATH:-/tmp/verify-notes-store}"
 BUILD_MODE="debug"
 FORCE_BUILD=false
 NOTE_ID=""
+FRESH=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -39,6 +40,10 @@ while [[ $# -gt 0 ]]; do
             NOTE_ID="$2"
             shift 2
             ;;
+        --fresh)
+            FRESH="--fresh"
+            shift
+            ;;
         --build)
             FORCE_BUILD=true
             shift
@@ -54,6 +59,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --rpc-url URL      Miden node RPC URL (default: http://localhost:57291)"
             echo "  --store-path PATH  Client store path (default: /tmp/verify-notes-store)"
             echo "  --note-id ID       Query a specific note by ID from the node"
+            echo "  --fresh            Clear local store before querying"
             echo "  --build            Force rebuild of the binary"
             echo "  --release          Build in release mode"
             echo "  --help             Show this help"
@@ -92,8 +98,12 @@ fi
 export MIDEN_RPC_URL="$RPC_URL"
 export MIDEN_STORE_PATH="$STORE_PATH"
 
-if [ -n "$NOTE_ID" ]; then
-    exec "$BINARY" --note-id "$NOTE_ID"
-else
-    exec "$BINARY"
+ARGS=""
+if [ -n "$FRESH" ]; then
+    ARGS="$ARGS --fresh"
 fi
+if [ -n "$NOTE_ID" ]; then
+    ARGS="$ARGS --note-id $NOTE_ID"
+fi
+
+exec "$BINARY" $ARGS

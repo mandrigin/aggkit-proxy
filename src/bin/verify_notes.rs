@@ -80,6 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command-line arguments
     let args: Vec<String> = std::env::args().collect();
     let mut note_id_to_query: Option<String> = None;
+    let mut fresh_store = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -93,11 +94,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
             }
+            "--fresh" => {
+                fresh_store = true;
+                i += 1;
+            }
             "--help" | "-h" => {
                 println!("Usage: verify-notes [OPTIONS]");
                 println!();
                 println!("Options:");
                 println!("  --note-id, -n <ID>  Query a specific note from the node by its ID");
+                println!("  --fresh             Clear local store before querying (fresh start)");
                 println!("  --help, -h          Show this help");
                 println!();
                 println!("Environment variables:");
@@ -127,6 +133,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  RPC URL:    {}", rpc_url);
     println!("  Store Path: {}", store_path.display());
     println!();
+
+    // Clear store if --fresh flag is set
+    if fresh_store && store_path.exists() {
+        println!("Clearing local store (--fresh)...");
+        std::fs::remove_dir_all(&store_path)?;
+    }
 
     // Create store directory if needed
     std::fs::create_dir_all(&store_path)?;

@@ -15,14 +15,15 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 
 # Create dummy src to build dependencies
-RUN mkdir -p src && \
+RUN mkdir -p src src/bin && \
     echo 'fn main() { println!("dummy"); }' > src/main.rs && \
+    echo 'fn main() { println!("dummy"); }' > src/bin/verify_notes.rs && \
     cargo build --release && \
     rm -rf src
 
 # Copy actual source and rebuild
 COPY src ./src
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs src/bin/verify_notes.rs && cargo build --release
 
 # Runtime stage
 FROM debian:bookworm-slim
