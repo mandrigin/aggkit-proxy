@@ -1,7 +1,7 @@
-//! Verify Notes - Query Miden node state
+//! Verify Notes - Query Miden node state and list notes
 //!
-//! This binary connects to a miden-node, syncs state, and shows current block info.
-//! Useful for verifying node connectivity and state.
+//! This binary connects to a miden-node, syncs state, and lists available notes.
+//! Useful for verifying node connectivity and debugging.
 //!
 //! Usage:
 //!   verify-notes
@@ -16,6 +16,7 @@ use std::sync::Arc;
 use miden_client::builder::ClientBuilder;
 use miden_client::keystore::FilesystemKeyStore;
 use miden_client::rpc::Endpoint;
+use miden_client::store::NoteFilter;
 use miden_client::Client;
 use miden_client_sqlite_store::SqliteStore;
 use tracing_subscriber::EnvFilter;
@@ -26,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"))
+                .unwrap_or_else(|_| EnvFilter::new("warn"))
         )
         .init();
 
@@ -82,15 +83,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sync_result = client.sync_state().await
         .map_err(|e| format!("Sync failed: {}", e))?;
 
+    println!("✓ Synced to block {}", sync_result.block_num.as_u32());
     println!();
+
+    // Get input notes (notes we can consume)
+    println!("═══════════════════════════════════════════════════════════════════");
+    println!("                         INPUT NOTES                                ");
+    println!("═══════════════════════════════════════════════════════════════════");
+    println!();
+
+    let input_notes = client.get_input_notes(NoteFilter::All).await
+        .map_err(|e| format!("Failed to get input notes: {}", e))?;
+
+    if input_notes.is_empty() {
+        println!("  (No input notes tracked by this client)");
+    } else {
+        for (i, note) in input_notes.iter().enumerate() {
+            println!("  Note #{}:", i + 1);
+            println!("    ID:     {}", note.id());
+            println!("    State:  {:?}", note.state());
+            // Try to get assets if available
+            let details = note.details();
+            let assets = details.assets();
+            if assets.num_assets() > 0 {
+                println!("    Assets: {} asset(s)", assets.num_assets());
+                for asset in assets.iter() {
+                    println!("      - {:?}", asset);
+                }
+            }
+            println!();
+        }
+    }
+
+    // Get output notes (notes we created)
+    println!("═══════════════════════════════════════════════════════════════════");
+    println!("                         OUTPUT NOTES                               ");
+    println!("═══════════════════════════════════════════════════════════════════");
+    println!();
+
+    let output_notes = client.get_output_notes(NoteFilter::All).await
+        .map_err(|e| format!("Failed to get output notes: {}", e))?;
+
+    if output_notes.is_empty() {
+        println!("  (No output notes created by this client)");
+    } else {
+        for (i, note) in output_notes.iter().enumerate() {
+            println!("  Note #{}:", i + 1);
+            println!("    ID:     {}", note.id());
+            println!("    State:  {:?}", note.state());
+            let assets = note.assets();
+            if assets.num_assets() > 0 {
+                println!("    Assets: {} asset(s)", assets.num_assets());
+                for asset in assets.iter() {
+                    println!("      - {:?}", asset);
+                }
+            }
+            println!();
+        }
+    }
+
+    // Summary
     println!("═══════════════════════════════════════════════════════════════════");
     println!("                           SUMMARY                                  ");
     println!("═══════════════════════════════════════════════════════════════════");
     println!();
-    println!("  Node:            Connected ({})", rpc_url);
-    println!("  Block Height:    {}", sync_result.block_num.as_u32());
+    println!("  Node:         Connected ({})", rpc_url);
+    println!("  Block Height: {}", sync_result.block_num.as_u32());
+    println!("  Input Notes:  {}", input_notes.len());
+    println!("  Output Notes: {}", output_notes.len());
     println!();
-    println!("✓ Node verification complete");
+    println!("✓ Verification complete");
     println!();
 
     Ok(())
