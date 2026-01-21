@@ -1,5 +1,3 @@
-version: "3.8"
-
 # Minimal local testing setup - just miden-node and proxy
 # No external dependencies (postgres, bridge-service, l1-anvil)
 

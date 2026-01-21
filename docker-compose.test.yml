@@ -1,5 +1,3 @@
-version: "3.8"
-
 # Test-focused compose file - runs tests then exits
 services:
   postgres:
