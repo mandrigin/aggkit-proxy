@@ -507,7 +507,8 @@ EOF
             if [ -f /etc/zkevm/bridge-config.toml ]; then
                 cp /etc/zkevm/bridge-config.toml /etc/zkevm/bridge-config.toml.bak
                 # Replace L2URLs array to use forwarder
-                sed -i 's|L2URLs = \\[\"http://op-el-1-op-geth-op-node-001:8545\"\\]|L2URLs = [\"http://miden-l2-forwarder:8545\"]|g' /etc/zkevm/bridge-config.toml
+                # Match any op-el-N-op-geth pattern (could be op-el-1 or op-el-2)
+                sed -i 's|L2URLs = \\[\"http://op-el-[0-9]*-op-geth-op-node-001:8545\"\\]|L2URLs = [\"http://miden-l2-forwarder:8545\"]|g' /etc/zkevm/bridge-config.toml
             fi
         " 2>/dev/null || warn "Could not modify zkevm-bridge config"
 
