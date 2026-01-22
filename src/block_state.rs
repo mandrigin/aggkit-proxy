@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 
+/// Genesis timestamp for deterministic block timestamps (Nov 14, 2023 22:13:20 UTC)
+const GENESIS_TIMESTAMP: u64 = 1700000000;
+/// Block time in seconds (matches Ethereum mainnet)
+const BLOCK_TIME: u64 = 12;
+
 /// Synthetic EVM block generated from Miden batch
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyntheticBlock {
@@ -129,7 +134,7 @@ impl BlockState {
     }
 
     /// Ensure a block exists, creating synthetic blocks as needed
-    fn ensure_block_exists(&self, block_num: u64, timestamp: u64) {
+    fn ensure_block_exists(&self, block_num: u64, _timestamp: u64) {
         let mut blocks = self.blocks.write();
         let mut hash_to_number = self.hash_to_number.write();
 
@@ -143,8 +148,8 @@ impl BlockState {
         } else {
             // Ensure parent exists first
             if !blocks.contains_key(&(block_num - 1)) {
-                // Create parent with estimated timestamp
-                let parent_ts = if timestamp > 12 { timestamp - 12 } else { 0 };
+                // Create parent with deterministic timestamp based on block number
+                let parent_ts = GENESIS_TIMESTAMP + (block_num - 1) * BLOCK_TIME;
                 let grandparent_hash = if block_num == 1 {
                     [0u8; 32]
                 } else {
@@ -162,8 +167,9 @@ impl BlockState {
             blocks.get(&(block_num - 1)).map(|b| b.hash).unwrap_or([0u8; 32])
         };
 
-        // Create the block
-        let block = SyntheticBlock::new(block_num, parent_hash, timestamp, [0u8; 32]);
+        // Create the block with deterministic timestamp
+        let block_ts = GENESIS_TIMESTAMP + block_num * BLOCK_TIME;
+        let block = SyntheticBlock::new(block_num, parent_hash, block_ts, [0u8; 32]);
         hash_to_number.insert(block.hash, block_num);
         blocks.insert(block_num, block);
     }
@@ -237,5 +243,36 @@ mod tests {
         let by_hash = state.get_block_by_hash(&block.hash);
         assert!(by_hash.is_some());
         assert_eq!(by_hash.unwrap().number, 50);
+    }
+
+    #[test]
+    fn test_block_hash_deterministic_regardless_of_timestamp() {
+        // This test verifies the fix for the reorg loop bug.
+        // Block hashes must be deterministic based on block number only,
+        // not the timestamp passed to set_current_block.
+        let state1 = BlockState::new();
+        let state2 = BlockState::new();
+
+        // Create block 100 with different timestamps
+        state1.set_current_block(100, 1700000000);
+        state2.set_current_block(100, 1800000000); // Different timestamp
+
+        let block1 = state1.get_block_by_number(100).unwrap();
+        let block2 = state2.get_block_by_number(100).unwrap();
+
+        // Hashes must be identical despite different input timestamps
+        assert_eq!(
+            block1.hash, block2.hash,
+            "Block hashes must be deterministic from block number, not call timestamp"
+        );
+
+        // Timestamps should also be deterministic
+        assert_eq!(
+            block1.timestamp, block2.timestamp,
+            "Block timestamps must be deterministic from block number"
+        );
+
+        // Verify the expected deterministic timestamp
+        assert_eq!(block1.timestamp, GENESIS_TIMESTAMP + 100 * BLOCK_TIME);
     }
 }
