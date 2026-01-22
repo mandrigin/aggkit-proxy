@@ -17,6 +17,7 @@
 #   --skip-cdk           Skip kurtosis-cdk deployment
 #   --skip-miden         Skip Miden node/proxy startup
 #   --skip-deposit       Skip test deposit
+#   --rebuild            Force rebuild of proxy image (use after code changes)
 #   --help               Show this help
 
 set -euo pipefail
@@ -36,6 +37,7 @@ DEPLOY_FRESH=false
 SKIP_CDK=false
 SKIP_MIDEN=false
 SKIP_DEPOSIT=false
+REBUILD_IMAGES=false
 
 # Miden configuration
 MIDEN_PROXY_PORT=8123
@@ -72,6 +74,7 @@ while [[ $# -gt 0 ]]; do
         --skip-cdk) SKIP_CDK=true; shift ;;
         --skip-miden) SKIP_MIDEN=true; shift ;;
         --skip-deposit) SKIP_DEPOSIT=true; shift ;;
+        --rebuild) REBUILD_IMAGES=true; shift ;;
         --help) head -20 "$0" | tail -15; exit 0 ;;
         *) fail "Unknown option: $1" ;;
     esac
@@ -155,37 +158,38 @@ start_miden_services() {
     kurtosis_network=$(get_kurtosis_network)
 
     if [[ -z "$kurtosis_network" ]]; then
-        warn "Could not find kurtosis network, using bridge"
-        kurtosis_network="bridge"
+        fail "Could not find kurtosis network for enclave '$ENCLAVE_NAME'. Is the enclave running?"
     fi
     log "Kurtosis network: $kurtosis_network"
 
     # Stop existing containers
-    docker rm -f miden-node-kurtosis miden-proxy-kurtosis 2>/dev/null || true
+    log "Cleaning up existing miden containers..."
+    docker rm -f miden-node-kurtosis miden-proxy-kurtosis miden-l2-forwarder 2>/dev/null || true
+
+    # Check if miden-node image exists
+    if ! docker image inspect miden-node:agglayer-v0.1 &>/dev/null; then
+        fail "miden-node:agglayer-v0.1 image not found. Build it first with: docker build -t miden-node:agglayer-v0.1 -f Dockerfile.miden-node ."
+    fi
 
     # Start Miden node
     log "Starting Miden node..."
-    docker run -d \
+    if ! docker run -d \
         --name miden-node-kurtosis \
         --network "$kurtosis_network" \
         -p "${MIDEN_NODE_PORT}:57291" \
-        --health-cmd="nc -z localhost 57291 || exit 1" \
-        --health-interval=10s \
-        --health-timeout=5s \
-        --health-retries=10 \
-        miden-node:agglayer-v0.1 2>/dev/null || {
-        # Try to build if image doesn't exist
-        log "Building Miden node image..."
-        docker build -t miden-node:agglayer-v0.1 -f "$PROJECT_DIR/Dockerfile.miden-node" "$PROJECT_DIR"
-        docker run -d \
-            --name miden-node-kurtosis \
-            --network "$kurtosis_network" \
-            -p "${MIDEN_NODE_PORT}:57291" \
-            miden-node:agglayer-v0.1
-    }
+        miden-node:agglayer-v0.1; then
+        fail "Failed to start miden-node-kurtosis container"
+    fi
 
-    # Wait for node
-    log "Waiting for Miden node to be ready..."
+    # Verify container is running
+    if ! docker ps --filter "name=miden-node-kurtosis" --format "{{.Names}}" | grep -q "miden-node-kurtosis"; then
+        docker logs miden-node-kurtosis 2>&1 || true
+        fail "miden-node-kurtosis container is not running"
+    fi
+    success "Miden node container started"
+
+    # Wait for node to be ready
+    log "Waiting for Miden node to be ready (up to 60s)..."
     local attempts=0
     while [[ $attempts -lt 30 ]]; do
         if docker exec miden-node-kurtosis nc -z localhost 57291 2>/dev/null; then
@@ -196,15 +200,25 @@ start_miden_services() {
         sleep 2
     done
 
-    # Build and start proxy
-    log "Building and starting Miden proxy..."
+    if [[ $attempts -ge 30 ]]; then
+        warn "Miden node may not be ready yet - continuing anyway"
+        docker logs miden-node-kurtosis --tail 20 2>&1 || true
+    fi
 
-    # Build proxy image
-    docker build -t miden-rpc-proxy:kurtosis -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR" 2>&1 | tail -5
+    # Build proxy image if needed or --rebuild flag is set
+    if $REBUILD_IMAGES || ! docker image inspect miden-rpc-proxy:kurtosis &>/dev/null; then
+        log "Building miden-rpc-proxy:kurtosis image..."
+        if ! docker build -t miden-rpc-proxy:kurtosis -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR"; then
+            fail "Failed to build miden-rpc-proxy image"
+        fi
+        success "Proxy image built"
+    else
+        log "Using existing miden-rpc-proxy:kurtosis image (use --rebuild to force)"
+    fi
 
-    # Run proxy with environment variables (proxy reads config from env vars)
-    # CHAIN_ID=2 is the Miden network ID for agglayer bridge
-    docker run -d \
+    # Start proxy
+    log "Starting Miden proxy (CHAIN_ID=$MIDEN_NETWORK_ID)..."
+    if ! docker run -d \
         --name miden-proxy-kurtosis \
         --network "$kurtosis_network" \
         -p "${MIDEN_PROXY_PORT}:8546" \
@@ -212,19 +226,33 @@ start_miden_services() {
         -e MIDEN_RPC_URL="http://miden-node-kurtosis:57291" \
         -e MIDEN_STORE_PATH="/app/data/miden-client" \
         -e LISTEN_PORT=8546 \
-        miden-rpc-proxy:kurtosis
+        miden-rpc-proxy:kurtosis; then
+        fail "Failed to start miden-proxy-kurtosis container"
+    fi
 
-    # Wait for proxy
+    # Verify container is running
+    if ! docker ps --filter "name=miden-proxy-kurtosis" --format "{{.Names}}" | grep -q "miden-proxy-kurtosis"; then
+        docker logs miden-proxy-kurtosis 2>&1 || true
+        fail "miden-proxy-kurtosis container is not running"
+    fi
+    success "Miden proxy container started"
+
+    # Wait for proxy to be ready
     log "Waiting for Miden proxy to be ready..."
     attempts=0
     while [[ $attempts -lt 30 ]]; do
         if curl -s "http://localhost:${MIDEN_PROXY_PORT}" &>/dev/null; then
-            success "Miden proxy ready"
+            success "Miden proxy ready on port ${MIDEN_PROXY_PORT}"
             break
         fi
         ((attempts++))
         sleep 2
     done
+
+    if [[ $attempts -ge 30 ]]; then
+        warn "Miden proxy may not be ready yet"
+        docker logs miden-proxy-kurtosis --tail 20 2>&1 || true
+    fi
 
     # Get container IPs for kurtosis network (specifically from kt-* network)
     MIDEN_NODE_IP=$(docker inspect -f "{{range \$k, \$v := .NetworkSettings.Networks}}{{if eq (printf \"%.3s\" \$k) \"kt-\"}}{{\$v.IPAddress}}{{end}}{{end}}" miden-node-kurtosis 2>/dev/null || echo "")
@@ -238,11 +266,20 @@ start_miden_services() {
         MIDEN_PROXY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' miden-proxy-kurtosis 2>/dev/null | head -c 15)
     fi
 
+    if [[ -z "$MIDEN_PROXY_IP" ]]; then
+        fail "Could not determine Miden proxy IP address"
+    fi
+
     log "Miden node IP:  ${MIDEN_NODE_IP:-NOT FOUND}"
-    log "Miden proxy IP: ${MIDEN_PROXY_IP:-NOT FOUND}"
+    log "Miden proxy IP: ${MIDEN_PROXY_IP}"
 
     # Store for later use
     echo "$MIDEN_PROXY_IP" > /tmp/miden-proxy-ip
+
+    # Final verification - show all miden containers
+    echo ""
+    log "Miden containers running:"
+    docker ps --filter "name=miden" --format "  {{.Names}}: {{.Status}}" || true
 }
 
 #######################################
@@ -260,41 +297,130 @@ reconfigure_bridge_service() {
         return
     fi
 
+    local kurtosis_network
+    kurtosis_network=$(get_kurtosis_network)
+
     # Proxy listens on 8546 inside the container
     local internal_port=8546
     log "Miden proxy accessible at: http://${proxy_ip}:${internal_port}"
 
-    # The bridge service config uses L2URLs to sync L2 events
-    # We need to either:
-    # 1. Add Miden as an additional L2
-    # 2. Or replace the existing L2
+    # Step 1: Create nginx forwarder to route bridge traffic to Miden proxy
+    # The bridge expects to connect to op-geth on 8545, but we redirect to Miden proxy on 8546
+    log "Creating nginx TCP forwarder (miden-l2-forwarder)..."
 
-    # For now, let's verify the proxy is accessible from kurtosis network
-    log "Testing proxy accessibility from kurtosis network..."
+    docker rm -f miden-l2-forwarder 2>/dev/null || true
 
-    local test_result
-    test_result=$(kurtosis service exec "$ENCLAVE_NAME" contracts-001 \
-        "curl -s -X POST http://${proxy_ip}:${internal_port} -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}'" 2>&1 || echo "")
+    # Create nginx config for TCP stream proxy
+    local nginx_conf="/tmp/miden-nginx-stream.conf"
+    cat > "$nginx_conf" << EOF
+events {
+    worker_connections 1024;
+}
+stream {
+    upstream miden_proxy {
+        server ${proxy_ip}:${internal_port};
+    }
+    server {
+        listen 8545;
+        proxy_pass miden_proxy;
+    }
+}
+EOF
 
-    if echo "$test_result" | grep -q '"result"'; then
-        success "Proxy accessible from kurtosis network!"
-        local chain_id
-        chain_id=$(echo "$test_result" | grep -oP '"result"\s*:\s*"\K[^"]+' || echo "unknown")
-        log "Chain ID: $chain_id"
+    docker run -d \
+        --name miden-l2-forwarder \
+        --network "$kurtosis_network" \
+        -v "$nginx_conf:/etc/nginx/nginx.conf:ro" \
+        nginx:alpine 2>/dev/null || {
+        fail "Failed to start nginx forwarder"
+    }
+
+    # Wait for forwarder to be ready
+    sleep 2
+    success "Nginx forwarder started"
+
+    # Get forwarder IP
+    local forwarder_ip
+    forwarder_ip=$(docker inspect -f "{{range \$k, \$v := .NetworkSettings.Networks}}{{if eq (printf \"%.3s\" \$k) \"kt-\"}}{{\$v.IPAddress}}{{end}}{{end}}" miden-l2-forwarder 2>/dev/null || echo "")
+    if [[ -z "$forwarder_ip" ]]; then
+        forwarder_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' miden-l2-forwarder 2>/dev/null | head -c 15)
+    fi
+    log "Forwarder IP: $forwarder_ip"
+
+    # Step 2: Find the aggkit bridge container
+    log "Finding aggkit bridge container..."
+    local bridge_container
+    bridge_container=$(docker ps --filter "name=aggkit.*bridge" --format "{{.Names}}" | head -1)
+
+    if [[ -z "$bridge_container" ]]; then
+        warn "aggkit bridge container not found, skipping reconfiguration"
+        return
+    fi
+    log "Bridge container: $bridge_container"
+
+    # Step 3: Modify bridge config to use miden-l2-forwarder
+    log "Modifying bridge config to use Miden proxy..."
+
+    # Update L2URL in the config
+    docker exec "$bridge_container" sh -c "
+        if [ -f /etc/aggkit/config.toml ]; then
+            # Backup original
+            cp /etc/aggkit/config.toml /etc/aggkit/config.toml.bak
+            # Replace op-geth L2URL with our forwarder
+            sed -i 's|L2URL = \"http://op-el-1-op-geth-op-node-001:8545\"|L2URL = \"http://miden-l2-forwarder:8545\"|g' /etc/aggkit/config.toml
+            # Also update any RPCURL pointing to op-geth
+            sed -i 's|RPCURL = \"http://op-el-1-op-geth-op-node-001:8545\"|RPCURL = \"http://miden-l2-forwarder:8545\"|g' /etc/aggkit/config.toml
+        fi
+    " 2>/dev/null || warn "Could not modify bridge config"
+
+    # Verify change
+    local l2url
+    l2url=$(docker exec "$bridge_container" grep "^L2URL" /etc/aggkit/config.toml 2>/dev/null | head -1 || echo "")
+    log "L2URL now: $l2url"
+
+    # Step 4: Clear L2 database files (they have stale chain ID from op-geth)
+    log "Clearing L2 database files (stale chain ID)..."
+    docker exec "$bridge_container" rm -f /tmp/bridgel2sync.sqlite* /tmp/l2gersync.sqlite* /tmp/reorgdetectorl2.sqlite* 2>/dev/null || true
+    success "L2 database files cleared"
+
+    # Step 5: Restart bridge to pick up new config
+    log "Restarting bridge container..."
+    docker restart "$bridge_container" 2>/dev/null
+    sleep 3
+    success "Bridge container restarted"
+
+    # Step 6: Verify bridge is connecting to proxy
+    log "Verifying bridge connection to Miden proxy..."
+    sleep 5  # Give bridge time to start
+
+    local bridge_logs
+    bridge_logs=$(docker logs "$bridge_container" --tail 20 2>&1 || echo "")
+
+    if echo "$bridge_logs" | grep -qi "error\|fail"; then
+        if echo "$bridge_logs" | grep -qi "chain ID mismatch"; then
+            warn "Chain ID mismatch detected - L2 databases may need clearing"
+        else
+            warn "Bridge may have errors - check logs: docker logs $bridge_container"
+        fi
     else
-        warn "Proxy may not be accessible from kurtosis network"
-        echo "$test_result"
+        success "Bridge appears to be running"
     fi
 
-    # Note: Full bridge reconfiguration would require restarting the bridge service
-    # with modified config. For testing, we can verify the proxy works independently.
+    # Test that forwarder routes to proxy correctly
+    log "Testing forwarder routes traffic to proxy..."
+    local test_result
+    test_result=$(docker exec "$bridge_container" \
+        curl -s -X POST "http://miden-l2-forwarder:8545" \
+        -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' 2>&1 || echo "")
 
-    echo ""
-    log "Bridge service L2 reconfiguration:"
-    echo "  To fully integrate, modify bridge config L2URLs to:"
-    echo "  L2URLs = [\"http://${proxy_ip}:8546\"]"
-    echo ""
-    echo "  Or add Miden as network ID $MIDEN_NETWORK_ID"
+    if echo "$test_result" | grep -q '"result"'; then
+        local chain_id
+        chain_id=$(echo "$test_result" | jq -r '.result // "unknown"' 2>/dev/null || echo "unknown")
+        success "Forwarder working! Chain ID: $chain_id"
+    else
+        warn "Forwarder may not be routing correctly"
+    fi
 }
 
 #######################################
