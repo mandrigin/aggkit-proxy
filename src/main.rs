@@ -14,8 +14,8 @@ use std::path::PathBuf;
 // Import library modules for claim processing (P2ID mint approach)
 use miden_rpc_proxy::{
     create_and_deploy_agglayer_faucet, decode_transaction, init_client, is_claim_asset,
-    parse_claim_asset, submit_transaction, AddressMapper, AddressMapperConfig, ClaimTracker,
-    ClientError, EthAddress, MidenClientConfig, CLAIM_ASSET_SELECTOR,
+    parse_claim_asset, submit_transaction, AddressMapper, AddressMapperConfig, ClaimEventParams,
+    ClaimTracker, ClientError, EthAddress, LogStore, MidenClientConfig, CLAIM_ASSET_SELECTOR,
 };
 
 use alloy_primitives::{Address, Bytes};
@@ -72,11 +72,13 @@ pub struct BridgeState {
     claim_tracker: ClaimTracker,
     /// Address mapper for Eth -> Miden address resolution (wrapped in Mutex for Sync)
     address_mapper: parking_lot::Mutex<AddressMapper>,
+    /// Log store for synthesized event logs (ClaimEvent, etc.)
+    log_store: LogStore,
 }
 
 impl BridgeState {
     pub fn new() -> Self {
-        info!("Initializing BridgeState with in-memory claim tracker and address mapper");
+        info!("Initializing BridgeState with in-memory claim tracker, address mapper, and log store");
 
         let claim_tracker = ClaimTracker::in_memory();
         info!("ClaimTracker initialized (in-memory mode)");
@@ -85,12 +87,16 @@ impl BridgeState {
             AddressMapper::in_memory(AddressMapperConfig::default()).expect("Failed to init AddressMapper");
         info!("AddressMapper initialized (in-memory mode)");
 
+        let log_store = LogStore::new();
+        info!("LogStore initialized (in-memory mode)");
+
         Self {
             nonces: RwLock::new(HashMap::new()),
             transactions: RwLock::new(HashMap::new()),
             block_height: RwLock::new(0),
             claim_tracker,
             address_mapper: parking_lot::Mutex::new(address_mapper),
+            log_store,
         }
     }
 
@@ -1071,6 +1077,22 @@ impl EthApiServer for EthApiImpl {
                     self.state.record_tx(
                         tx_hash.clone(),
                         TxStatus::Confirmed { block_number: block_num },
+                    );
+
+                    // Add ClaimEvent log for eth_getLogs queries
+                    self.state.log_store.add_claim_event(ClaimEventParams {
+                        global_index: claim_params.global_index_raw,
+                        origin_network: claim_params.origin_network,
+                        origin_token_address: claim_params.origin_token_address,
+                        destination_address: claim_params.destination_address,
+                        amount: claim_params.amount,
+                        transaction_hash: tx_hash.clone(),
+                        block_number: block_num,
+                    });
+                    info!(
+                        tx_hash = %tx_hash,
+                        block_num = block_num,
+                        "ClaimEvent log synthesized"
                     );
                 }
                 Err(e) => {

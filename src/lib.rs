@@ -12,6 +12,7 @@ pub mod client;
 pub mod config;
 pub mod decode;
 pub mod error;
+pub mod log_synthesis;
 pub mod receipt;
 pub mod storage;
 pub mod types;
@@ -32,6 +33,7 @@ pub use receipt::{
 };
 pub use storage::{AddressMapping, MappingStorage};
 pub use types::ClaimAssetParams;
+pub use log_synthesis::{ClaimEventParams, LogStore, SynthesizedLog};
 
 // Re-export client module types
 // Uses miden-agglayer's create_claim_note() for CLAIM note creation with SMT proof validation.
