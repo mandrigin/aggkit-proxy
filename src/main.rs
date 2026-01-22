@@ -14,8 +14,9 @@ use std::path::PathBuf;
 // Import library modules for claim processing (P2ID mint approach)
 use miden_rpc_proxy::{
     create_and_deploy_agglayer_faucet, decode_transaction, get_bridge_address, init_client,
-    is_claim_asset, parse_claim_asset, submit_transaction, AddressMapper, AddressMapperConfig,
-    ClaimTracker, ClientError, EthAddress, MidenClientConfig, CLAIM_ASSET_SELECTOR,
+    is_claim_asset, lookup_asset, parse_claim_asset, submit_transaction, AddressMapper,
+    AddressMapperConfig, ClaimTracker, ClientError, EthAddress, MidenClientConfig,
+    CLAIM_ASSET_SELECTOR,
 };
 
 // New modules for kurtosis-cdk integration
@@ -765,6 +766,11 @@ async fn submit_claim_to_miden(
             info!("    - Rollup exit root: {}", hex::encode(&claim_data.rollup_exit_root));
             info!("    - Origin network: {}", claim_data.origin_network);
             info!("    - Origin token: {}", hex::encode(&claim_data.origin_token_address));
+
+            // Look up the asset based on origin network/token
+            let asset_lookup = lookup_asset(claim_data.origin_network, &claim_data.origin_token_address);
+            info!("    - Asset symbol: {} (known: {})", asset_lookup.symbol, asset_lookup.is_known);
+
             info!("    - Destination network: {}", claim_data.destination_network);
             info!("    - Destination address: {}", hex::encode(&claim_data.destination_address));
             info!("    - Creator account: {}", submitter_account_id);
