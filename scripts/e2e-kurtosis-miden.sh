@@ -200,37 +200,17 @@ start_miden_services() {
     log "Building and starting Miden proxy..."
 
     # Build proxy image
-    docker build -t miden-proxy:latest -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR" 2>&1 | tail -5
+    docker build -t miden-rpc-proxy:kurtosis -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR" 2>&1 | tail -5
 
-    # Create config for kurtosis integration
-    local config_dir="/tmp/miden-proxy-kurtosis"
-    mkdir -p "$config_dir"
-
-    cat > "$config_dir/config.toml" << EOF
-[server]
-http_port = 8123
-http_host = "0.0.0.0"
-
-[miden]
-rpc_url = "http://miden-node-kurtosis:57291"
-network_id = $MIDEN_NETWORK_ID
-chain_id = "0x4d494445"
-
-[logging]
-level = "info"
-EOF
-
+    # Run proxy with environment variables (proxy reads config from env vars)
     docker run -d \
         --name miden-proxy-kurtosis \
         --network "$kurtosis_network" \
-        -p "${MIDEN_PROXY_PORT}:8123" \
-        -v "$config_dir/config.toml:/app/config.toml:ro" \
-        --health-cmd="curl -sf http://localhost:8123/ || exit 1" \
-        --health-interval=5s \
-        --health-timeout=3s \
-        --health-retries=10 \
-        miden-proxy:latest \
-        --config /app/config.toml
+        -p "${MIDEN_PROXY_PORT}:8546" \
+        -e MIDEN_RPC_URL="http://miden-node-kurtosis:57291" \
+        -e MIDEN_STORE_PATH="/app/data/miden-client" \
+        -e LISTEN_PORT=8546 \
+        miden-rpc-proxy:kurtosis
 
     # Wait for proxy
     log "Waiting for Miden proxy to be ready..."
@@ -244,12 +224,20 @@ EOF
         sleep 2
     done
 
-    # Get container IPs for kurtosis network
-    MIDEN_NODE_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' miden-node-kurtosis | head -1)
-    MIDEN_PROXY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' miden-proxy-kurtosis | head -1)
+    # Get container IPs for kurtosis network (specifically from kt-* network)
+    MIDEN_NODE_IP=$(docker inspect -f "{{range \$k, \$v := .NetworkSettings.Networks}}{{if eq (printf \"%.3s\" \$k) \"kt-\"}}{{\$v.IPAddress}}{{end}}{{end}}" miden-node-kurtosis 2>/dev/null || echo "")
+    MIDEN_PROXY_IP=$(docker inspect -f "{{range \$k, \$v := .NetworkSettings.Networks}}{{if eq (printf \"%.3s\" \$k) \"kt-\"}}{{\$v.IPAddress}}{{end}}{{end}}" miden-proxy-kurtosis 2>/dev/null || echo "")
 
-    log "Miden node IP:  $MIDEN_NODE_IP"
-    log "Miden proxy IP: $MIDEN_PROXY_IP"
+    # Fallback to any IP if kt- network not found
+    if [[ -z "$MIDEN_NODE_IP" ]]; then
+        MIDEN_NODE_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' miden-node-kurtosis 2>/dev/null | head -c 15)
+    fi
+    if [[ -z "$MIDEN_PROXY_IP" ]]; then
+        MIDEN_PROXY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' miden-proxy-kurtosis 2>/dev/null | head -c 15)
+    fi
+
+    log "Miden node IP:  ${MIDEN_NODE_IP:-NOT FOUND}"
+    log "Miden proxy IP: ${MIDEN_PROXY_IP:-NOT FOUND}"
 
     # Store for later use
     echo "$MIDEN_PROXY_IP" > /tmp/miden-proxy-ip
@@ -270,7 +258,9 @@ reconfigure_bridge_service() {
         return
     fi
 
-    log "Miden proxy accessible at: http://${proxy_ip}:8123"
+    # Proxy listens on 8546 inside the container
+    local internal_port=8546
+    log "Miden proxy accessible at: http://${proxy_ip}:${internal_port}"
 
     # The bridge service config uses L2URLs to sync L2 events
     # We need to either:
@@ -282,7 +272,7 @@ reconfigure_bridge_service() {
 
     local test_result
     test_result=$(kurtosis service exec "$ENCLAVE_NAME" contracts-001 \
-        "curl -s -X POST http://${proxy_ip}:8123 -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}'" 2>&1 || echo "")
+        "curl -s -X POST http://${proxy_ip}:${internal_port} -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}'" 2>&1 || echo "")
 
     if echo "$test_result" | grep -q '"result"'; then
         success "Proxy accessible from kurtosis network!"
@@ -300,7 +290,7 @@ reconfigure_bridge_service() {
     echo ""
     log "Bridge service L2 reconfiguration:"
     echo "  To fully integrate, modify bridge config L2URLs to:"
-    echo "  L2URLs = [\"http://${proxy_ip}:8123\"]"
+    echo "  L2URLs = [\"http://${proxy_ip}:8546\"]"
     echo ""
     echo "  Or add Miden as network ID $MIDEN_NETWORK_ID"
 }
