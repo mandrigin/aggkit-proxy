@@ -53,9 +53,18 @@ BRIDGE_SERVICE="zkevm-bridge-service"
 LOCAL_PROXY_PORT="${LOCAL_PROXY_PORT:-8546}"
 LOCAL_MIDEN_NODE_PORT="${LOCAL_MIDEN_NODE_PORT:-57291}"
 
-# Pre-funded account (anvil/hardhat default account 0)
-FUNDED_PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-FUNDED_ADDRESS="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+# Pre-funded accounts (will auto-detect which has balance)
+# Kurtosis-CDK deployer account (primary)
+KURTOSIS_PRIVATE_KEY="0x12d7de8621a77640c9241b2595ba78ce443d05e94090365ab3bb5e19df82c625"
+KURTOSIS_ADDRESS="0xE34aaF64b29273B7D567FCFc40544c014EEe9970"
+
+# Anvil/Hardhat default account (fallback)
+ANVIL_PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+ANVIL_ADDRESS="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+
+# Will be set by auto-detection
+FUNDED_PRIVATE_KEY=""
+FUNDED_ADDRESS=""
 
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -523,16 +532,33 @@ get_kurtosis_deployment_info() {
     fi
     log "Bridge Address: $BRIDGE_ADDRESS"
 
-    # Check funded account balance
-    log "Checking funded account balance..."
-    local balance
-    balance=$(cast balance "$FUNDED_ADDRESS" --rpc-url "$L1_RPC" 2>/dev/null || echo "0")
-    local balance_eth
-    balance_eth=$(echo "scale=4; $balance / 1000000000000000000" | bc 2>/dev/null || echo "?")
-    log "Funded account balance: $balance_eth ETH"
+    # Auto-detect funded account
+    log "Auto-detecting funded account..."
 
-    if [[ "$balance" == "0" ]]; then
-        warn "Funded account has zero balance - deposit may fail"
+    # Try kurtosis-cdk deployer account first
+    local kurtosis_balance
+    kurtosis_balance=$(cast balance "$KURTOSIS_ADDRESS" --rpc-url "$L1_RPC" 2>/dev/null || echo "0")
+
+    if [[ "$kurtosis_balance" != "0" ]]; then
+        FUNDED_ADDRESS="$KURTOSIS_ADDRESS"
+        FUNDED_PRIVATE_KEY="$KURTOSIS_PRIVATE_KEY"
+        local balance_eth
+        balance_eth=$(echo "scale=2; $kurtosis_balance / 1000000000000000000" | bc 2>/dev/null || echo "?")
+        success "Using kurtosis-cdk deployer account: $FUNDED_ADDRESS ($balance_eth ETH)"
+    else
+        # Try anvil default account
+        local anvil_balance
+        anvil_balance=$(cast balance "$ANVIL_ADDRESS" --rpc-url "$L1_RPC" 2>/dev/null || echo "0")
+
+        if [[ "$anvil_balance" != "0" ]]; then
+            FUNDED_ADDRESS="$ANVIL_ADDRESS"
+            FUNDED_PRIVATE_KEY="$ANVIL_PRIVATE_KEY"
+            local balance_eth
+            balance_eth=$(echo "scale=2; $anvil_balance / 1000000000000000000" | bc 2>/dev/null || echo "?")
+            success "Using anvil default account: $FUNDED_ADDRESS ($balance_eth ETH)"
+        else
+            fail "No funded account found! Both kurtosis-cdk and anvil accounts have zero balance."
+        fi
     fi
 }
 
