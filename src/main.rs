@@ -1352,7 +1352,7 @@ impl EthApiServer for EthApiImpl {
         // Function selectors for common bridge queries:
         // 0x0e2fcb97 - lastUpdatedDepositCount() -> uint256
         // 0xc7bf8c9d - depositCount() -> uint256
-        // 0x8381f58a - networkID() -> uint32
+        // 0xbab161bf - networkID() -> uint32
         // 0x318aee3d - getTokenWrappedAddress(uint32,address) -> address
         // 0x647c576c - polygonBridgeAddress() -> address
         // 0x081e8e17 - globalExitRootManager() -> address
@@ -1367,7 +1367,7 @@ impl EthApiServer for EthApiImpl {
                     "0x0000000000000000000000000000000000000000000000000000000000000000"
                 }
                 // networkID() -> return Miden network ID (2)
-                "0x8381f58a" => {
+                "0xbab161bf" => {
                     debug!(selector = %selector, "eth_call: Returning network ID 2");
                     "0x0000000000000000000000000000000000000000000000000000000000000002"
                 }
