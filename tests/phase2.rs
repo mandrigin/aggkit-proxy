@@ -169,9 +169,9 @@ mod tc_2_2_claim_redemption {
 
         let notes = client.get_consumable_notes(Some(redeemer.id())).await.unwrap();
         if !notes.is_empty() {
-            let ids: Vec<_> = notes.iter().map(|(n, _)| n.id()).collect();
+            let notes_to_consume: Vec<_> = notes.into_iter().map(|(n, _)| n).collect();
             let consume_request = TransactionRequestBuilder::new()
-                .build_consume_notes(ids)
+                .build_consume_notes(notes_to_consume)
                 .unwrap();
             let result = client.submit_new_transaction(redeemer.id(), consume_request).await;
             assert!(result.is_ok(), "CLAIM redemption should succeed");
@@ -202,8 +202,9 @@ mod tc_2_2_claim_redemption {
         let notes = client.get_consumable_notes(Some(redeemer.id())).await.unwrap();
         if !notes.is_empty() {
             let ids: Vec<_> = notes.iter().map(|(n, _)| n.id()).collect();
+            let notes_to_consume: Vec<_> = notes.into_iter().map(|(n, _)| n).collect();
             let consume_request = TransactionRequestBuilder::new()
-                .build_consume_notes(ids.clone())
+                .build_consume_notes(notes_to_consume)
                 .unwrap();
             client.submit_new_transaction(redeemer.id(), consume_request).await.unwrap();
 

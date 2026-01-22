@@ -173,9 +173,9 @@ mod tc_3_2_transfer_flow {
         // Alice consumes mint note
         let alice_notes = client.get_consumable_notes(Some(alice.id())).await.unwrap();
         if !alice_notes.is_empty() {
-            let ids: Vec<_> = alice_notes.iter().map(|(n, _)| n.id()).collect();
+            let notes_to_consume: Vec<_> = alice_notes.into_iter().map(|(n, _)| n).collect();
             let consume_request = TransactionRequestBuilder::new()
-                .build_consume_notes(ids)
+                .build_consume_notes(notes_to_consume)
                 .unwrap();
             client.submit_new_transaction(alice.id(), consume_request).await.unwrap();
         }
@@ -226,9 +226,9 @@ mod tc_3_3_withdrawal_flow {
 
         let notes = client.get_consumable_notes(Some(user.id())).await.unwrap();
         if !notes.is_empty() {
-            let ids: Vec<_> = notes.iter().map(|(n, _)| n.id()).collect();
+            let notes_to_consume: Vec<_> = notes.into_iter().map(|(n, _)| n).collect();
             let consume_request = TransactionRequestBuilder::new()
-                .build_consume_notes(ids)
+                .build_consume_notes(notes_to_consume)
                 .unwrap();
             let result = client.submit_new_transaction(user.id(), consume_request).await;
             assert!(result.is_ok(), "Should be able to consume for withdrawal prep");
@@ -450,9 +450,9 @@ mod tc_3_9_full_cycle {
         // Step 2: Alice consumes deposit
         let alice_notes = client.get_consumable_notes(Some(alice.id())).await.unwrap();
         if !alice_notes.is_empty() {
-            let ids: Vec<_> = alice_notes.iter().map(|(n, _)| n.id()).collect();
+            let notes_to_consume: Vec<_> = alice_notes.into_iter().map(|(n, _)| n).collect();
             let consume_request = TransactionRequestBuilder::new()
-                .build_consume_notes(ids)
+                .build_consume_notes(notes_to_consume)
                 .unwrap();
             client.submit_new_transaction(alice.id(), consume_request).await
                 .expect("Alice consume");
@@ -476,9 +476,9 @@ mod tc_3_9_full_cycle {
         // Step 4: Bob consumes transfer
         let bob_notes = client.get_consumable_notes(Some(bob.id())).await.unwrap();
         if !bob_notes.is_empty() {
-            let ids: Vec<_> = bob_notes.iter().map(|(n, _)| n.id()).collect();
+            let notes_to_consume: Vec<_> = bob_notes.into_iter().map(|(n, _)| n).collect();
             let consume_request = TransactionRequestBuilder::new()
-                .build_consume_notes(ids)
+                .build_consume_notes(notes_to_consume)
                 .unwrap();
             client.submit_new_transaction(bob.id(), consume_request).await
                 .expect("Bob consume");
