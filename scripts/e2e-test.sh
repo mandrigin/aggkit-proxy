@@ -570,6 +570,38 @@ EOF
         warn "Forwarder may not be routing correctly"
         log "Test result: $test_result"
     fi
+
+    # Step 7: Configure aggkit (aggoracle) to send GER updates to Miden proxy
+    log "Configuring aggkit to use Miden proxy for GER injection..."
+    local aggkit_container
+    aggkit_container=$(docker ps --filter "name=aggkit-001--" --format "{{.Names}}" | grep -v bridge | head -1)
+
+    if [[ -n "$aggkit_container" ]]; then
+        log "Found aggkit container: $aggkit_container"
+
+        # Update L2URL and RPCURL to use forwarder
+        docker exec "$aggkit_container" sh -c "
+            if [ -f /etc/aggkit/config.toml ]; then
+                cp /etc/aggkit/config.toml /etc/aggkit/config.toml.bak
+                # Replace L2URL to use forwarder
+                sed -i 's|L2URL = \"http://op-el-[0-9]*-op-geth-op-node-001:8545\"|L2URL = \"http://miden-l2-forwarder:8545\"|g' /etc/aggkit/config.toml
+                # Replace RPCURL to use forwarder
+                sed -i 's|RPCURL = \"http://op-el-[0-9]*-op-geth-op-node-001:8545\"|RPCURL = \"http://miden-l2-forwarder:8545\"|g' /etc/aggkit/config.toml
+            fi
+        " 2>/dev/null || warn "Could not modify aggkit config"
+
+        # Verify change
+        local l2url
+        l2url=$(docker exec "$aggkit_container" grep "^L2URL" /etc/aggkit/config.toml 2>/dev/null | head -1 || echo "")
+        log "aggkit L2URL: $l2url"
+
+        # Restart aggkit to pick up new config
+        docker restart "$aggkit_container" 2>/dev/null
+        sleep 3
+        success "aggkit restarted with Miden proxy config"
+    else
+        log "aggkit container not found (may not be deployed)"
+    fi
 }
 
 #######################################
