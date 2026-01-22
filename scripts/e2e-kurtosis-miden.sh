@@ -378,25 +378,29 @@ EOF
     l2url=$(docker exec "$bridge_container" grep "^L2URL" /etc/aggkit/config.toml 2>/dev/null | head -1 || echo "")
     log "L2URL now: $l2url"
 
-    # Step 4: Stop bridge, clear L2 databases, then start
-    # Must stop container first to release locks on sqlite files
-    log "Stopping bridge container to clear L2 databases..."
-    docker stop "$bridge_container" 2>/dev/null || true
-    sleep 2
-
-    # Clear ALL L2 database files (they have stale chain ID from op-geth)
+    # Step 4: Clear L2 databases then restart
+    # Note: /tmp is not a volume, it's container filesystem
+    # We must delete while running, then restart
     log "Clearing L2 database files (stale chain ID 2151908)..."
-    # Use docker cp to remove files from stopped container isn't possible,
-    # so we'll create a temporary container to clear the volume
-    docker run --rm --volumes-from "$bridge_container" alpine sh -c \
-        "rm -f /tmp/bridgel2sync.sqlite* /tmp/l2gersync.sqlite* /tmp/reorgdetectorl2.sqlite*" 2>/dev/null || true
-    success "L2 database files cleared"
 
-    # Start bridge container with fresh L2 databases
-    log "Starting bridge container..."
-    docker start "$bridge_container" 2>/dev/null
+    # Delete all L2 sqlite files while container is running (releases WAL on next restart)
+    docker exec "$bridge_container" sh -c \
+        "rm -f /tmp/bridgel2sync.sqlite* /tmp/l2gersync.sqlite* /tmp/reorgdetectorl2.sqlite* 2>/dev/null" 2>/dev/null || true
+
+    # Verify files are gone
+    local remaining
+    remaining=$(docker exec "$bridge_container" ls /tmp/*.sqlite* 2>/dev/null | wc -l || echo "0")
+    if [[ "$remaining" == "0" ]]; then
+        success "L2 database files cleared"
+    else
+        warn "Some L2 database files may remain: $remaining"
+    fi
+
+    # Restart bridge to pick up fresh state
+    log "Restarting bridge container..."
+    docker restart "$bridge_container" 2>/dev/null
     sleep 5
-    success "Bridge container started"
+    success "Bridge container restarted"
 
     # Step 6: Verify bridge is connecting to proxy
     log "Verifying bridge connection to Miden proxy..."
