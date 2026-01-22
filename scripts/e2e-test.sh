@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
-# Kurtosis-CDK + Miden Integration E2E Test
+# Miden RPC Proxy End-to-End Test
 #
-# This script:
-# 1. Deploys kurtosis-cdk (L1 + bridge infrastructure)
-# 2. Starts Miden node + proxy on the kurtosis network
-# 3. Configures bridge service to use Miden proxy as L2
-# 4. Sends a test deposit from L1 to Miden
+# This script runs the full e2e test flow:
+# 1. Installs prerequisites if missing (kurtosis, foundry, jq)
+# 2. Deploys kurtosis-cdk (L1 + bridge infrastructure)
+# 3. Starts Miden node + proxy on the kurtosis network
+# 4. Configures bridge service to use Miden proxy as L2
+# 5. Sends a test deposit from L1 to Miden
+# 6. Verifies deposit events in proxy
 #
 # Usage:
-#   ./scripts/e2e-kurtosis-miden.sh [OPTIONS]
+#   ./scripts/e2e-test.sh [OPTIONS]
 #
 # Options:
 #   --fresh              Deploy fresh (destroys existing enclave)
@@ -17,6 +19,7 @@
 #   --skip-cdk           Skip kurtosis-cdk deployment
 #   --skip-miden         Skip Miden node/proxy startup
 #   --skip-deposit       Skip test deposit
+#   --skip-install       Skip auto-installation of prerequisites
 #   --rebuild            Force rebuild of proxy image (use after code changes)
 #   --help               Show this help
 
@@ -37,7 +40,12 @@ DEPLOY_FRESH=false
 SKIP_CDK=false
 SKIP_MIDEN=false
 SKIP_DEPOSIT=false
+SKIP_INSTALL=false
 REBUILD_IMAGES=false
+
+# OS detection
+OS="$(uname -s)"
+ARCH="$(uname -m)"
 
 # Miden configuration
 MIDEN_PROXY_PORT=8123
@@ -74,6 +82,7 @@ while [[ $# -gt 0 ]]; do
         --skip-cdk) SKIP_CDK=true; shift ;;
         --skip-miden) SKIP_MIDEN=true; shift ;;
         --skip-deposit) SKIP_DEPOSIT=true; shift ;;
+        --skip-install) SKIP_INSTALL=true; shift ;;
         --rebuild) REBUILD_IMAGES=true; shift ;;
         --help) head -20 "$0" | tail -15; exit 0 ;;
         *) fail "Unknown option: $1" ;;
@@ -81,24 +90,107 @@ while [[ $# -gt 0 ]]; do
 done
 
 #######################################
-# Prerequisites
+# Prerequisites Installation
 #######################################
+
+install_kurtosis() {
+    if command -v kurtosis &>/dev/null; then
+        success "kurtosis already installed"
+        return 0
+    fi
+
+    if $SKIP_INSTALL; then
+        fail "kurtosis not found (use --skip-install=false to auto-install)"
+    fi
+
+    log "Installing Kurtosis CLI..."
+
+    if [[ "$OS" == "Darwin" ]]; then
+        if command -v brew &>/dev/null; then
+            brew install kurtosis-tech/tap/kurtosis-cli
+        else
+            fail "Homebrew not found. Install kurtosis manually: https://docs.kurtosis.com/install"
+        fi
+    elif [[ "$OS" == "Linux" ]]; then
+        echo "deb [trusted=yes] https://apt.fury.io/kurtosis-tech/ /" | sudo tee /etc/apt/sources.list.d/kurtosis.list
+        sudo apt update && sudo apt install -y kurtosis-cli
+    else
+        fail "Unsupported OS. Install kurtosis manually: https://docs.kurtosis.com/install"
+    fi
+
+    success "kurtosis installed"
+}
+
+install_foundry() {
+    if command -v cast &>/dev/null; then
+        success "foundry (cast) already installed"
+        return 0
+    fi
+
+    if $SKIP_INSTALL; then
+        fail "foundry not found (use --skip-install=false to auto-install)"
+    fi
+
+    log "Installing Foundry (cast, forge, anvil)..."
+
+    curl -L https://foundry.paradigm.xyz | bash
+
+    # Source foundry in current shell
+    export PATH="$HOME/.foundry/bin:$PATH"
+
+    # Run foundryup to install binaries
+    if command -v foundryup &>/dev/null; then
+        foundryup
+    else
+        "$HOME/.foundry/bin/foundryup"
+    fi
+
+    success "foundry installed"
+}
+
+install_jq() {
+    if command -v jq &>/dev/null; then
+        success "jq already installed"
+        return 0
+    fi
+
+    if $SKIP_INSTALL; then
+        fail "jq not found (use --skip-install=false to auto-install)"
+    fi
+
+    log "Installing jq..."
+
+    if [[ "$OS" == "Darwin" ]]; then
+        if command -v brew &>/dev/null; then
+            brew install jq
+        else
+            fail "Homebrew not found. Install jq manually: brew install jq"
+        fi
+    elif [[ "$OS" == "Linux" ]]; then
+        sudo apt install -y jq
+    else
+        fail "Unsupported OS. Install jq manually."
+    fi
+
+    success "jq installed"
+}
 
 check_prerequisites() {
     step "Checking Prerequisites"
 
-    command -v kurtosis &>/dev/null || fail "kurtosis not found"
-    success "kurtosis CLI"
-
-    command -v docker &>/dev/null || fail "docker not found"
-    docker info &>/dev/null || fail "Docker not running"
+    # Docker must be installed and running (can't auto-install)
+    if ! command -v docker &>/dev/null; then
+        fail "Docker not found. Install from: https://docs.docker.com/get-docker/"
+    fi
+    if ! docker info &>/dev/null; then
+        fail "Docker not running. Start Docker Desktop or docker daemon."
+    fi
     success "Docker running"
 
-    command -v cast &>/dev/null || fail "cast not found (install foundry)"
-    success "cast (foundry)"
-
-    command -v jq &>/dev/null || fail "jq not found"
-    success "jq"
+    # Auto-install these if missing
+    install_kurtosis
+    install_foundry
+    install_jq
 }
 
 #######################################
