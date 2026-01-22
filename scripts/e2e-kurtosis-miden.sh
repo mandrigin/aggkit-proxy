@@ -378,16 +378,25 @@ EOF
     l2url=$(docker exec "$bridge_container" grep "^L2URL" /etc/aggkit/config.toml 2>/dev/null | head -1 || echo "")
     log "L2URL now: $l2url"
 
-    # Step 4: Clear L2 database files (they have stale chain ID from op-geth)
-    log "Clearing L2 database files (stale chain ID)..."
-    docker exec "$bridge_container" rm -f /tmp/bridgel2sync.sqlite* /tmp/l2gersync.sqlite* /tmp/reorgdetectorl2.sqlite* 2>/dev/null || true
+    # Step 4: Stop bridge, clear L2 databases, then start
+    # Must stop container first to release locks on sqlite files
+    log "Stopping bridge container to clear L2 databases..."
+    docker stop "$bridge_container" 2>/dev/null || true
+    sleep 2
+
+    # Clear ALL L2 database files (they have stale chain ID from op-geth)
+    log "Clearing L2 database files (stale chain ID 2151908)..."
+    # Use docker cp to remove files from stopped container isn't possible,
+    # so we'll create a temporary container to clear the volume
+    docker run --rm --volumes-from "$bridge_container" alpine sh -c \
+        "rm -f /tmp/bridgel2sync.sqlite* /tmp/l2gersync.sqlite* /tmp/reorgdetectorl2.sqlite*" 2>/dev/null || true
     success "L2 database files cleared"
 
-    # Step 5: Restart bridge to pick up new config
-    log "Restarting bridge container..."
-    docker restart "$bridge_container" 2>/dev/null
-    sleep 3
-    success "Bridge container restarted"
+    # Start bridge container with fresh L2 databases
+    log "Starting bridge container..."
+    docker start "$bridge_container" 2>/dev/null
+    sleep 5
+    success "Bridge container started"
 
     # Step 6: Verify bridge is connecting to proxy
     log "Verifying bridge connection to Miden proxy..."
@@ -406,13 +415,11 @@ EOF
         success "Bridge appears to be running"
     fi
 
-    # Test that forwarder routes to proxy correctly
+    # Test that forwarder routes to proxy correctly using contracts container (has curl)
     log "Testing forwarder routes traffic to proxy..."
     local test_result
-    test_result=$(docker exec "$bridge_container" \
-        curl -s -X POST "http://miden-l2-forwarder:8545" \
-        -H "Content-Type: application/json" \
-        -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' 2>&1 || echo "")
+    test_result=$(kurtosis service exec "$ENCLAVE_NAME" contracts-001 \
+        "curl -s -X POST http://miden-l2-forwarder:8545 -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}'" 2>&1 || echo "")
 
     if echo "$test_result" | grep -q '"result"'; then
         local chain_id
@@ -420,6 +427,7 @@ EOF
         success "Forwarder working! Chain ID: $chain_id"
     else
         warn "Forwarder may not be routing correctly"
+        log "Test result: $test_result"
     fi
 }
 
