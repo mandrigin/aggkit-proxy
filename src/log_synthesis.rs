@@ -382,13 +382,28 @@ impl Default for LogStore {
 }
 
 /// Encode ClaimEvent data field
+///
+/// The ClaimEvent in zkEVM bridge v2 has 5 non-indexed fields (160 bytes total):
+/// 1. leafType (uint32) - 0 for asset transfers, 1 for message transfers
+/// 2. originNetwork (uint32) - Network ID where the asset originated
+/// 3. originAddress (address) - Token contract address on origin network
+/// 4. destinationAddress (address) - Recipient address on destination network
+/// 5. amount (uint256) - Amount of tokens transferred
+///
+/// IMPORTANT: The bridge-service ABI decoder expects exactly 160 bytes.
+/// Previously we only emitted 128 bytes (missing leafType), causing:
+/// "abi: cannot marshal in to go type: length insufficient 128 require 160"
+/// This blocked L2 sync, preventing new deposits from becoming ready_for_claim.
 fn encode_claim_event_data(
     origin_network: u32,
     origin_address: &[u8; 20],
     destination_address: &[u8; 20],
     amount: u64,
 ) -> String {
-    let mut data = Vec::with_capacity(128);
+    let mut data = Vec::with_capacity(160);
+
+    // leafType (uint32 padded to 32 bytes) - 0 for asset transfers
+    data.extend_from_slice(&[0u8; 32]);
 
     // originNetwork (uint32 padded to 32 bytes)
     data.extend_from_slice(&[0u8; 28]);
