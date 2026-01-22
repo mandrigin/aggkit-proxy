@@ -573,6 +573,40 @@ EOF
 }
 
 #######################################
+# Start pgweb for DB browsing
+#######################################
+
+start_pgweb() {
+    step "Starting pgweb (Postgres Browser)"
+
+    # Remove existing container if any
+    docker rm -f pgweb-bridge 2>/dev/null || true
+
+    # Start pgweb connected to the kurtosis postgres
+    log "Starting pgweb on port 8082..."
+    if docker run -d --name pgweb-bridge \
+        --network "kt-${ENCLAVE_NAME}" \
+        -p 8082:8081 \
+        sosedoff/pgweb \
+        --bind=0.0.0.0 \
+        --listen=8081 \
+        --host=postgres-001 \
+        --user=bridge_user \
+        --pass=redacted \
+        --db=bridge_db \
+        --ssl=disable >/dev/null 2>&1; then
+        sleep 2
+        if docker ps --filter "name=pgweb-bridge" --format "{{.Names}}" | grep -q pgweb; then
+            success "pgweb running at http://localhost:8082"
+        else
+            warn "pgweb failed to start - check: docker logs pgweb-bridge"
+        fi
+    else
+        warn "Could not start pgweb"
+    fi
+}
+
+#######################################
 # Get Deployment Info
 #######################################
 
@@ -721,17 +755,20 @@ print_summary() {
     echo "  L1 RPC:          ${L1_RPC:-N/A}"
     echo "  Miden Proxy:     http://localhost:${MIDEN_PROXY_PORT}"
     echo "  Bridge:          ${BRIDGE_ADDRESS:-N/A}"
+    echo "  pgweb (DB):      http://localhost:8082"
     echo ""
 
     echo -e "${BOLD}Miden Containers:${NC}"
     docker ps --filter "name=miden" --format "  {{.Names}}: {{.Status}}"
+    docker ps --filter "name=pgweb" --format "  {{.Names}}: {{.Status}}"
     echo ""
 
     echo -e "${BOLD}Commands:${NC}"
     echo "  Test proxy:       curl -X POST http://localhost:${MIDEN_PROXY_PORT} -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}'"
     echo "  Proxy logs:       docker logs -f miden-proxy-kurtosis"
     echo "  Node logs:        docker logs -f miden-node-kurtosis"
-    echo "  Stop Miden:       docker rm -f miden-node-kurtosis miden-proxy-kurtosis"
+    echo "  Bridge logs:      docker logs -f \$(docker ps --filter 'name=zkevm-bridge-service' -q | head -1)"
+    echo "  Stop Miden:       docker rm -f miden-node-kurtosis miden-proxy-kurtosis pgweb-bridge"
     echo "  Stop all:         kurtosis enclave rm $ENCLAVE_NAME --force"
 }
 
@@ -755,6 +792,7 @@ main() {
     if ! $SKIP_MIDEN; then
         start_miden_services
         reconfigure_bridge_service
+        start_pgweb
     fi
 
     get_deployment_info
