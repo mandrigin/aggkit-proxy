@@ -273,16 +273,16 @@ impl LogStore {
         mainnet_exit_root: &[u8; 32],
         rollup_exit_root: &[u8; 32],
     ) {
-        // UpdateGlobalExitRoot(bytes32 mainnetExitRoot, bytes32 rollupExitRoot)
-        // Both parameters are non-indexed, so they go in data
-        let mut data = Vec::with_capacity(64);
-        data.extend_from_slice(mainnet_exit_root);
-        data.extend_from_slice(rollup_exit_root);
-
+        // UpdateGlobalExitRoot(bytes32 indexed mainnetExitRoot, bytes32 indexed rollupExitRoot)
+        // Both parameters are indexed, so they go in topics
         let log = SyntheticLog {
             address: L2_GLOBAL_EXIT_ROOT_ADDRESS.to_string(),
-            topics: vec![UPDATE_GER_TOPIC.to_string()],
-            data: format!("0x{}", hex::encode(&data)),
+            topics: vec![
+                UPDATE_GER_TOPIC.to_string(),
+                format!("0x{}", hex::encode(mainnet_exit_root)),
+                format!("0x{}", hex::encode(rollup_exit_root)),
+            ],
+            data: "0x".to_string(), // No non-indexed data
             block_number,
             block_hash,
             transaction_hash: tx_hash.to_string(),
