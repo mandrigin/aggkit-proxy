@@ -1326,16 +1326,56 @@ impl EthApiServer for EthApiImpl {
         tx: serde_json::Value,
         block: Option<String>,
     ) -> Result<String, ErrorObjectOwned> {
+        let data = tx.get("data").and_then(|d| d.as_str()).unwrap_or("");
+        let to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("");
+
         info!(
-            tx_to = ?tx.get("to"),
-            tx_data = ?tx.get("data").map(|d| d.as_str().map(|s| s.chars().take(20).collect::<String>())),
+            tx_to = %to,
+            tx_data = %data.chars().take(20).collect::<String>(),
             block = ?block,
             "eth_call: Simulating bridge state query"
         );
-        // For now return empty data - actual implementation would decode
-        // the call data and query bridge state
-        debug!("eth_call: Returning empty response (bridge state queries not yet implemented)");
-        Ok("0x".to_string())
+
+        // Return synthetic responses for bridge contract calls
+        // Function selectors for common bridge queries:
+        // 0x0e2fcb97 - lastUpdatedDepositCount() -> uint256
+        // 0xc7bf8c9d - depositCount() -> uint256
+        // 0x8381f58a - networkID() -> uint32
+        // 0x318aee3d - getTokenWrappedAddress(uint32,address) -> address
+        // 0x647c576c - polygonBridgeAddress() -> address
+        // 0x081e8e17 - globalExitRootManager() -> address
+        // 0x15064c96 - getRoot() -> bytes32
+
+        if data.len() >= 10 {
+            let selector = &data[0..10];
+            let response = match selector {
+                // lastUpdatedDepositCount() / depositCount() -> return 0
+                "0x0e2fcb97" | "0xc7bf8c9d" => {
+                    debug!(selector = %selector, "eth_call: Returning zero for deposit count");
+                    "0x0000000000000000000000000000000000000000000000000000000000000000"
+                }
+                // networkID() -> return Miden network ID (2)
+                "0x8381f58a" => {
+                    debug!(selector = %selector, "eth_call: Returning network ID 2");
+                    "0x0000000000000000000000000000000000000000000000000000000000000002"
+                }
+                // getRoot() -> return zero root
+                "0x15064c96" => {
+                    debug!(selector = %selector, "eth_call: Returning zero root");
+                    "0x0000000000000000000000000000000000000000000000000000000000000000"
+                }
+                // Default: return zero for any uint256-returning function
+                _ => {
+                    debug!(selector = %selector, "eth_call: Returning default zero for unknown function");
+                    "0x0000000000000000000000000000000000000000000000000000000000000000"
+                }
+            };
+            Ok(response.to_string())
+        } else {
+            // No function selector - return empty
+            debug!("eth_call: No function selector, returning empty");
+            Ok("0x".to_string())
+        }
     }
 
     async fn block_number(&self) -> Result<String, ErrorObjectOwned> {
