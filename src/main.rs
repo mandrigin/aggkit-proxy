@@ -33,8 +33,20 @@ use miden_protocol::account::{AccountId, AccountIdV0};
 // Miden agglayer function for AccountId -> 20-byte destination conversion
 use miden_agglayer::EthAddressFormat;
 
-/// Miden chain ID (placeholder - configure as needed)
-const MIDEN_CHAIN_ID: u64 = 0x4d494445; // "MIDE" in hex
+/// Get chain ID from environment variable, defaults to 2 (agglayer Miden network ID)
+fn get_chain_id() -> u64 {
+    std::env::var("CHAIN_ID")
+        .ok()
+        .and_then(|s| {
+            // Support both decimal and hex (0x) formats
+            if s.starts_with("0x") || s.starts_with("0X") {
+                u64::from_str_radix(&s[2..], 16).ok()
+            } else {
+                s.parse().ok()
+            }
+        })
+        .unwrap_or(2) // Default to 2 for agglayer Miden network
+}
 
 /// Fixed gas estimate for bridge operations
 const FIXED_GAS_ESTIMATE: u64 = 21000;
@@ -832,7 +844,7 @@ async fn fetch_block_height(rpc_endpoint: &str, store_path: &PathBuf) -> Result<
 #[async_trait]
 impl EthApiServer for EthApiImpl {
     async fn chain_id(&self) -> Result<String, ErrorObjectOwned> {
-        let chain_id = format!("{:#x}", MIDEN_CHAIN_ID);
+        let chain_id = format!("{:#x}", get_chain_id());
         info!(chain_id = %chain_id, "eth_chainId: Returning Miden chain ID");
         Ok(chain_id)
     }
@@ -1525,7 +1537,7 @@ impl EthApiServer for EthApiImpl {
 
     async fn net_version(&self) -> Result<String, ErrorObjectOwned> {
         // Return chain ID as decimal string (EIP-155)
-        let version = format!("{}", MIDEN_CHAIN_ID);
+        let version = format!("{}", get_chain_id());
         info!(net_version = %version, "net_version");
         Ok(version)
     }
@@ -1784,9 +1796,11 @@ async fn main() -> anyhow::Result<()> {
     info!("  Miden RPC Proxy - Ethereum JSON-RPC to Miden Bridge  ");
     info!("=======================================================");
     info!("Version: {}", version);
-    info!("Chain ID: {:#x} (MIDE)", MIDEN_CHAIN_ID);
+    let chain_id = get_chain_id();
+    info!("Chain ID: {} (0x{:x}) - set via CHAIN_ID env var", chain_id, chain_id);
     info!("Fixed gas estimate: {}", FIXED_GAS_ESTIMATE);
     info!("Configuration:");
+    info!("  CHAIN_ID:           {} (default: 2)", chain_id);
     info!("  MIDEN_RPC_URL:      {}", miden_rpc_url);
     info!("  BRIDGE_FAUCET_ID:   {}", if bridge_faucet_id.is_empty() { "(not set)" } else { &bridge_faucet_id });
     info!("  FAUCET_ACCOUNT_FILE:{}", faucet_account_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(not set)".to_string()));

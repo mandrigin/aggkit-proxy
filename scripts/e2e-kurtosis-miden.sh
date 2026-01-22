@@ -203,10 +203,12 @@ start_miden_services() {
     docker build -t miden-rpc-proxy:kurtosis -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR" 2>&1 | tail -5
 
     # Run proxy with environment variables (proxy reads config from env vars)
+    # CHAIN_ID=2 is the Miden network ID for agglayer bridge
     docker run -d \
         --name miden-proxy-kurtosis \
         --network "$kurtosis_network" \
         -p "${MIDEN_PROXY_PORT}:8546" \
+        -e CHAIN_ID="$MIDEN_NETWORK_ID" \
         -e MIDEN_RPC_URL="http://miden-node-kurtosis:57291" \
         -e MIDEN_STORE_PATH="/app/data/miden-client" \
         -e LISTEN_PORT=8546 \
