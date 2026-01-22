@@ -572,13 +572,14 @@ EOF
     fi
 
     # Step 7: Configure aggkit (aggoracle) to send GER updates to Miden proxy
+    # The aggoracle is part of the aggkit-001-bridge container
     # Container filesystem is read-only, so we extract config, modify locally, and recreate with volume mount
     log "Configuring aggkit to use Miden proxy for GER injection..."
     local aggkit_container
-    aggkit_container=$(docker ps --filter "name=aggkit-001--" --format "{{.Names}}" | grep -v bridge | head -1 || true)
+    aggkit_container=$(docker ps --filter "name=aggkit-001-bridge" --format "{{.Names}}" | head -1 || true)
 
     if [[ -n "$aggkit_container" ]]; then
-        log "Found aggkit container: $aggkit_container"
+        log "Found aggkit bridge container (contains aggoracle): $aggkit_container"
 
         # Create temp dir for modified config
         local config_dir="${SCRIPT_DIR}/.aggkit-config"
@@ -589,46 +590,98 @@ EOF
         if docker cp "$aggkit_container:/etc/aggkit/config.toml" "$config_dir/config.toml" 2>/dev/null; then
             log "Config extracted, modifying..."
 
-            # Modify config to use forwarder
+            # Modify config to use forwarder for aggoracle L2/RPC URLs
             sed -i.bak 's|L2URL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|L2URL = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
             sed -i.bak 's|RPCURL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|RPCURL = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
 
             # Show the change
-            local l2url
+            local l2url rpcurl
             l2url=$(grep "^L2URL" "$config_dir/config.toml" | head -1 || echo "")
+            rpcurl=$(grep "^RPCURL" "$config_dir/config.toml" | head -1 || echo "")
             log "Modified aggkit L2URL: $l2url"
+            log "Modified aggkit RPCURL: $rpcurl"
 
-            # Get container image and other details for recreation
-            local image
-            image=$(docker inspect "$aggkit_container" --format '{{.Config.Image}}')
+            # Save container settings for recreation
+            log "Saving container configuration..."
+            docker inspect "$aggkit_container" > "$config_dir/container-inspect.json"
+
+            # Extract key settings from inspect
+            local image hostname
+            image=$(jq -r '.[0].Config.Image' "$config_dir/container-inspect.json")
+            hostname=$(jq -r '.[0].Config.Hostname' "$config_dir/container-inspect.json")
+
+            # Extract environment variables
+            local env_args=""
+            while IFS= read -r env; do
+                env_args="$env_args -e \"$env\""
+            done < <(jq -r '.[0].Config.Env[]' "$config_dir/container-inspect.json" 2>/dev/null || true)
+
+            # Extract network
             local network
-            network=$(docker inspect "$aggkit_container" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' | head -1 || true)
+            network=$(jq -r '.[0].NetworkSettings.Networks | keys[0]' "$config_dir/container-inspect.json")
+
+            # Extract existing volume mounts (excluding /etc/aggkit which we'll override)
+            local volume_args=""
+            while IFS= read -r mount; do
+                local src dst
+                src=$(echo "$mount" | jq -r '.Source')
+                dst=$(echo "$mount" | jq -r '.Destination')
+                if [[ "$dst" != "/etc/aggkit" && -n "$src" && "$src" != "null" ]]; then
+                    volume_args="$volume_args -v \"$src:$dst\""
+                fi
+            done < <(jq -c '.[0].Mounts[]' "$config_dir/container-inspect.json" 2>/dev/null || true)
+
+            # Extract entrypoint and cmd
+            local entrypoint cmd
+            entrypoint=$(jq -r '.[0].Config.Entrypoint | if . then join(" ") else "" end' "$config_dir/container-inspect.json")
+            cmd=$(jq -r '.[0].Config.Cmd | if . then join(" ") else "" end' "$config_dir/container-inspect.json")
+
+            log "Image: $image"
+            log "Network: $network"
+            log "Entrypoint: $entrypoint"
 
             log "Stopping original aggkit container..."
             docker stop "$aggkit_container" 2>/dev/null || true
 
-            # Create new container with same settings but with config volume mounted
+            # Create new container preserving settings but with config volume mounted
             log "Starting aggkit with modified config (volume mount)..."
             local new_container_name="aggkit-miden-proxy"
 
             # Remove if exists from previous run
             docker rm -f "$new_container_name" 2>/dev/null || true
 
-            # Run new container with config mounted
-            if docker run -d \
-                --name "$new_container_name" \
-                --network "$network" \
-                -v "$config_dir/config.toml:/etc/aggkit/config.toml:ro" \
-                "$image" 2>/dev/null; then
+            # Build and run docker command
+            # Note: we mount the whole config dir to /etc/aggkit to preserve other files
+            docker cp "$aggkit_container:/etc/aggkit/." "$config_dir/aggkit-full/" 2>/dev/null || mkdir -p "$config_dir/aggkit-full"
+            cp "$config_dir/config.toml" "$config_dir/aggkit-full/config.toml"
+
+            local docker_cmd="docker run -d --name $new_container_name --hostname $hostname --network $network"
+            docker_cmd="$docker_cmd -v $config_dir/aggkit-full:/etc/aggkit:ro"
+            docker_cmd="$docker_cmd $volume_args $env_args"
+            if [[ -n "$entrypoint" ]]; then
+                docker_cmd="$docker_cmd --entrypoint \"$entrypoint\""
+            fi
+            docker_cmd="$docker_cmd $image"
+            if [[ -n "$cmd" && "$cmd" != "null" ]]; then
+                docker_cmd="$docker_cmd $cmd"
+            fi
+
+            log "Running: $docker_cmd"
+            if eval "$docker_cmd" 2>&1; then
                 success "aggkit started with Miden proxy config"
 
                 # Verify it's running
                 sleep 3
                 if docker ps --filter "name=$new_container_name" --format "{{.Names}}" | grep -q "$new_container_name"; then
                     success "aggkit container running: $new_container_name"
+                    # Show logs to verify
+                    log "Container logs (last 10 lines):"
+                    docker logs "$new_container_name" 2>&1 | tail -10
                 else
                     warn "aggkit container may have failed to start"
                     docker logs "$new_container_name" 2>&1 | tail -20
+                    # Restart original
+                    docker start "$aggkit_container" 2>/dev/null || true
                 fi
             else
                 warn "Failed to start aggkit with modified config, restarting original..."
