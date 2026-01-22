@@ -991,6 +991,15 @@ impl EthApiServer for EthApiImpl {
             }
         };
 
+        // Compute original transaction hash from RLP bytes
+        // This is the hash the bridge service uses to track transactions
+        let original_tx_hash = {
+            let mut hasher = Keccak256::new();
+            hasher.update(&tx_bytes);
+            format!("0x{}", hex::encode(hasher.finalize()))
+        };
+        debug!(original_tx_hash = %original_tx_hash, "Computed original RLP transaction hash");
+
         // Step 2: Detect input format and extract calldata
         // Support two formats:
         // 1. Raw claimAsset calldata (starts with selector 0xccaa2d11)
@@ -1302,15 +1311,11 @@ impl EthApiServer for EthApiImpl {
             "AccountId -> 20-byte destination conversion (for reference)"
         );
 
-        // Step 7: Generate synthetic transaction hash
-        // Hash the claim parameters to create a deterministic tx hash
-        let mut hasher = Keccak256::new();
-        hasher.update(b"miden-bridge-claim-v1");
-        hasher.update(claim_params.global_index_raw.to_be_bytes::<32>());
-        hasher.update(claim_params.destination_address.as_slice());
-        hasher.update(claim_params.amount.to_be_bytes::<32>());
-        let hash_bytes = hasher.finalize();
-        let tx_hash = format!("0x{}", hex::encode(hash_bytes));
+        // Step 7: Use original RLP transaction hash
+        // The bridge service tracks transactions by keccak256(rlp_bytes), so we must use the same hash
+        // for receipt lookups to work correctly
+        let tx_hash = original_tx_hash.clone();
+        debug!(tx_hash = %tx_hash, "Using original RLP transaction hash for receipt tracking");
 
         // Format amount for human readability (assuming 18 decimals like most ERC20s)
         // Convert U256 to string, then parse for division to avoid precision loss
