@@ -2,7 +2,7 @@
 //! and generates Ethereum-formatted receipts.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 
 /// Ethereum transaction hash (32 bytes)
 pub type EthTxHash = [u8; 32];
@@ -10,9 +10,39 @@ pub type EthTxHash = [u8; 32];
 /// Miden transaction ID
 pub type MidenTxId = String;
 
-/// Bridge contract address for receipt `to` field and ClaimEvent emission
-/// Must match the L2 bridge address that the bridge service queries for events
-pub const BRIDGE_CONTRACT_ADDRESS: &str = "0xc8cbebf950b9df44d987c8619f092bea980ff038";
+/// Default bridge contract address (used if BRIDGE_ADDRESS env var not set)
+/// This is from standard kurtosis-cdk deployment
+const DEFAULT_BRIDGE_ADDRESS: &str = "0xc8cbebf950b9df44d987c8619f092bea980ff038";
+
+/// Cached bridge contract address (loaded once from env)
+static BRIDGE_ADDRESS_CACHE: OnceLock<String> = OnceLock::new();
+
+/// Get the bridge contract address for receipt `to` field and ClaimEvent emission.
+///
+/// # Environment Variable
+///
+/// Set `BRIDGE_ADDRESS` to override the default bridge contract address.
+/// This must match the L2 bridge address that the bridge-service queries for events.
+///
+/// # How to find the correct address
+///
+/// For kurtosis-cdk deployments, get it from the contracts config:
+/// ```bash
+/// kurtosis service exec cdk-miden contracts-001 \
+///   "cat /opt/zkevm/combined.json" | jq -r '.polygonZkEVMBridgeAddress'
+/// ```
+///
+/// # Example
+///
+/// ```bash
+/// BRIDGE_ADDRESS=0xc8cbebf950b9df44d987c8619f092bea980ff038 ./miden-rpc-proxy
+/// ```
+pub fn get_bridge_address() -> &'static str {
+    BRIDGE_ADDRESS_CACHE.get_or_init(|| {
+        std::env::var("BRIDGE_ADDRESS").unwrap_or_else(|_| DEFAULT_BRIDGE_ADDRESS.to_string())
+    })
+}
+
 
 /// Transaction status in the Miden network
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,7 +172,7 @@ pub fn miden_tx_to_eth_receipt(
                 block_number,
                 block_hash,
                 status: if status == TxStatus::Confirmed { 0x1 } else { 0x0 },
-                to: BRIDGE_CONTRACT_ADDRESS.to_string(),
+                to: get_bridge_address().to_string(),
                 transaction_index: 0,
                 cumulative_gas_used: 21000,
                 gas_used: 21000,
@@ -233,7 +263,7 @@ mod tests {
         let receipt = miden_tx_to_eth_receipt(&map, &eth_hash).unwrap();
         assert_eq!(receipt.status, 0x1);
         assert_eq!(receipt.block_number, 500);
-        assert_eq!(receipt.to, BRIDGE_CONTRACT_ADDRESS);
+        assert_eq!(receipt.to, get_bridge_address());
     }
 
     #[test]
@@ -257,7 +287,7 @@ mod tests {
             block_number: 100,
             block_hash: [0xAAu8; 32],
             status: 0x1,
-            to: BRIDGE_CONTRACT_ADDRESS.to_string(),
+            to: get_bridge_address().to_string(),
             transaction_index: 0,
             cumulative_gas_used: 21000,
             gas_used: 21000,
@@ -266,6 +296,6 @@ mod tests {
         let json = receipt.to_json();
         assert_eq!(json["status"], "0x1");
         assert_eq!(json["blockNumber"], "0x64");
-        assert_eq!(json["to"], BRIDGE_CONTRACT_ADDRESS);
+        assert_eq!(json["to"], get_bridge_address());
     }
 }

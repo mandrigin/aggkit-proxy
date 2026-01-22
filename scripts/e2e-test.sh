@@ -341,9 +341,24 @@ start_miden_services() {
     # This prevents the bridge from missing GER events due to block number mismatch
     clean_bridge_db
 
+    # Get bridge contract address from kurtosis deployment
+    # This is needed for ClaimEvent emission - must match what bridge-service queries
+    log "Getting bridge contract address from kurtosis..."
+    BRIDGE_ADDRESS=$(kurtosis service exec cdk-miden contracts-001 \
+        "cat /opt/zkevm/combined.json" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty')
+    if [[ -z "$BRIDGE_ADDRESS" ]]; then
+        warn "Could not get bridge address from kurtosis, using default"
+        BRIDGE_ADDRESS="0xc8cbebf950b9df44d987c8619f092bea980ff038"
+    fi
+    log "Bridge address: $BRIDGE_ADDRESS"
+
     # Start proxy
-    # BRIDGE_FAUCET_ID enables Miden submission for claim transactions
-    # Uses deterministic seed for agglayer faucet creation
+    # Environment variables:
+    #   CHAIN_ID          - Miden network ID (required)
+    #   MIDEN_RPC_URL     - Miden node RPC endpoint (required)
+    #   BRIDGE_FAUCET_ID  - Enables Miden submission for claim transactions
+    #   BRIDGE_ADDRESS    - L2 bridge contract for ClaimEvent emission
+    #   LISTEN_PORT       - Port to listen on (default 8546)
     log "Starting Miden proxy (CHAIN_ID=$MIDEN_NETWORK_ID)..."
     if ! docker run -d \
         --name miden-proxy-kurtosis \
@@ -353,6 +368,7 @@ start_miden_services() {
         -e MIDEN_RPC_URL="http://miden-node-kurtosis:57291" \
         -e MIDEN_STORE_PATH="/app/data/miden-client" \
         -e BRIDGE_FAUCET_ID="0x000000000000000000000000000001" \
+        -e BRIDGE_ADDRESS="$BRIDGE_ADDRESS" \
         -e LISTEN_PORT=8546 \
         miden-rpc-proxy:kurtosis; then
         fail "Failed to start miden-proxy-kurtosis container"

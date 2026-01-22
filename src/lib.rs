@@ -29,8 +29,8 @@ pub use decode::{
 };
 pub use error::{ProxyError, ProxyResult};
 pub use receipt::{
-    miden_tx_to_eth_receipt, poll_tx_confirmation, EthReceipt, EthTxHash, MidenTxId, TxHashMap,
-    TxStatus, BRIDGE_CONTRACT_ADDRESS,
+    get_bridge_address, miden_tx_to_eth_receipt, poll_tx_confirmation, EthReceipt, EthTxHash,
+    MidenTxId, TxHashMap, TxStatus,
 };
 pub use storage::{AddressMapping, MappingStorage};
 pub use types::ClaimAssetParams;

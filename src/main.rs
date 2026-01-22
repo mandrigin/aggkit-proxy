@@ -13,9 +13,9 @@ use std::path::PathBuf;
 
 // Import library modules for claim processing (P2ID mint approach)
 use miden_rpc_proxy::{
-    create_and_deploy_agglayer_faucet, decode_transaction, init_client, is_claim_asset,
-    parse_claim_asset, submit_transaction, AddressMapper, AddressMapperConfig, ClaimTracker,
-    ClientError, EthAddress, MidenClientConfig, BRIDGE_CONTRACT_ADDRESS, CLAIM_ASSET_SELECTOR,
+    create_and_deploy_agglayer_faucet, decode_transaction, get_bridge_address, init_client,
+    is_claim_asset, parse_claim_asset, submit_transaction, AddressMapper, AddressMapperConfig,
+    ClaimTracker, ClientError, EthAddress, MidenClientConfig, CLAIM_ASSET_SELECTOR,
 };
 
 // New modules for kurtosis-cdk integration
@@ -1465,7 +1465,7 @@ impl EthApiServer for EthApiImpl {
                         .unwrap_or([0u8; 32]);
 
                     self.state.log_store.add_claim_event(
-                        BRIDGE_CONTRACT_ADDRESS,
+                        get_bridge_address(),
                         block_num,
                         block_hash,
                         &tx_hash,
