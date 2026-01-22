@@ -7,11 +7,13 @@
 
 pub mod address_mapper;
 pub mod agglayer_faucet;
+pub mod block_state;
 pub mod claim_tracker;
 pub mod client;
 pub mod config;
 pub mod decode;
 pub mod error;
+pub mod log_synthesis;
 pub mod receipt;
 pub mod storage;
 pub mod types;
@@ -32,6 +34,10 @@ pub use receipt::{
 };
 pub use storage::{AddressMapping, MappingStorage};
 pub use types::ClaimAssetParams;
+
+// Re-export block state and log synthesis for kurtosis-cdk integration
+pub use block_state::{BlockState, SyntheticBlock};
+pub use log_synthesis::{LogFilter, LogStore, SyntheticLog, BRIDGE_EVENT_TOPIC, CLAIM_EVENT_TOPIC};
 
 // Re-export client module types
 // Uses miden-agglayer's create_claim_note() for CLAIM note creation with SMT proof validation.

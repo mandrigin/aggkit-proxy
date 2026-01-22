@@ -18,6 +18,13 @@ use miden_rpc_proxy::{
     ClientError, EthAddress, MidenClientConfig, CLAIM_ASSET_SELECTOR,
 };
 
+// New modules for kurtosis-cdk integration
+mod block_state;
+mod log_synthesis;
+
+use block_state::BlockState;
+use log_synthesis::{LogFilter, LogStore};
+
 use alloy_primitives::{Address, Bytes};
 
 // Miden protocol types
@@ -72,6 +79,10 @@ pub struct BridgeState {
     claim_tracker: ClaimTracker,
     /// Address mapper for Eth -> Miden address resolution (wrapped in Mutex for Sync)
     address_mapper: parking_lot::Mutex<AddressMapper>,
+    /// Block state for synthetic EVM blocks (kurtosis-cdk integration)
+    block_state: BlockState,
+    /// Log store for synthetic EVM logs (kurtosis-cdk integration)
+    log_store: LogStore,
 }
 
 impl BridgeState {
@@ -85,12 +96,20 @@ impl BridgeState {
             AddressMapper::in_memory(AddressMapperConfig::default()).expect("Failed to init AddressMapper");
         info!("AddressMapper initialized (in-memory mode)");
 
+        let block_state = BlockState::new();
+        info!("BlockState initialized (synthetic EVM blocks)");
+
+        let log_store = LogStore::new();
+        info!("LogStore initialized (synthetic EVM logs)");
+
         Self {
             nonces: RwLock::new(HashMap::new()),
             transactions: RwLock::new(HashMap::new()),
             block_height: RwLock::new(0),
             claim_tracker,
             address_mapper: parking_lot::Mutex::new(address_mapper),
+            block_state,
+            log_store,
         }
     }
 
@@ -179,6 +198,74 @@ pub trait EthApi {
     /// Returns the current block number
     #[method(name = "eth_blockNumber")]
     async fn block_number(&self) -> Result<String, ErrorObjectOwned>;
+
+    // ========== New methods for kurtosis-cdk integration ==========
+
+    /// Returns block information by number
+    #[method(name = "eth_getBlockByNumber")]
+    async fn get_block_by_number(
+        &self,
+        block_number: String,
+        full_transactions: bool,
+    ) -> Result<Option<serde_json::Value>, ErrorObjectOwned>;
+
+    /// Returns block information by hash
+    #[method(name = "eth_getBlockByHash")]
+    async fn get_block_by_hash(
+        &self,
+        block_hash: String,
+        full_transactions: bool,
+    ) -> Result<Option<serde_json::Value>, ErrorObjectOwned>;
+
+    /// Returns logs matching the filter
+    #[method(name = "eth_getLogs")]
+    async fn get_logs(
+        &self,
+        filter: serde_json::Value,
+    ) -> Result<Vec<serde_json::Value>, ErrorObjectOwned>;
+
+    /// Returns transaction by hash
+    #[method(name = "eth_getTransactionByHash")]
+    async fn get_transaction_by_hash(
+        &self,
+        tx_hash: String,
+    ) -> Result<Option<serde_json::Value>, ErrorObjectOwned>;
+
+    /// Returns the network version
+    #[method(name = "net_version")]
+    async fn net_version(&self) -> Result<String, ErrorObjectOwned>;
+
+    /// Returns the balance of an account
+    #[method(name = "eth_getBalance")]
+    async fn get_balance(
+        &self,
+        address: String,
+        block: Option<String>,
+    ) -> Result<String, ErrorObjectOwned>;
+
+    /// Returns the code at an address
+    #[method(name = "eth_getCode")]
+    async fn get_code(
+        &self,
+        address: String,
+        block: Option<String>,
+    ) -> Result<String, ErrorObjectOwned>;
+
+    /// Returns the storage value at a position
+    #[method(name = "eth_getStorageAt")]
+    async fn get_storage_at(
+        &self,
+        address: String,
+        position: String,
+        block: Option<String>,
+    ) -> Result<String, ErrorObjectOwned>;
+
+    /// Returns the number of transactions in a block
+    #[method(name = "eth_getBlockTransactionCountByNumber")]
+    async fn get_block_transaction_count_by_number(
+        &self,
+        block: String,
+    ) -> Result<String, ErrorObjectOwned>;
 }
 
 /// Configuration for Miden network submission
@@ -192,6 +279,8 @@ pub struct MidenSubmissionConfig {
     pub bridge_faucet_id_hex: String,
     /// Path to faucet account file (.mac) containing keys
     pub faucet_account_file: Option<PathBuf>,
+    /// Ephemeral submitter account ID (created once at startup)
+    pub ephemeral_account_id: Option<AccountId>,
 }
 
 impl Default for MidenSubmissionConfig {
@@ -201,6 +290,7 @@ impl Default for MidenSubmissionConfig {
             store_path: PathBuf::from("/tmp/miden-bridge-client"),
             bridge_faucet_id_hex: String::new(),
             faucet_account_file: None,
+            ephemeral_account_id: None,
         }
     }
 }
@@ -348,70 +438,86 @@ async fn submit_claim_to_miden(
             let block_num = sync_result.block_num.as_u32();
             info!(block_num = block_num, "State synced with network");
 
-            // Step 5: Create ephemeral user account for CLAIM note submission
-            // Following https://docs.miden.xyz/miden-tutorials/rust-client/create_deploy_tutorial
-            use miden_client::account::component::BasicWallet;
-            use miden_protocol::account::{AccountBuilder, AccountStorageMode, AccountType};
-            use miden_protocol::account::auth::AuthSecretKey;
-            use miden_standards::account::auth::AuthFalcon512Rpo;
-            use rand::RngCore;
+            // Step 5: Get or create ephemeral user account for CLAIM note submission
+            // If ephemeral_account_id was pre-created at startup, use it; otherwise create a new one
+            let submitter_account_id = if let Some(pre_created_id) = config.ephemeral_account_id {
+                info!("╔══════════════════════════════════════════════════════════════════╗");
+                info!("║  STEP 1: Using pre-created ephemeral account                     ║");
+                info!("╚══════════════════════════════════════════════════════════════════╝");
+                info!("  → Account ID: {} (created at proxy startup)", pre_created_id);
+                pre_created_id
+            } else {
+                // Fallback: create ephemeral account per-transaction (original behavior)
+                use miden_client::account::component::BasicWallet;
+                use miden_protocol::account::auth::AuthSecretKey;
+                use miden_protocol::account::{AccountBuilder, AccountStorageMode, AccountType};
+                use miden_standards::account::auth::AuthFalcon512Rpo;
+                use rand::RngCore;
 
-            info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!("║  STEP 1: Creating ephemeral user account                         ║");
-            info!("╚══════════════════════════════════════════════════════════════════╝");
+                info!("╔══════════════════════════════════════════════════════════════════╗");
+                info!("║  STEP 1: Creating ephemeral user account (fallback)              ║");
+                info!("╚══════════════════════════════════════════════════════════════════╝");
+                warn!("  No pre-created ephemeral account - creating one now (slower)");
 
-            // Generate account seed
-            info!("  Generating random account seed...");
-            let mut init_seed = [0u8; 32];
-            client.rng().fill_bytes(&mut init_seed);
-            info!("  Seed (hex): {}", hex::encode(&init_seed));
+                // Generate account seed
+                info!("  Generating random account seed...");
+                let mut init_seed = [0u8; 32];
+                client.rng().fill_bytes(&mut init_seed);
+                info!("  Seed (hex): {}", hex::encode(&init_seed));
 
-            // Generate key pair for signing
-            info!("  Generating Falcon512 key pair for signing...");
-            let key_pair = AuthSecretKey::new_falcon512_rpo();
-            info!("  Public key commitment generated");
+                // Generate key pair for signing
+                info!("  Generating Falcon512 key pair for signing...");
+                let key_pair = AuthSecretKey::new_falcon512_rpo();
+                info!("  Public key commitment generated");
 
-            // Add key to keystore so it can be used for signing transactions
-            info!("  Adding key to keystore...");
-            keystore.add_key(&key_pair)
-                .map_err(|e| ClientError::InitializationError(format!("Failed to add key to keystore: {}", e)))?;
-            info!("  ✓ Key added to keystore");
+                // Add key to keystore so it can be used for signing transactions
+                info!("  Adding key to keystore...");
+                keystore
+                    .add_key(&key_pair)
+                    .map_err(|e| ClientError::InitializationError(format!("Failed to add key to keystore: {}", e)))?;
+                info!("  ✓ Key added to keystore");
 
-            // Build the ephemeral account
-            info!("  Building ephemeral account with:");
-            info!("    - Type: RegularAccountUpdatableCode");
-            info!("    - Storage: Public");
-            info!("    - Auth: RpoFalcon512");
-            info!("    - Component: BasicWallet");
-            let ephemeral_account = AccountBuilder::new(init_seed)
-                .account_type(AccountType::RegularAccountUpdatableCode)
-                .storage_mode(AccountStorageMode::Public)
-                .with_auth_component(AuthFalcon512Rpo::new(key_pair.public_key().to_commitment()))
-                .with_component(BasicWallet)
-                .build()
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to build ephemeral account: {}", e
-                )))?;
+                // Build the ephemeral account
+                info!("  Building ephemeral account with:");
+                info!("    - Type: RegularAccountUpdatableCode");
+                info!("    - Storage: Public");
+                info!("    - Auth: RpoFalcon512");
+                info!("    - Component: BasicWallet");
+                let ephemeral_account = AccountBuilder::new(init_seed)
+                    .account_type(AccountType::RegularAccountUpdatableCode)
+                    .storage_mode(AccountStorageMode::Public)
+                    .with_auth_component(AuthFalcon512Rpo::new(key_pair.public_key().to_commitment()))
+                    .with_component(BasicWallet)
+                    .build()
+                    .map_err(|e| {
+                        ClientError::InitializationError(format!("Failed to build ephemeral account: {}", e))
+                    })?;
 
-            let ephemeral_account_id = ephemeral_account.id();
-            info!("  ✓ Ephemeral account built successfully");
-            info!("  → Account ID: {}", ephemeral_account_id);
+                let ephemeral_account_id = ephemeral_account.id();
+                info!("  ✓ Ephemeral account built successfully");
+                info!("  → Account ID: {}", ephemeral_account_id);
 
-            // Add account to client (local only, deployed on first tx)
-            info!("  Adding ephemeral account to client (local only, not deployed yet)...");
-            client.add_account(&ephemeral_account, false).await
-                .map_err(|e| ClientError::InitializationError(format!(
-                    "Failed to add ephemeral account to client: {}", e
-                )))?;
-            info!("  ✓ Ephemeral account added to client");
+                // Add account to client (local only, deployed on first tx)
+                info!("  Adding ephemeral account to client (local only, not deployed yet)...");
+                client
+                    .add_account(&ephemeral_account, false)
+                    .await
+                    .map_err(|e| {
+                        ClientError::InitializationError(format!("Failed to add ephemeral account to client: {}", e))
+                    })?;
+                info!("  ✓ Ephemeral account added to client");
 
-            // Sync state after adding ephemeral account so client tracks it properly
-            info!("  Syncing state after adding ephemeral account...");
-            let sync_after_ephemeral = client.sync_state().await
-                .map_err(|e| ClientError::SyncError(e.to_string()))?;
-            info!("  ✓ Sync complete at block {}", sync_after_ephemeral.block_num.as_u32());
+                // Sync state after adding ephemeral account so client tracks it properly
+                info!("  Syncing state after adding ephemeral account...");
+                let sync_after_ephemeral = client
+                    .sync_state()
+                    .await
+                    .map_err(|e| ClientError::SyncError(e.to_string()))?;
+                info!("  ✓ Sync complete at block {}", sync_after_ephemeral.block_num.as_u32());
 
-            let submitter_account_id = ephemeral_account_id;
+                ephemeral_account_id
+            };
+
             info!("  Using ephemeral account {} as CLAIM note submitter", submitter_account_id);
 
             // Step 2 & 3: Create and deploy agglayer faucet
@@ -1211,6 +1317,346 @@ impl EthApiServer for EthApiImpl {
             }
         }
     }
+
+    // ========== New methods for kurtosis-cdk integration ==========
+
+    async fn get_block_by_number(
+        &self,
+        block_number: String,
+        full_transactions: bool,
+    ) -> Result<Option<serde_json::Value>, ErrorObjectOwned> {
+        let current = self.state.block_state.current_block_number();
+
+        let block_num = match block_number.to_lowercase().as_str() {
+            "latest" | "pending" => current,
+            "earliest" => 0,
+            hex if hex.starts_with("0x") => {
+                u64::from_str_radix(&hex[2..], 16).unwrap_or(current)
+            }
+            _ => current,
+        };
+
+        info!(
+            block_number = block_num,
+            full_transactions = full_transactions,
+            "eth_getBlockByNumber"
+        );
+
+        // Update block state with current timestamp
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.state.block_state.set_current_block(block_num, timestamp);
+
+        match self.state.block_state.get_block_by_number(block_num) {
+            Some(block) => Ok(Some(block.to_json(full_transactions))),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_block_by_hash(
+        &self,
+        block_hash: String,
+        full_transactions: bool,
+    ) -> Result<Option<serde_json::Value>, ErrorObjectOwned> {
+        info!(
+            block_hash = %block_hash,
+            full_transactions = full_transactions,
+            "eth_getBlockByHash"
+        );
+
+        let hash_bytes = if block_hash.starts_with("0x") {
+            hex::decode(&block_hash[2..]).unwrap_or_default()
+        } else {
+            hex::decode(&block_hash).unwrap_or_default()
+        };
+
+        if hash_bytes.len() != 32 {
+            return Ok(None);
+        }
+
+        let mut hash_arr = [0u8; 32];
+        hash_arr.copy_from_slice(&hash_bytes);
+
+        match self.state.block_state.get_block_by_hash(&hash_arr) {
+            Some(block) => Ok(Some(block.to_json(full_transactions))),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_logs(
+        &self,
+        filter: serde_json::Value,
+    ) -> Result<Vec<serde_json::Value>, ErrorObjectOwned> {
+        info!(filter = ?filter, "eth_getLogs");
+
+        let log_filter: LogFilter = serde_json::from_value(filter).unwrap_or_default();
+        let current_block = self.state.block_state.current_block_number();
+
+        let logs = self.state.log_store.get_logs(&log_filter, current_block);
+        let json_logs: Vec<serde_json::Value> = logs.iter().map(|l| l.to_json()).collect();
+
+        info!(log_count = json_logs.len(), "eth_getLogs: returning logs");
+        Ok(json_logs)
+    }
+
+    async fn get_transaction_by_hash(
+        &self,
+        tx_hash: String,
+    ) -> Result<Option<serde_json::Value>, ErrorObjectOwned> {
+        info!(tx_hash = %tx_hash, "eth_getTransactionByHash");
+
+        // Check if we have this transaction in our state
+        if let Some(status) = self.state.get_tx_status(&tx_hash) {
+            let block_num = match &status {
+                TxStatus::Confirmed { block_number } => *block_number,
+                _ => 0,
+            };
+
+            let block_hash = self.state.block_state.get_block_hash(block_num)
+                .unwrap_or([0u8; 32]);
+
+            // Return minimal transaction object
+            return Ok(Some(serde_json::json!({
+                "hash": tx_hash,
+                "blockNumber": format!("0x{:x}", block_num),
+                "blockHash": format!("0x{}", hex::encode(block_hash)),
+                "transactionIndex": "0x0",
+                "from": "0x0000000000000000000000000000000000000000",
+                "to": "0x0000000000000000000000000000000000000001",
+                "value": "0x0",
+                "gas": format!("0x{:x}", FIXED_GAS_ESTIMATE),
+                "gasPrice": "0x0",
+                "input": "0x",
+                "nonce": "0x0",
+                "v": "0x0",
+                "r": "0x0",
+                "s": "0x0"
+            })));
+        }
+
+        Ok(None)
+    }
+
+    async fn net_version(&self) -> Result<String, ErrorObjectOwned> {
+        // Return chain ID as decimal string (EIP-155)
+        let version = format!("{}", MIDEN_CHAIN_ID);
+        info!(net_version = %version, "net_version");
+        Ok(version)
+    }
+
+    async fn get_balance(
+        &self,
+        address: String,
+        block: Option<String>,
+    ) -> Result<String, ErrorObjectOwned> {
+        info!(address = %address, block = ?block, "eth_getBalance");
+        // Miden doesn't use ETH balances - return 0
+        Ok("0x0".to_string())
+    }
+
+    async fn get_code(
+        &self,
+        address: String,
+        block: Option<String>,
+    ) -> Result<String, ErrorObjectOwned> {
+        info!(address = %address, block = ?block, "eth_getCode");
+        // No EVM contracts on Miden - return empty
+        Ok("0x".to_string())
+    }
+
+    async fn get_storage_at(
+        &self,
+        address: String,
+        position: String,
+        block: Option<String>,
+    ) -> Result<String, ErrorObjectOwned> {
+        info!(address = %address, position = %position, block = ?block, "eth_getStorageAt");
+        // No EVM storage - return zero
+        Ok("0x0000000000000000000000000000000000000000000000000000000000000000".to_string())
+    }
+
+    async fn get_block_transaction_count_by_number(
+        &self,
+        block: String,
+    ) -> Result<String, ErrorObjectOwned> {
+        info!(block = %block, "eth_getBlockTransactionCountByNumber");
+
+        let current = self.state.block_state.current_block_number();
+        let block_num = match block.to_lowercase().as_str() {
+            "latest" | "pending" => current,
+            "earliest" => 0,
+            hex if hex.starts_with("0x") => {
+                u64::from_str_radix(&hex[2..], 16).unwrap_or(current)
+            }
+            _ => current,
+        };
+
+        // Get transaction count from block state
+        if let Some(block) = self.state.block_state.get_block_by_number(block_num) {
+            Ok(format!("0x{:x}", block.transactions.len()))
+        } else {
+            Ok("0x0".to_string())
+        }
+    }
+}
+
+/// Initialize the ephemeral submitter account once at startup
+/// Returns the AccountId that should be stored and reused for all transactions
+///
+/// The account and its signing key are stored in the SQLite store and keystore respectively,
+/// so subsequent client instances can use them for transaction signing.
+async fn initialize_ephemeral_account(
+    rpc_endpoint: &str,
+    store_path: &PathBuf,
+    bridge_faucet_id_hex: &str,
+) -> Result<AccountId, ClientError> {
+    use miden_client::account::component::BasicWallet;
+    use miden_client::builder::ClientBuilder;
+    use miden_client::keystore::FilesystemKeyStore;
+    use miden_client::rpc::Endpoint;
+    use miden_client_sqlite_store::SqliteStore;
+    use miden_protocol::account::auth::AuthSecretKey;
+    use miden_protocol::account::{AccountBuilder, AccountStorageMode, AccountType};
+    use miden_standards::account::auth::AuthFalcon512Rpo;
+    use rand::RngCore;
+
+    info!("╔══════════════════════════════════════════════════════════════════╗");
+    info!("║  INITIALIZING EPHEMERAL SUBMITTER ACCOUNT                        ║");
+    info!("╚══════════════════════════════════════════════════════════════════╝");
+
+    let rpc_endpoint = rpc_endpoint.to_string();
+    let store_path = store_path.clone();
+    let bridge_faucet_id_hex = bridge_faucet_id_hex.to_string();
+    let runtime_handle = tokio::runtime::Handle::current();
+
+    // Use spawn_blocking because miden_client::Client is !Send
+    let result = tokio::task::spawn_blocking(move || {
+        runtime_handle.block_on(async {
+            // Create keystore directory
+            let keystore_path = store_path
+                .parent()
+                .map(|p| p.join("keystore"))
+                .unwrap_or_else(|| PathBuf::from("/app/data/keystore"));
+            std::fs::create_dir_all(&keystore_path).map_err(|e| {
+                ClientError::InitializationError(format!(
+                    "Failed to create keystore dir: {}",
+                    e
+                ))
+            })?;
+
+            let keystore = FilesystemKeyStore::new(keystore_path.clone()).map_err(|e| {
+                ClientError::InitializationError(format!("Failed to create keystore: {}", e))
+            })?;
+            let keystore = Arc::new(keystore);
+
+            // Validate faucet ID format (ensures the proxy config is valid at startup)
+            let _faucet_id = parse_account_id_from_hex(&bridge_faucet_id_hex)
+                .map_err(|e| ClientError::InitializationError(format!("Invalid faucet ID: {}", e)))?;
+
+            // Initialize SQLite store
+            let store = SqliteStore::new(store_path.clone())
+                .await
+                .map_err(|e| ClientError::InitializationError(e.to_string()))?;
+
+            // Parse RPC endpoint
+            let endpoint = Endpoint::try_from(rpc_endpoint.as_str())
+                .map_err(|e| ClientError::InitializationError(format!("Invalid endpoint: {}", e)))?;
+
+            // Build client
+            let mut client: miden_client::Client<FilesystemKeyStore> = ClientBuilder::new()
+                .grpc_client(&endpoint, Some(10_000))
+                .store(Arc::new(store))
+                .authenticator(keystore.clone())
+                .build()
+                .await
+                .map_err(|e| ClientError::InitializationError(e.to_string()))?;
+
+            // Sync state
+            info!("  Syncing state with node...");
+            let sync_result = client
+                .sync_state()
+                .await
+                .map_err(|e| ClientError::SyncError(e.to_string()))?;
+            info!("  ✓ Synced to block {}", sync_result.block_num.as_u32());
+
+            // Generate account seed
+            info!("  Generating random account seed...");
+            let mut init_seed = [0u8; 32];
+            client.rng().fill_bytes(&mut init_seed);
+            info!("  Seed (hex): {}", hex::encode(&init_seed));
+
+            // Generate key pair for signing
+            info!("  Generating Falcon512 key pair for signing...");
+            let key_pair = AuthSecretKey::new_falcon512_rpo();
+            info!("  Public key commitment generated");
+
+            // Add key to keystore so it can be used for signing transactions
+            info!("  Adding key to keystore...");
+            keystore.add_key(&key_pair).map_err(|e| {
+                ClientError::InitializationError(format!("Failed to add key to keystore: {}", e))
+            })?;
+            info!("  ✓ Key added to keystore");
+
+            // Build the ephemeral account
+            info!("  Building ephemeral account with:");
+            info!("    - Type: RegularAccountUpdatableCode");
+            info!("    - Storage: Public");
+            info!("    - Auth: RpoFalcon512");
+            info!("    - Component: BasicWallet");
+            let ephemeral_account = AccountBuilder::new(init_seed)
+                .account_type(AccountType::RegularAccountUpdatableCode)
+                .storage_mode(AccountStorageMode::Public)
+                .with_auth_component(AuthFalcon512Rpo::new(key_pair.public_key().to_commitment()))
+                .with_component(BasicWallet)
+                .build()
+                .map_err(|e| {
+                    ClientError::InitializationError(format!(
+                        "Failed to build ephemeral account: {}",
+                        e
+                    ))
+                })?;
+
+            let ephemeral_account_id = ephemeral_account.id();
+            info!("  ✓ Ephemeral account built successfully");
+            info!("  → Account ID: {}", ephemeral_account_id);
+
+            // Add account to client (local only, deployed on first tx)
+            info!("  Adding ephemeral account to client...");
+            client
+                .add_account(&ephemeral_account, false)
+                .await
+                .map_err(|e| {
+                    ClientError::InitializationError(format!(
+                        "Failed to add ephemeral account to client: {}",
+                        e
+                    ))
+                })?;
+            info!("  ✓ Ephemeral account added to client store");
+
+            // Final sync
+            info!("  Final sync after account creation...");
+            let final_sync = client
+                .sync_state()
+                .await
+                .map_err(|e| ClientError::SyncError(e.to_string()))?;
+            info!("  ✓ Sync complete at block {}", final_sync.block_num.as_u32());
+
+            info!("╔══════════════════════════════════════════════════════════════════╗");
+            info!(
+                "║  EPHEMERAL ACCOUNT READY: {}  ║",
+                ephemeral_account_id
+            );
+            info!("╚══════════════════════════════════════════════════════════════════╝");
+
+            Ok::<AccountId, ClientError>(ephemeral_account_id)
+        })
+    })
+    .await
+    .map_err(|e| ClientError::InitializationError(format!("Task join error: {}", e)))?;
+
+    result
 }
 
 #[tokio::main]
@@ -1282,19 +1728,34 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize Miden submission config for claim processing
-    let miden_config = MidenSubmissionConfig {
-        rpc_endpoint: miden_rpc_url.clone(),
-        store_path: store_path.clone(),
-        bridge_faucet_id_hex: bridge_faucet_id.clone(),
-        faucet_account_file: faucet_account_file.clone(),
-    };
-
     let rpc_impl = if bridge_faucet_id.is_empty() {
         warn!("Starting without Miden submission support (BRIDGE_FAUCET_ID not configured)");
         EthApiImpl::new(state, miden_rpc_url)
     } else {
+        // Initialize ephemeral account at startup (created once, reused for all transactions)
+        info!("Initializing ephemeral submitter account...");
+        let ephemeral_account_id = match initialize_ephemeral_account(&miden_rpc_url, &store_path, &bridge_faucet_id).await {
+            Ok(id) => {
+                info!(account_id = %id, "Ephemeral account initialized successfully");
+                Some(id)
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to initialize ephemeral account - will create per-transaction");
+                None
+            }
+        };
+
+        let miden_config = MidenSubmissionConfig {
+            rpc_endpoint: miden_rpc_url.clone(),
+            store_path: store_path.clone(),
+            bridge_faucet_id_hex: bridge_faucet_id.clone(),
+            faucet_account_file: faucet_account_file.clone(),
+            ephemeral_account_id,
+        };
+
         info!(
             bridge_faucet_id = %bridge_faucet_id,
+            ephemeral_account = ?ephemeral_account_id,
             "Miden submission config initialized"
         );
         EthApiImpl::with_miden_config(state, miden_config, miden_rpc_url)
