@@ -10,8 +10,9 @@ pub type EthTxHash = [u8; 32];
 /// Miden transaction ID
 pub type MidenTxId = String;
 
-/// Bridge contract address for receipt `to` field
-pub const BRIDGE_CONTRACT_ADDRESS: &str = "0x0000000000000000000000000000000000000001";
+/// Bridge contract address for receipt `to` field and ClaimEvent emission
+/// Must match the L2 bridge address that the bridge service queries for events
+pub const BRIDGE_CONTRACT_ADDRESS: &str = "0xc8cbebf950b9df44d987c8619f092bea980ff038";
 
 /// Transaction status in the Miden network
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
