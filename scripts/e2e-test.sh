@@ -298,12 +298,13 @@ start_miden_services() {
     fi
 
     # Build proxy image if needed or --rebuild flag is set
+    # Tag as both :kurtosis and :latest for consistency
     if $REBUILD_IMAGES || ! docker image inspect miden-rpc-proxy:kurtosis &>/dev/null; then
-        log "Building miden-rpc-proxy:kurtosis image..."
-        if ! docker build -t miden-rpc-proxy:kurtosis -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR"; then
+        log "Building miden-rpc-proxy image..."
+        if ! docker build -t miden-rpc-proxy:kurtosis -t miden-rpc-proxy:latest -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR"; then
             fail "Failed to build miden-rpc-proxy image"
         fi
-        success "Proxy image built"
+        success "Proxy image built (tagged as :kurtosis and :latest)"
     else
         log "Using existing miden-rpc-proxy:kurtosis image (use --rebuild to force)"
     fi
