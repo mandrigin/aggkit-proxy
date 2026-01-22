@@ -337,6 +337,10 @@ start_miden_services() {
         log "Using existing miden-rpc-proxy:kurtosis image (use --rebuild to force)"
     fi
 
+    # Clean bridge DB before starting proxy to ensure fresh L2 sync from block 0
+    # This prevents the bridge from missing GER events due to block number mismatch
+    clean_bridge_db
+
     # Start proxy
     # BRIDGE_FAUCET_ID enables Miden submission for claim transactions
     # Uses deterministic seed for agglayer faucet creation
@@ -1031,10 +1035,8 @@ main() {
 
     if ! $SKIP_CDK; then
         deploy_kurtosis_cdk
-    else
-        # When skipping CDK, clean the bridge DB for fresh L2 sync
-        clean_bridge_db
     fi
+    # Note: Bridge DB cleanup now happens inside start_miden_services
 
     if ! $SKIP_MIDEN; then
         start_miden_services
