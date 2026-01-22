@@ -572,6 +572,7 @@ EOF
     fi
 
     # Step 7: Configure aggkit (aggoracle) to send GER updates to Miden proxy
+    # Container filesystem is read-only, so we extract config, modify locally, and recreate with volume mount
     log "Configuring aggkit to use Miden proxy for GER injection..."
     local aggkit_container
     aggkit_container=$(docker ps --filter "name=aggkit-001--" --format "{{.Names}}" | grep -v bridge | head -1)
@@ -579,26 +580,63 @@ EOF
     if [[ -n "$aggkit_container" ]]; then
         log "Found aggkit container: $aggkit_container"
 
-        # Update L2URL and RPCURL to use forwarder
-        docker exec "$aggkit_container" sh -c "
-            if [ -f /etc/aggkit/config.toml ]; then
-                cp /etc/aggkit/config.toml /etc/aggkit/config.toml.bak
-                # Replace L2URL to use forwarder
-                sed -i 's|L2URL = \"http://op-el-[0-9]*-op-geth-op-node-001:8545\"|L2URL = \"http://miden-l2-forwarder:8545\"|g' /etc/aggkit/config.toml
-                # Replace RPCURL to use forwarder
-                sed -i 's|RPCURL = \"http://op-el-[0-9]*-op-geth-op-node-001:8545\"|RPCURL = \"http://miden-l2-forwarder:8545\"|g' /etc/aggkit/config.toml
+        # Create temp dir for modified config
+        local config_dir="${SCRIPT_DIR}/.aggkit-config"
+        mkdir -p "$config_dir"
+
+        # Extract config from container
+        log "Extracting aggkit config..."
+        if docker cp "$aggkit_container:/etc/aggkit/config.toml" "$config_dir/config.toml" 2>/dev/null; then
+            log "Config extracted, modifying..."
+
+            # Modify config to use forwarder
+            sed -i.bak 's|L2URL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|L2URL = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
+            sed -i.bak 's|RPCURL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|RPCURL = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
+
+            # Show the change
+            local l2url
+            l2url=$(grep "^L2URL" "$config_dir/config.toml" | head -1 || echo "")
+            log "Modified aggkit L2URL: $l2url"
+
+            # Get container image and other details for recreation
+            local image
+            image=$(docker inspect "$aggkit_container" --format '{{.Config.Image}}')
+            local network
+            network=$(docker inspect "$aggkit_container" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' | head -1)
+
+            log "Stopping original aggkit container..."
+            docker stop "$aggkit_container" 2>/dev/null || true
+
+            # Create new container with same settings but with config volume mounted
+            log "Starting aggkit with modified config (volume mount)..."
+            local new_container_name="aggkit-miden-proxy"
+
+            # Remove if exists from previous run
+            docker rm -f "$new_container_name" 2>/dev/null || true
+
+            # Run new container with config mounted
+            if docker run -d \
+                --name "$new_container_name" \
+                --network "$network" \
+                -v "$config_dir/config.toml:/etc/aggkit/config.toml:ro" \
+                "$image" 2>/dev/null; then
+                success "aggkit started with Miden proxy config"
+
+                # Verify it's running
+                sleep 3
+                if docker ps --filter "name=$new_container_name" --format "{{.Names}}" | grep -q "$new_container_name"; then
+                    success "aggkit container running: $new_container_name"
+                else
+                    warn "aggkit container may have failed to start"
+                    docker logs "$new_container_name" 2>&1 | tail -20
+                fi
+            else
+                warn "Failed to start aggkit with modified config, restarting original..."
+                docker start "$aggkit_container" 2>/dev/null || true
             fi
-        " 2>/dev/null || warn "Could not modify aggkit config"
-
-        # Verify change
-        local l2url
-        l2url=$(docker exec "$aggkit_container" grep "^L2URL" /etc/aggkit/config.toml 2>/dev/null | head -1 || echo "")
-        log "aggkit L2URL: $l2url"
-
-        # Restart aggkit to pick up new config
-        docker restart "$aggkit_container" 2>/dev/null
-        sleep 3
-        success "aggkit restarted with Miden proxy config"
+        else
+            warn "Could not extract aggkit config, skipping GER configuration"
+        fi
     else
         log "aggkit container not found (may not be deployed)"
     fi
