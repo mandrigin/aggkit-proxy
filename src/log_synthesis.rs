@@ -14,6 +14,17 @@ pub const BRIDGE_EVENT_TOPIC: &str =
 pub const CLAIM_EVENT_TOPIC: &str =
     "0x25308c93ceeed162da955b3f7ce3e3f93606579e40fb92029faa9efe27545983";
 
+/// UpdateGlobalExitRoot topic hash: keccak256("UpdateGlobalExitRoot(bytes32,bytes32)")
+/// Emitted when aggoracle injects a new GER into L2
+pub const UPDATE_GER_TOPIC: &str =
+    "0x61014378f82a0d809aefaf87a8ac9505b89c321808287a6e7810f29304c1fce3";
+
+/// L2 GlobalExitRoot contract address (receives GER updates from aggoracle)
+pub const L2_GLOBAL_EXIT_ROOT_ADDRESS: &str = "0xa40D5f56745a118D0906a34E69aeC8C0Db1cB8fA";
+
+/// updateExitRoot(bytes32,bytes32) function selector
+pub const UPDATE_EXIT_ROOT_SELECTOR: [u8; 4] = [0x73, 0x6c, 0xa7, 0xf4];
+
 /// Synthetic log entry for eth_getLogs
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyntheticLog {
@@ -239,6 +250,36 @@ impl LogStore {
                 format!("0x{}", hex::encode(global_index)), // globalIndex indexed
             ],
             data: encode_claim_event_data(origin_network, origin_address, destination_address, amount),
+            block_number,
+            block_hash,
+            transaction_hash: tx_hash.to_string(),
+            transaction_index: 0,
+            log_index: 0, // Will be set by add_log
+            removed: false,
+        };
+        self.add_log(log);
+    }
+
+    /// Create an UpdateGlobalExitRoot log for a GER injection transaction
+    /// This is emitted when aggoracle sends a GER update to L2
+    pub fn add_ger_update_event(
+        &self,
+        block_number: u64,
+        block_hash: [u8; 32],
+        tx_hash: &str,
+        mainnet_exit_root: &[u8; 32],
+        rollup_exit_root: &[u8; 32],
+    ) {
+        // UpdateGlobalExitRoot(bytes32 mainnetExitRoot, bytes32 rollupExitRoot)
+        // Both parameters are non-indexed, so they go in data
+        let mut data = Vec::with_capacity(64);
+        data.extend_from_slice(mainnet_exit_root);
+        data.extend_from_slice(rollup_exit_root);
+
+        let log = SyntheticLog {
+            address: L2_GLOBAL_EXIT_ROOT_ADDRESS.to_string(),
+            topics: vec![UPDATE_GER_TOPIC.to_string()],
+            data: format!("0x{}", hex::encode(&data)),
             block_number,
             block_hash,
             transaction_hash: tx_hash.to_string(),

@@ -23,7 +23,7 @@ mod block_state;
 mod log_synthesis;
 
 use block_state::BlockState;
-use log_synthesis::{LogFilter, LogStore};
+use log_synthesis::{LogFilter, LogStore, L2_GLOBAL_EXIT_ROOT_ADDRESS, UPDATE_EXIT_ROOT_SELECTOR};
 
 use alloy_primitives::{Address, Bytes};
 
@@ -79,6 +79,80 @@ pub struct TransactionReceipt {
     pub effective_gas_price: String,
 }
 
+/// Stored Global Exit Root entry
+#[derive(Debug, Clone)]
+pub struct GerEntry {
+    /// Mainnet exit root (from L1)
+    pub mainnet_exit_root: [u8; 32],
+    /// Rollup exit root
+    pub rollup_exit_root: [u8; 32],
+    /// Block number when injected
+    pub block_number: u64,
+    /// Transaction hash of injection
+    pub tx_hash: String,
+}
+
+/// Store for Global Exit Roots injected by aggoracle
+pub struct GerStore {
+    /// All GERs indexed by combined hash
+    entries: RwLock<HashMap<[u8; 64], GerEntry>>,
+    /// Latest GER (most recently injected)
+    latest: RwLock<Option<GerEntry>>,
+    /// GER injection counter for synthetic tx hashes
+    counter: RwLock<u64>,
+}
+
+impl GerStore {
+    pub fn new() -> Self {
+        Self {
+            entries: RwLock::new(HashMap::new()),
+            latest: RwLock::new(None),
+            counter: RwLock::new(0),
+        }
+    }
+
+    /// Store a new GER and return synthetic tx hash
+    pub fn inject_ger(
+        &self,
+        mainnet_exit_root: [u8; 32],
+        rollup_exit_root: [u8; 32],
+        block_number: u64,
+    ) -> String {
+        let mut counter = self.counter.write();
+        *counter += 1;
+
+        // Create synthetic tx hash from GER data
+        let mut hasher = Keccak256::new();
+        hasher.update(&mainnet_exit_root);
+        hasher.update(&rollup_exit_root);
+        hasher.update(&counter.to_be_bytes());
+        let tx_hash = format!("0x{}", hex::encode(hasher.finalize()));
+
+        let entry = GerEntry {
+            mainnet_exit_root,
+            rollup_exit_root,
+            block_number,
+            tx_hash: tx_hash.clone(),
+        };
+
+        // Store by combined key
+        let mut key = [0u8; 64];
+        key[..32].copy_from_slice(&mainnet_exit_root);
+        key[32..].copy_from_slice(&rollup_exit_root);
+        self.entries.write().insert(key, entry.clone());
+
+        // Update latest
+        *self.latest.write() = Some(entry);
+
+        tx_hash
+    }
+
+    /// Get the latest injected GER
+    pub fn get_latest(&self) -> Option<GerEntry> {
+        self.latest.read().clone()
+    }
+}
+
 /// State for tracking transactions and nonces
 pub struct BridgeState {
     /// Synthetic nonces per account address
@@ -95,6 +169,8 @@ pub struct BridgeState {
     block_state: BlockState,
     /// Log store for synthetic EVM logs (kurtosis-cdk integration)
     log_store: LogStore,
+    /// GER store for tracking injected Global Exit Roots
+    ger_store: GerStore,
 }
 
 impl BridgeState {
@@ -114,6 +190,9 @@ impl BridgeState {
         let log_store = LogStore::new();
         info!("LogStore initialized (synthetic EVM logs)");
 
+        let ger_store = GerStore::new();
+        info!("GerStore initialized (Global Exit Root tracking)");
+
         Self {
             nonces: RwLock::new(HashMap::new()),
             transactions: RwLock::new(HashMap::new()),
@@ -122,6 +201,7 @@ impl BridgeState {
             address_mapper: parking_lot::Mutex::new(address_mapper),
             block_state,
             log_store,
+            ger_store,
         }
     }
 
@@ -935,6 +1015,74 @@ impl EthApiServer for EthApiImpl {
                         chain_id = ?tx.chain_id,
                         "Transaction decoded successfully"
                     );
+
+                    // Check if this is a GER injection transaction from aggoracle
+                    // Target: L2_GLOBAL_EXIT_ROOT_ADDRESS with updateExitRoot(bytes32,bytes32) selector
+                    if let Some(to_addr) = tx.to {
+                        let to_str = format!("{:?}", to_addr);
+                        if to_str.to_lowercase() == L2_GLOBAL_EXIT_ROOT_ADDRESS.to_lowercase() {
+                            // Check for updateExitRoot selector
+                            if tx.input.len() >= 68 && tx.input[..4] == UPDATE_EXIT_ROOT_SELECTOR {
+                                info!(
+                                    from = %tx.from,
+                                    "GER injection transaction detected from aggoracle"
+                                );
+
+                                // Parse mainnet_exit_root and rollup_exit_root from calldata
+                                // Calldata layout: selector (4) + mainnet_exit_root (32) + rollup_exit_root (32)
+                                let mut mainnet_exit_root = [0u8; 32];
+                                let mut rollup_exit_root = [0u8; 32];
+                                mainnet_exit_root.copy_from_slice(&tx.input[4..36]);
+                                rollup_exit_root.copy_from_slice(&tx.input[36..68]);
+
+                                info!(
+                                    mainnet_exit_root = %hex::encode(&mainnet_exit_root),
+                                    rollup_exit_root = %hex::encode(&rollup_exit_root),
+                                    "Parsed GER from transaction"
+                                );
+
+                                // Get current block number and ensure block exists
+                                let block_number = self.state.block_state.current_block_number();
+                                let timestamp = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+                                self.state.block_state.set_current_block(block_number, timestamp);
+
+                                // Store GER and get synthetic tx hash
+                                let tx_hash = self.state.ger_store.inject_ger(
+                                    mainnet_exit_root,
+                                    rollup_exit_root,
+                                    block_number,
+                                );
+
+                                // Get block hash for this block
+                                let block_hash = self.state.block_state.get_block_hash(block_number)
+                                    .unwrap_or([0u8; 32]);
+
+                                // Emit UpdateGlobalExitRoot event
+                                self.state.log_store.add_ger_update_event(
+                                    block_number,
+                                    block_hash,
+                                    &tx_hash,
+                                    &mainnet_exit_root,
+                                    &rollup_exit_root,
+                                );
+
+                                info!(
+                                    tx_hash = %tx_hash,
+                                    block_number = block_number,
+                                    "GER injection processed, UpdateGlobalExitRoot event emitted"
+                                );
+
+                                // Record transaction as confirmed
+                                self.state.record_tx(tx_hash.clone(), TxStatus::Confirmed { block_number });
+
+                                return Ok(tx_hash);
+                            }
+                        }
+                    }
+
                     // Check if this is a claimAsset call
                     if !is_claim_asset(&tx.input) {
                         warn!(
