@@ -48,9 +48,11 @@ COPY --from=builder /app/target/release/miden-rpc-proxy /usr/local/bin/
 # Configuration file location
 ENV CONFIG_PATH=/app/config.toml
 
-# Default ports
-# Proxy listens on 8546 (Ethereum-compatible RPC)
-EXPOSE 8546
+# Default ports (can be overridden via config)
+# HTTP RPC: 8123 (kurtosis-cdk) or 8546 (standalone)
+# WebSocket: 8133 (for subscriptions)
+# Metrics: 9123 (Prometheus)
+EXPOSE 8123 8133 8546 9123
 
 ENTRYPOINT ["miden-rpc-proxy"]
 CMD ["--config", "/app/config.toml"]

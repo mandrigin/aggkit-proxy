@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use miden_rpc_proxy::{
     create_and_deploy_agglayer_faucet, decode_transaction, init_client, is_claim_asset,
     parse_claim_asset, submit_transaction, AddressMapper, AddressMapperConfig, ClaimTracker,
-    ClientError, EthAddress, MidenClientConfig, CLAIM_ASSET_SELECTOR,
+    ClientError, EthAddress, MidenClientConfig, BRIDGE_CONTRACT_ADDRESS, CLAIM_ASSET_SELECTOR,
 };
 
 // New modules for kurtosis-cdk integration
@@ -1161,6 +1161,13 @@ impl EthApiServer for EthApiImpl {
                 recipient_account_bytes: miden_account_id.to_bytes(),
             };
 
+            // Capture values for ClaimEvent log synthesis before claim_data is moved
+            let log_global_index = claim_data.global_index;
+            let log_origin_network = claim_data.origin_network;
+            let log_origin_token_address = claim_data.origin_token_address;
+            let log_destination_address = claim_data.destination_address;
+            let log_amount = claim_data.amount;
+
             info!(
                 tx_hash = %tx_hash,
                 "Submitting to Miden network (blocking)..."
@@ -1177,6 +1184,38 @@ impl EthApiServer for EthApiImpl {
                     self.state.record_tx(
                         tx_hash.clone(),
                         TxStatus::Confirmed { block_number: block_num },
+                    );
+
+                    // Synthesize ClaimEvent log for eth_getLogs queries
+                    // Update block state and emit log
+                    self.state.block_state.set_current_block(
+                        block_num,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    );
+                    let block_hash = self
+                        .state
+                        .block_state
+                        .get_block_hash(block_num)
+                        .unwrap_or([0u8; 32]);
+
+                    self.state.log_store.add_claim_event(
+                        BRIDGE_CONTRACT_ADDRESS,
+                        block_num,
+                        block_hash,
+                        &tx_hash,
+                        &log_global_index,
+                        log_origin_network,
+                        &log_origin_token_address,
+                        &log_destination_address,
+                        log_amount,
+                    );
+                    info!(
+                        tx_hash = %tx_hash,
+                        block_num = block_num,
+                        "ClaimEvent log synthesized for eth_getLogs"
                     );
                 }
                 Err(e) => {

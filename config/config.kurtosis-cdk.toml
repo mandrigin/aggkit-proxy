@@ -1,0 +1,73 @@
+# Miden RPC Proxy Configuration - Kurtosis CDK Integration
+#
+# This configuration template is for use with kurtosis-cdk deployments.
+# Values marked with {{ }} are placeholders for kurtosis templating.
+#
+# Port assignments follow kurtosis-cdk conventions:
+# - HTTP RPC: 8123
+# - WebSocket: 8133
+# - Metrics: 9123
+
+[server]
+# HTTP RPC endpoint (Ethereum-compatible JSON-RPC)
+http_port = 8123
+http_host = "0.0.0.0"
+
+# WebSocket endpoint for subscriptions (eth_subscribe, newHeads, logs)
+ws_port = 8133
+ws_host = "0.0.0.0"
+
+# Prometheus metrics endpoint
+metrics_port = 9123
+
+[miden]
+# Miden node gRPC endpoint
+# In kurtosis-cdk: https://miden-node-001:443
+rpc_url = "{{ .miden_node_url }}"
+
+# Network ID assigned by Agglayer (default: 2 for Miden)
+network_id = {{ .miden_network_id }}
+
+# Chain ID for eth_chainId (hex-encoded network_id)
+chain_id = "{{ .miden_chain_id }}"
+
+[bridge]
+# Bridge contract address on L1 (PolygonZkEVMBridgeV2)
+contract_address = "{{ .bridge_contract_address }}"
+
+# Bridge event topic for deposit detection
+# BridgeEvent: 0x501781209a1f8899323b96b4ef08b168df93e0a90c673d1e4cce39366cb62f9b
+bridge_event_topic = "0x501781209a1f8899323b96b4ef08b168df93e0a90c673d1e4cce39366cb62f9b"
+
+# ClaimEvent topic for claim detection
+claim_event_topic = "0x25308c93ceeed162da955b3f7ce3e3f93606579e40fb92029faa9efe27545983"
+
+[l1]
+# L1 Ethereum RPC endpoint
+# In kurtosis-cdk: http://el-1-geth-lighthouse:8545
+rpc_url = "{{ .l1_rpc_url }}"
+
+# L1 chain ID (default: 1 for mainnet, 31337 for local)
+chain_id = {{ .l1_chain_id }}
+
+[sync]
+# Polling interval for eth_blockNumber (matches bridge SyncInterval)
+poll_interval_secs = 10
+
+# Maximum logs per eth_getLogs response
+max_logs_per_request = 1000
+
+# Genesis block for log scanning
+genesis_block = 0
+
+[state]
+# State synthesis for EVM compatibility
+# Map Miden batches to synthetic EVM blocks
+batch_to_block_enabled = true
+
+# Address mapping table size (EVM 20-byte <-> Miden 8-byte)
+address_map_cache_size = 10000
+
+[logging]
+level = "info"
+format = "json"
