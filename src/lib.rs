@@ -6,6 +6,7 @@
 #![deny(clippy::all)]
 
 pub mod address_mapper;
+pub mod agglayer_faucet;
 pub mod claim_tracker;
 pub mod client;
 pub mod config;
@@ -17,6 +18,7 @@ pub mod types;
 
 // Re-exports for convenience
 pub use address_mapper::{AddressMapper, AddressMapperConfig, EthAddress, MidenAccountId};
+pub use agglayer_faucet::{create_agglayer_faucet_local, AgglayerFaucetResult};
 pub use claim_tracker::ClaimTracker;
 pub use config::{ConfigError, ProxyConfig};
 pub use decode::{
