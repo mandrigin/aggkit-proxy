@@ -312,9 +312,9 @@ mod tc_1_5_consumption {
             .expect("Failed to get notes");
 
         if !notes.is_empty() {
-            let note_ids: Vec<_> = notes.iter().map(|(n, _)| n.id()).collect();
+            let notes_to_consume: Vec<_> = notes.into_iter().map(|(n, _)| n).collect();
             let tx_request = TransactionRequestBuilder::new()
-                .build_consume_notes(note_ids)
+                .build_consume_notes(notes_to_consume)
                 .expect("Failed to build consume request");
             let result = client.submit_new_transaction(recipient.id(), tx_request).await;
             assert!(result.is_ok(), "Note consumption should succeed");
@@ -372,9 +372,9 @@ mod tc_1_6_p2id {
             .expect("Failed to get Alice's notes");
 
         if !alice_notes.is_empty() {
-            let note_ids: Vec<_> = alice_notes.iter().map(|(n, _)| n.id()).collect();
+            let notes_to_consume: Vec<_> = alice_notes.into_iter().map(|(n, _)| n).collect();
             let consume_request = TransactionRequestBuilder::new()
-                .build_consume_notes(note_ids)
+                .build_consume_notes(notes_to_consume)
                 .expect("Failed to build consume request");
             client
                 .submit_new_transaction(alice.id(), consume_request)
@@ -434,9 +434,9 @@ mod tc_1_6_p2id {
         // Alice consumes mint note
         let alice_notes = client.get_consumable_notes(Some(alice.id())).await.unwrap();
         if !alice_notes.is_empty() {
-            let ids: Vec<_> = alice_notes.iter().map(|(n, _)| n.id()).collect();
+            let notes_to_consume: Vec<_> = alice_notes.into_iter().map(|(n, _)| n).collect();
             let consume_request = TransactionRequestBuilder::new()
-                .build_consume_notes(ids)
+                .build_consume_notes(notes_to_consume)
                 .unwrap();
             client.submit_new_transaction(alice.id(), consume_request).await.unwrap();
         }
@@ -458,9 +458,9 @@ mod tc_1_6_p2id {
         // Bob consumes P2ID note
         let bob_notes = client.get_consumable_notes(Some(bob.id())).await.unwrap();
         if !bob_notes.is_empty() {
-            let ids: Vec<_> = bob_notes.iter().map(|(n, _)| n.id()).collect();
+            let notes_to_consume: Vec<_> = bob_notes.into_iter().map(|(n, _)| n).collect();
             let consume_request = TransactionRequestBuilder::new()
-                .build_consume_notes(ids)
+                .build_consume_notes(notes_to_consume)
                 .unwrap();
             let result = client.submit_new_transaction(bob.id(), consume_request).await;
             assert!(result.is_ok(), "Bob should consume P2ID note");
