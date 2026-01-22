@@ -89,22 +89,16 @@ clean_bridge_db() {
     log "Found postgres container: $postgres_container"
     log "Cleaning L2 sync data (network_id=2) from bridge DB..."
 
-    # Clean L2 data from sync tables to force fresh sync
-    # Also clean monitored_txs to prevent stale claim txs from blocking
+    # Full clean of bridge DB - truncate all sync tables
+    # The bridge will re-index everything from scratch
     docker exec "$postgres_container" psql -U bridge_user -d bridge_db -c "
-        -- Clean L2 exit roots
-        DELETE FROM sync.exit_root WHERE network_id = 2;
-        -- Clean L2 blocks
-        DELETE FROM sync.block WHERE network_id = 2;
-        -- Clean L2 deposits (dest_net=2 means going TO Miden)
-        DELETE FROM sync.deposit WHERE dest_net = 2;
-        -- Clean L2 claims
-        DELETE FROM sync.claim WHERE network_id = 2;
-        -- Clean monitored claim transactions for L2
-        -- These can block the claim tx manager if left from previous runs
-        DELETE FROM sync.monitored_txs;
-        DELETE FROM sync.monitored_txs_group;
-    " 2>/dev/null && success "Cleaned L2 sync data from bridge DB" || warn "Failed to clean bridge DB (tables may not exist yet)"
+        TRUNCATE sync.exit_root CASCADE;
+        TRUNCATE sync.block CASCADE;
+        TRUNCATE sync.deposit CASCADE;
+        TRUNCATE sync.claim CASCADE;
+        TRUNCATE sync.monitored_txs CASCADE;
+        TRUNCATE sync.monitored_txs_group CASCADE;
+    " 2>/dev/null && success "Cleaned bridge DB (full truncate)" || warn "Failed to clean bridge DB (tables may not exist yet)"
 }
 
 # Parse arguments
