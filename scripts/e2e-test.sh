@@ -594,12 +594,18 @@ EOF
             sed -i.bak 's|L2URL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|L2URL = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
             sed -i.bak 's|RPCURL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|RPCURL = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
 
-            # Show the change
-            local l2url rpcurl
+            # CRITICAL: Uncomment and update URLRPCL2 in [AggOracle.EVMSender] section
+            # This is what the aggoracle uses to send GER injection transactions to L2
+            sed -i.bak 's|# URLRPCL2 = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|URLRPCL2 = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
+
+            # Show the changes
+            local l2url rpcurl urlrpcl2
             l2url=$(grep "^L2URL" "$config_dir/config.toml" | head -1 || echo "")
             rpcurl=$(grep "^RPCURL" "$config_dir/config.toml" | head -1 || echo "")
+            urlrpcl2=$(grep "^URLRPCL2" "$config_dir/config.toml" | head -1 || echo "NOT SET")
             log "Modified aggkit L2URL: $l2url"
             log "Modified aggkit RPCURL: $rpcurl"
+            log "Modified aggkit URLRPCL2 (aggoracle sender): $urlrpcl2"
 
             # Save container settings for recreation
             log "Saving container configuration..."
