@@ -23,7 +23,7 @@ mod block_state;
 mod log_synthesis;
 
 use block_state::BlockState;
-use log_synthesis::{LogFilter, LogStore, L2_GLOBAL_EXIT_ROOT_ADDRESS, UPDATE_EXIT_ROOT_SELECTOR};
+use log_synthesis::{LogFilter, LogStore, L2_GLOBAL_EXIT_ROOT_ADDRESS, UPDATE_EXIT_ROOT_SELECTOR, INSERT_GER_SELECTOR};
 
 use alloy_primitives::{Address, Bytes};
 
@@ -1017,15 +1017,17 @@ impl EthApiServer for EthApiImpl {
                     );
 
                     // Check if this is a GER injection transaction from aggoracle
-                    // Target: L2_GLOBAL_EXIT_ROOT_ADDRESS with updateExitRoot(bytes32,bytes32) selector
+                    // Target: L2_GLOBAL_EXIT_ROOT_ADDRESS with either:
+                    // - updateExitRoot(bytes32,bytes32) selector 0x736ca7f4
+                    // - insertGlobalExitRoot(bytes32) selector 0x12da06b2
                     if let Some(to_addr) = tx.to {
                         let to_str = format!("{:?}", to_addr);
                         if to_str.to_lowercase() == L2_GLOBAL_EXIT_ROOT_ADDRESS.to_lowercase() {
-                            // Check for updateExitRoot selector
+                            // Check for updateExitRoot(bytes32,bytes32) selector
                             if tx.input.len() >= 68 && tx.input[..4] == UPDATE_EXIT_ROOT_SELECTOR {
                                 info!(
                                     from = %tx.from,
-                                    "GER injection transaction detected from aggoracle"
+                                    "GER injection (updateExitRoot) detected from aggoracle"
                                 );
 
                                 // Parse mainnet_exit_root and rollup_exit_root from calldata
@@ -1038,7 +1040,7 @@ impl EthApiServer for EthApiImpl {
                                 info!(
                                     mainnet_exit_root = %hex::encode(&mainnet_exit_root),
                                     rollup_exit_root = %hex::encode(&rollup_exit_root),
-                                    "Parsed GER from transaction"
+                                    "Parsed GER from updateExitRoot transaction"
                                 );
 
                                 // Get current block number and ensure block exists
@@ -1048,6 +1050,68 @@ impl EthApiServer for EthApiImpl {
                                     .unwrap_or_default()
                                     .as_secs();
                                 self.state.block_state.set_current_block(block_number, timestamp);
+
+                                // Store GER and get synthetic tx hash
+                                let tx_hash = self.state.ger_store.inject_ger(
+                                    mainnet_exit_root,
+                                    rollup_exit_root,
+                                    block_number,
+                                );
+
+                                // Get block hash for this block
+                                let block_hash = self.state.block_state.get_block_hash(block_number)
+                                    .unwrap_or([0u8; 32]);
+
+                                // Emit UpdateGlobalExitRoot event
+                                self.state.log_store.add_ger_update_event(
+                                    block_number,
+                                    block_hash,
+                                    &tx_hash,
+                                    &mainnet_exit_root,
+                                    &rollup_exit_root,
+                                );
+
+                                info!(
+                                    tx_hash = %tx_hash,
+                                    block_number = block_number,
+                                    "GER injection processed, UpdateGlobalExitRoot event emitted"
+                                );
+
+                                // Record transaction as confirmed
+                                self.state.record_tx(tx_hash.clone(), TxStatus::Confirmed { block_number });
+
+                                return Ok(tx_hash);
+                            }
+
+                            // Check for insertGlobalExitRoot(bytes32) selector - used by aggoracle
+                            if tx.input.len() >= 36 && tx.input[..4] == INSERT_GER_SELECTOR {
+                                info!(
+                                    from = %tx.from,
+                                    "GER injection (insertGlobalExitRoot) detected from aggoracle"
+                                );
+
+                                // Parse GER from calldata
+                                // Calldata layout: selector (4) + globalExitRoot (32)
+                                let mut global_exit_root = [0u8; 32];
+                                global_exit_root.copy_from_slice(&tx.input[4..36]);
+
+                                info!(
+                                    global_exit_root = %hex::encode(&global_exit_root),
+                                    "Parsed GER from insertGlobalExitRoot transaction"
+                                );
+
+                                // Get current block number and ensure block exists
+                                let block_number = self.state.block_state.current_block_number();
+                                let timestamp = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+                                self.state.block_state.set_current_block(block_number, timestamp);
+
+                                // For insertGlobalExitRoot, we use the GER as mainnet_exit_root
+                                // and set rollup_exit_root to zeros (not provided in this call)
+                                let mainnet_exit_root = global_exit_root;
+                                let rollup_exit_root = [0u8; 32];
 
                                 // Store GER and get synthetic tx hash
                                 let tx_hash = self.state.ger_store.inject_ger(

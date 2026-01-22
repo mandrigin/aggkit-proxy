@@ -25,6 +25,9 @@ pub const L2_GLOBAL_EXIT_ROOT_ADDRESS: &str = "0xa40D5f56745a118D0906a34E69aeC8C
 /// updateExitRoot(bytes32,bytes32) function selector
 pub const UPDATE_EXIT_ROOT_SELECTOR: [u8; 4] = [0x73, 0x6c, 0xa7, 0xf4];
 
+/// insertGlobalExitRoot(bytes32) function selector - used by aggoracle
+pub const INSERT_GER_SELECTOR: [u8; 4] = [0x12, 0xda, 0x06, 0xb2];
+
 /// Synthetic log entry for eth_getLogs
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyntheticLog {

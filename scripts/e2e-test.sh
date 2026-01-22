@@ -590,29 +590,21 @@ EOF
         if docker cp "$aggkit_container:/etc/aggkit/config.toml" "$config_dir/config.toml" 2>/dev/null; then
             log "Config extracted, modifying..."
 
-            # Modify config to use forwarder for aggoracle L2/RPC URLs
+            # Modify config to use forwarder for L2/RPC URLs
+            # Note: URLRPCL2 and URLRPCL1 are deprecated - L2URL and RPCURL are used instead
             sed -i.bak 's|L2URL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|L2URL = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
             sed -i.bak 's|RPCURL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|RPCURL = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
-
-            # CRITICAL: Uncomment and update URLRPCL2 in [AggOracle.EVMSender] section
-            # This is what the aggoracle uses to send GER injection transactions to L2
-            sed -i.bak 's|# URLRPCL2 = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|URLRPCL2 = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
 
             # Uncomment TargetChainType (required for aggoracle to work)
             sed -i.bak 's|# TargetChainType = "EVM"|TargetChainType = "EVM"|g' "$config_dir/config.toml"
 
-            # Uncomment URLRPCL1 (required for aggoracle to read GER from L1)
-            sed -i.bak 's|# URLRPCL1 = "http://el-1-geth-lighthouse:8545"|URLRPCL1 = "http://el-1-geth-lighthouse:8545"|g' "$config_dir/config.toml"
-
             # Show the changes
-            local l2url rpcurl urlrpcl2 targetchaintype
+            local l2url rpcurl targetchaintype
             l2url=$(grep "^L2URL" "$config_dir/config.toml" | head -1 || echo "")
             rpcurl=$(grep "^RPCURL" "$config_dir/config.toml" | head -1 || echo "")
-            urlrpcl2=$(grep "^URLRPCL2" "$config_dir/config.toml" | head -1 || echo "NOT SET")
             targetchaintype=$(grep "^TargetChainType" "$config_dir/config.toml" | head -1 || echo "NOT SET")
             log "Modified aggkit L2URL: $l2url"
             log "Modified aggkit RPCURL: $rpcurl"
-            log "Modified aggkit URLRPCL2 (aggoracle sender): $urlrpcl2"
             log "Modified aggkit TargetChainType: $targetchaintype"
 
             # Save container settings for recreation
@@ -705,7 +697,89 @@ EOF
             warn "Could not extract aggkit config, skipping GER configuration"
         fi
     else
-        log "aggkit container not found (may not be deployed)"
+        log "aggkit bridge container not found (may not be deployed)"
+    fi
+
+    # Step 8: Configure aggkit-001 (aggsender) to use Miden proxy for GER injection
+    log "Configuring aggkit-001 (aggsender) to use Miden proxy..."
+    local aggsender_container
+    aggsender_container=$(docker ps -a --filter "name=aggkit-001--" --format "{{.Names}}" | grep -v bridge | head -1 || true)
+
+    if [[ -n "$aggsender_container" ]]; then
+        log "Found aggkit aggsender container: $aggsender_container"
+
+        # Make sure agglayer is running (aggsender depends on it)
+        local agglayer_container
+        agglayer_container=$(docker ps -a --filter "name=agglayer--" --format "{{.Names}}" | grep -v dashboard | grep -v getter | head -1 || true)
+        if [[ -n "$agglayer_container" ]]; then
+            if ! docker ps --filter "name=$agglayer_container" --format "{{.Names}}" | grep -q "$agglayer_container"; then
+                log "Starting agglayer service..."
+                docker start "$agglayer_container" 2>/dev/null || true
+                sleep 3
+            fi
+        fi
+
+        # Create config dir
+        local config_dir="${SCRIPT_DIR}/.aggkit-001-config"
+        mkdir -p "$config_dir/aggkit-full"
+
+        # Extract config
+        log "Extracting aggsender config..."
+        if docker cp "$aggsender_container:/etc/aggkit/." "$config_dir/aggkit-full/" 2>/dev/null; then
+            # Modify config
+            sed -i.bak 's|L2URL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|L2URL = "http://miden-l2-forwarder:8545"|g' "$config_dir/aggkit-full/config.toml"
+            sed -i.bak 's|RPCURL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|RPCURL = "http://miden-l2-forwarder:8545"|g' "$config_dir/aggkit-full/config.toml"
+
+            local l2url
+            l2url=$(grep "^L2URL" "$config_dir/aggkit-full/config.toml" | head -1 || echo "")
+            log "Modified aggsender L2URL: $l2url"
+
+            # Get container info
+            docker inspect "$aggsender_container" > "$config_dir/container-inspect.json"
+            local image hostname network
+            image=$(jq -r '.[0].Config.Image' "$config_dir/container-inspect.json")
+            hostname=$(jq -r '.[0].Config.Hostname' "$config_dir/container-inspect.json")
+            network=$(jq -r '.[0].NetworkSettings.Networks | keys[0]' "$config_dir/container-inspect.json")
+
+            # Extract env vars
+            jq -r '.[0].Config.Env[]' "$config_dir/container-inspect.json" > "$config_dir/env.list"
+
+            # Stop original
+            docker stop "$aggsender_container" 2>/dev/null || true
+
+            # Remove old recreated container
+            docker rm -f aggkit-001-miden-proxy 2>/dev/null || true
+
+            # Start new container with modified config
+            log "Starting aggsender with modified config..."
+            if docker run -d \
+                --name aggkit-001-miden-proxy \
+                --hostname "$hostname" \
+                --network "$network" \
+                -v "$config_dir/aggkit-full:/etc/aggkit:ro" \
+                --env-file "$config_dir/env.list" \
+                "$image" \
+                run --cfg=/etc/aggkit/config.toml --components=aggsender,aggoracle 2>/dev/null; then
+
+                sleep 5
+                if docker ps --filter "name=aggkit-001-miden-proxy" --format "{{.Names}}" | grep -q "aggkit-001-miden-proxy"; then
+                    success "aggsender container running: aggkit-001-miden-proxy"
+                else
+                    warn "aggsender container may have failed to start"
+                    docker logs aggkit-001-miden-proxy 2>&1 | tail -20
+                    docker start "$aggsender_container" 2>/dev/null || true
+                fi
+            else
+                warn "Failed to start aggsender, restarting original..."
+                docker start "$aggsender_container" 2>/dev/null || true
+            fi
+        else
+            # Container might be stopped, try to start it first
+            log "Trying to start stopped aggsender..."
+            docker start "$aggsender_container" 2>/dev/null || true
+        fi
+    else
+        log "aggkit aggsender container not found"
     fi
 }
 
