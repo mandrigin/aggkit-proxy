@@ -1338,12 +1338,22 @@ impl EthApiServer for EthApiImpl {
         tx: serde_json::Value,
         block: Option<String>,
     ) -> Result<String, ErrorObjectOwned> {
+        // Log raw request for debugging (at INFO level to ensure visibility)
+        info!(raw_tx = %tx, "eth_call: Raw transaction object");
+
         let data = tx.get("data").and_then(|d| d.as_str()).unwrap_or("");
+        // Also try "input" field (some clients use this)
+        let data = if data.is_empty() {
+            tx.get("input").and_then(|d| d.as_str()).unwrap_or("")
+        } else {
+            data
+        };
         let to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("");
 
         info!(
             tx_to = %to,
             tx_data = %data.chars().take(20).collect::<String>(),
+            data_len = data.len(),
             block = ?block,
             "eth_call: Simulating bridge state query"
         );
