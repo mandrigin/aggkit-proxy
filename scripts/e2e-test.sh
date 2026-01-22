@@ -598,14 +598,22 @@ EOF
             # This is what the aggoracle uses to send GER injection transactions to L2
             sed -i.bak 's|# URLRPCL2 = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|URLRPCL2 = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
 
+            # Uncomment TargetChainType (required for aggoracle to work)
+            sed -i.bak 's|# TargetChainType = "EVM"|TargetChainType = "EVM"|g' "$config_dir/config.toml"
+
+            # Uncomment URLRPCL1 (required for aggoracle to read GER from L1)
+            sed -i.bak 's|# URLRPCL1 = "http://el-1-geth-lighthouse:8545"|URLRPCL1 = "http://el-1-geth-lighthouse:8545"|g' "$config_dir/config.toml"
+
             # Show the changes
-            local l2url rpcurl urlrpcl2
+            local l2url rpcurl urlrpcl2 targetchaintype
             l2url=$(grep "^L2URL" "$config_dir/config.toml" | head -1 || echo "")
             rpcurl=$(grep "^RPCURL" "$config_dir/config.toml" | head -1 || echo "")
             urlrpcl2=$(grep "^URLRPCL2" "$config_dir/config.toml" | head -1 || echo "NOT SET")
+            targetchaintype=$(grep "^TargetChainType" "$config_dir/config.toml" | head -1 || echo "NOT SET")
             log "Modified aggkit L2URL: $l2url"
             log "Modified aggkit RPCURL: $rpcurl"
             log "Modified aggkit URLRPCL2 (aggoracle sender): $urlrpcl2"
+            log "Modified aggkit TargetChainType: $targetchaintype"
 
             # Save container settings for recreation
             log "Saving container configuration..."
