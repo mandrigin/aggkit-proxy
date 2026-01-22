@@ -1,11 +1,20 @@
 //! Block State - Synthetic EVM block tracking for kurtosis-cdk integration.
 //!
 //! Maps Miden batches to synthetic EVM blocks for bridge service compatibility.
+//!
+//! Block hashes are deterministic: given a block number, the hash is always the same.
+//! This prevents reorg detection issues when the proxy restarts or blocks are re-queried.
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
+
+/// Genesis timestamp for synthetic blocks (2024-01-01 00:00:00 UTC)
+const GENESIS_TIMESTAMP: u64 = 1704067200;
+
+/// Block time in seconds (12s like Ethereum mainnet)
+const BLOCK_TIME: u64 = 12;
 
 /// Synthetic EVM block generated from Miden batch
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,8 +137,16 @@ impl BlockState {
         *self.current_block.write() = block_num;
     }
 
-    /// Ensure a block exists, creating synthetic blocks as needed
-    fn ensure_block_exists(&self, block_num: u64, timestamp: u64) {
+    /// Compute deterministic timestamp for a block number.
+    /// This ensures the same block number always produces the same hash.
+    fn deterministic_timestamp(block_num: u64) -> u64 {
+        GENESIS_TIMESTAMP + block_num * BLOCK_TIME
+    }
+
+    /// Ensure a block exists, creating synthetic blocks as needed.
+    /// The timestamp parameter is ignored - we use deterministic timestamps
+    /// to ensure consistent block hashes across proxy restarts.
+    fn ensure_block_exists(&self, block_num: u64, _timestamp: u64) {
         let mut blocks = self.blocks.write();
         let mut hash_to_number = self.hash_to_number.write();
 
@@ -137,35 +154,34 @@ impl BlockState {
             return;
         }
 
-        // Get parent hash (or genesis hash for block 0)
-        let parent_hash = if block_num == 0 {
-            [0u8; 32]
-        } else {
-            // Ensure parent exists first
-            if !blocks.contains_key(&(block_num - 1)) {
-                // Create parent with estimated timestamp
-                let parent_ts = if timestamp > 12 { timestamp - 12 } else { 0 };
-                let grandparent_hash = if block_num == 1 {
-                    [0u8; 32]
-                } else {
-                    blocks.get(&(block_num - 2)).map(|b| b.hash).unwrap_or([0u8; 32])
-                };
-                let parent = SyntheticBlock::new(
-                    block_num - 1,
-                    grandparent_hash,
-                    parent_ts,
-                    [0u8; 32], // Empty state root for synthetic
-                );
-                hash_to_number.insert(parent.hash, block_num - 1);
-                blocks.insert(block_num - 1, parent);
-            }
-            blocks.get(&(block_num - 1)).map(|b| b.hash).unwrap_or([0u8; 32])
-        };
+        // Build the chain from genesis up to block_num to ensure consistent parent hashes.
+        // This guarantees the hash chain is always built in order.
+        let mut first_missing = block_num;
+        while first_missing > 0 && !blocks.contains_key(&(first_missing - 1)) {
+            first_missing -= 1;
+        }
 
-        // Create the block
-        let block = SyntheticBlock::new(block_num, parent_hash, timestamp, [0u8; 32]);
-        hash_to_number.insert(block.hash, block_num);
-        blocks.insert(block_num, block);
+        // Now create all missing blocks in order
+        for num in first_missing..=block_num {
+            if blocks.contains_key(&num) {
+                continue;
+            }
+
+            let parent_hash = if num == 0 {
+                [0u8; 32]
+            } else {
+                blocks.get(&(num - 1)).map(|b| b.hash).unwrap_or([0u8; 32])
+            };
+
+            let block = SyntheticBlock::new(
+                num,
+                parent_hash,
+                Self::deterministic_timestamp(num),
+                [0u8; 32], // Empty state root for synthetic
+            );
+            hash_to_number.insert(block.hash, num);
+            blocks.insert(num, block);
+        }
     }
 
     /// Get block by number
@@ -237,5 +253,73 @@ mod tests {
         let by_hash = state.get_block_by_hash(&block.hash);
         assert!(by_hash.is_some());
         assert_eq!(by_hash.unwrap().number, 50);
+    }
+
+    #[test]
+    fn test_deterministic_hashes_across_instances() {
+        // This test verifies that block hashes are deterministic across
+        // different BlockState instances (simulating proxy restarts).
+        // This is critical for preventing false reorg detection.
+
+        let state1 = BlockState::new();
+        state1.set_current_block(100, 1111111111); // timestamp should be ignored
+
+        let state2 = BlockState::new();
+        state2.set_current_block(100, 2222222222); // different timestamp, same block
+
+        let block1 = state1.get_block_by_number(100).unwrap();
+        let block2 = state2.get_block_by_number(100).unwrap();
+
+        // Hashes MUST be identical regardless of when the block was created
+        assert_eq!(
+            block1.hash, block2.hash,
+            "Block hashes must be deterministic across instances"
+        );
+        assert_eq!(
+            block1.timestamp, block2.timestamp,
+            "Block timestamps must be deterministic"
+        );
+    }
+
+    #[test]
+    fn test_deterministic_parent_chain() {
+        // Verify that parent hashes are consistent regardless of creation order
+
+        // Scenario 1: Create blocks in order 0 -> 50
+        let state1 = BlockState::new();
+        state1.set_current_block(50, 0);
+
+        // Scenario 2: Jump to 50, then query 25 later
+        let state2 = BlockState::new();
+        state2.set_current_block(50, 0);
+        state2.set_current_block(25, 0);
+
+        // Both should have the same hash for block 50
+        let block1 = state1.get_block_by_number(50).unwrap();
+        let block2 = state2.get_block_by_number(50).unwrap();
+
+        assert_eq!(
+            block1.hash, block2.hash,
+            "Block 50 hash must be consistent regardless of creation order"
+        );
+        assert_eq!(
+            block1.parent_hash, block2.parent_hash,
+            "Parent hash must be consistent"
+        );
+    }
+
+    #[test]
+    fn test_deterministic_timestamps() {
+        let state = BlockState::new();
+        state.set_current_block(10, 9999999999);
+
+        let block = state.get_block_by_number(10).unwrap();
+
+        // Timestamp should be deterministic: GENESIS_TIMESTAMP + block_num * BLOCK_TIME
+        let expected_ts = GENESIS_TIMESTAMP + 10 * BLOCK_TIME;
+        assert_eq!(
+            block.timestamp, expected_ts,
+            "Block timestamp should be deterministic based on block number"
+        );
     }
 }
