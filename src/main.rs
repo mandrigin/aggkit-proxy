@@ -373,6 +373,10 @@ pub struct MidenSubmissionConfig {
     pub faucet_account_file: Option<PathBuf>,
     /// Ephemeral submitter account ID (created once at startup)
     pub ephemeral_account_id: Option<AccountId>,
+    /// Agglayer faucet account ID (created once at startup)
+    pub agglayer_faucet_id: Option<AccountId>,
+    /// Bridge account ID (created once at startup)
+    pub bridge_account_id: Option<AccountId>,
 }
 
 impl Default for MidenSubmissionConfig {
@@ -383,6 +387,8 @@ impl Default for MidenSubmissionConfig {
             bridge_faucet_id_hex: String::new(),
             faucet_account_file: None,
             ephemeral_account_id: None,
+            agglayer_faucet_id: None,
+            bridge_account_id: None,
         }
     }
 }
@@ -616,12 +622,25 @@ async fn submit_claim_to_miden(
 
             info!("  Using ephemeral account {} as CLAIM note submitter", submitter_account_id);
 
-            // Step 2 & 3: Create and deploy agglayer faucet
-            let faucet_result = create_and_deploy_agglayer_faucet(
-                &mut client,
-                &config.bridge_faucet_id_hex,
-            ).await?;
-            let agglayer_faucet_id = faucet_result.faucet_id;
+            // Step 2 & 3: Get agglayer faucet (use pre-created if available, else create)
+            let agglayer_faucet_id = if let Some(pre_created_id) = config.agglayer_faucet_id {
+                info!("╔══════════════════════════════════════════════════════════════════╗");
+                info!("║  STEP 2-3: Using pre-created agglayer faucet                     ║");
+                info!("╚══════════════════════════════════════════════════════════════════╝");
+                info!("  → Faucet ID: {} (created at proxy startup)", pre_created_id);
+                pre_created_id
+            } else {
+                // Fallback: create faucet per-transaction (original behavior)
+                info!("╔══════════════════════════════════════════════════════════════════╗");
+                info!("║  STEP 2-3: Creating agglayer faucet (fallback)                   ║");
+                info!("╚══════════════════════════════════════════════════════════════════╝");
+                warn!("  No pre-created faucet - creating one now (slower)");
+                let faucet_result = create_and_deploy_agglayer_faucet(
+                    &mut client,
+                    &config.bridge_faucet_id_hex,
+                ).await?;
+                faucet_result.faucet_id
+            };
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 4: Preparing BridgeClaimParams                             ║");
@@ -1864,16 +1883,27 @@ impl EthApiServer for EthApiImpl {
     }
 }
 
-/// Initialize the ephemeral submitter account once at startup
-/// Returns the AccountId that should be stored and reused for all transactions
+/// Result of initializing Miden accounts at startup
+#[derive(Debug, Clone)]
+struct InitializedAccounts {
+    /// Ephemeral submitter account ID
+    ephemeral_account_id: AccountId,
+    /// Agglayer faucet account ID
+    agglayer_faucet_id: AccountId,
+    /// Bridge account ID
+    bridge_account_id: AccountId,
+}
+
+/// Initialize all Miden accounts once at startup
+/// Returns the AccountIds that should be stored and reused for all transactions
 ///
-/// The account and its signing key are stored in the SQLite store and keystore respectively,
+/// The accounts and signing keys are stored in the SQLite store and keystore respectively,
 /// so subsequent client instances can use them for transaction signing.
-async fn initialize_ephemeral_account(
+async fn initialize_miden_accounts(
     rpc_endpoint: &str,
     store_path: &PathBuf,
     bridge_faucet_id_hex: &str,
-) -> Result<AccountId, ClientError> {
+) -> Result<InitializedAccounts, ClientError> {
     use miden_client::account::component::BasicWallet;
     use miden_client::builder::ClientBuilder;
     use miden_client::keystore::FilesystemKeyStore;
@@ -1997,6 +2027,15 @@ async fn initialize_ephemeral_account(
                 })?;
             info!("  ✓ Ephemeral account added to client store");
 
+            // Create and add bridge/faucet accounts (once at startup)
+            info!("  Creating bridge and agglayer faucet accounts...");
+            let faucet_result = create_and_deploy_agglayer_faucet(
+                &mut client,
+                &bridge_faucet_id_hex,
+            ).await?;
+            info!("  ✓ Bridge account ID: {}", faucet_result.bridge_account_id);
+            info!("  ✓ Agglayer faucet ID: {}", faucet_result.faucet_id);
+
             // Final sync
             info!("  Final sync after account creation...");
             let final_sync = client
@@ -2006,13 +2045,17 @@ async fn initialize_ephemeral_account(
             info!("  ✓ Sync complete at block {}", final_sync.block_num.as_u32());
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!(
-                "║  EPHEMERAL ACCOUNT READY: {}  ║",
-                ephemeral_account_id
-            );
+            info!("║  ALL ACCOUNTS INITIALIZED AT STARTUP                             ║");
+            info!("║  Ephemeral: {}  ║", ephemeral_account_id);
+            info!("║  Agglayer Faucet: {}  ║", faucet_result.faucet_id);
+            info!("║  Bridge: {}  ║", faucet_result.bridge_account_id);
             info!("╚══════════════════════════════════════════════════════════════════╝");
 
-            Ok::<AccountId, ClientError>(ephemeral_account_id)
+            Ok::<InitializedAccounts, ClientError>(InitializedAccounts {
+                ephemeral_account_id,
+                agglayer_faucet_id: faucet_result.faucet_id,
+                bridge_account_id: faucet_result.bridge_account_id,
+            })
         })
     })
     .await
@@ -2098,18 +2141,24 @@ async fn main() -> anyhow::Result<()> {
         warn!("Starting without Miden submission support (BRIDGE_FAUCET_ID not configured)");
         EthApiImpl::new(state, miden_rpc_url)
     } else {
-        // Initialize ephemeral account at startup (created once, reused for all transactions)
-        info!("Initializing ephemeral submitter account...");
-        let ephemeral_account_id = match initialize_ephemeral_account(&miden_rpc_url, &store_path, &bridge_faucet_id).await {
-            Ok(id) => {
-                info!(account_id = %id, "Ephemeral account initialized successfully");
-                Some(id)
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to initialize ephemeral account - will create per-transaction");
-                None
-            }
-        };
+        // Initialize all Miden accounts at startup (created once, reused for all transactions)
+        info!("Initializing Miden accounts (ephemeral, bridge, faucet)...");
+        let (ephemeral_account_id, agglayer_faucet_id, bridge_account_id) =
+            match initialize_miden_accounts(&miden_rpc_url, &store_path, &bridge_faucet_id).await {
+                Ok(accounts) => {
+                    info!(
+                        ephemeral = %accounts.ephemeral_account_id,
+                        faucet = %accounts.agglayer_faucet_id,
+                        bridge = %accounts.bridge_account_id,
+                        "All Miden accounts initialized successfully"
+                    );
+                    (Some(accounts.ephemeral_account_id), Some(accounts.agglayer_faucet_id), Some(accounts.bridge_account_id))
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to initialize Miden accounts - will create per-transaction");
+                    (None, None, None)
+                }
+            };
 
         let miden_config = MidenSubmissionConfig {
             rpc_endpoint: miden_rpc_url.clone(),
@@ -2117,11 +2166,15 @@ async fn main() -> anyhow::Result<()> {
             bridge_faucet_id_hex: bridge_faucet_id.clone(),
             faucet_account_file: faucet_account_file.clone(),
             ephemeral_account_id,
+            agglayer_faucet_id,
+            bridge_account_id,
         };
 
         info!(
             bridge_faucet_id = %bridge_faucet_id,
             ephemeral_account = ?ephemeral_account_id,
+            agglayer_faucet = ?agglayer_faucet_id,
+            bridge_account = ?bridge_account_id,
             "Miden submission config initialized"
         );
         EthApiImpl::with_miden_config(state, miden_config, miden_rpc_url)

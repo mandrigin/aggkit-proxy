@@ -69,14 +69,24 @@ pub async fn create_and_deploy_agglayer_faucet(
     info!("  → Bridge account ID: {}", bridge_account_id);
 
     // Add bridge account to client (local only, not deployed)
+    // Note: This may fail if account is already tracked (from previous claim) - that's OK
     info!("  Adding bridge account to client...");
-    client
-        .add_account(&bridge_account, false)
-        .await
-        .map_err(|e| {
-            ClientError::InitializationError(format!("Failed to add bridge account to client: {}", e))
-        })?;
-    info!("  ✓ Bridge account added to client (local only)");
+    match client.add_account(&bridge_account, false).await {
+        Ok(_) => {
+            info!("  ✓ Bridge account added to client (local only)");
+        }
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("already being tracked") {
+                info!("  ✓ Bridge account already tracked (reusing from previous claim)");
+            } else {
+                return Err(ClientError::InitializationError(format!(
+                    "Failed to add bridge account to client: {}",
+                    e
+                )));
+            }
+        }
+    }
 
     info!("╔══════════════════════════════════════════════════════════════════╗");
     info!("║  Creating agglayer faucet                                        ║");
@@ -108,14 +118,24 @@ pub async fn create_and_deploy_agglayer_faucet(
     info!("  → Agglayer faucet ID: {}", agglayer_faucet_id);
 
     // Add agglayer faucet to client
+    // Note: This may fail if account is already tracked (from previous claim) - that's OK
     info!("  Adding agglayer faucet to client...");
-    client
-        .add_account(&agglayer_faucet, false)
-        .await
-        .map_err(|e| {
-            ClientError::InitializationError(format!("Failed to add agglayer faucet to client: {}", e))
-        })?;
-    info!("  ✓ Agglayer faucet added to client");
+    match client.add_account(&agglayer_faucet, false).await {
+        Ok(_) => {
+            info!("  ✓ Agglayer faucet added to client");
+        }
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("already being tracked") {
+                info!("  ✓ Agglayer faucet already tracked (reusing from previous claim)");
+            } else {
+                return Err(ClientError::InitializationError(format!(
+                    "Failed to add agglayer faucet to client: {}",
+                    e
+                )));
+            }
+        }
+    }
 
     // Note: We do NOT deploy the faucet to the network here.
     // The agglayer faucet should already exist in the miden-node genesis.
