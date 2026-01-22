@@ -261,24 +261,35 @@ impl LogStore {
     }
 
     /// Create a ClaimEvent log for a confirmed claim
+    ///
+    /// ClaimEvent signature: ClaimEvent(uint32,uint32,address,address,uint256)
+    /// Topic hash: 0x25308c93ceeed162da955b3f7ce3e3f93606579e40fb92029faa9efe27545983
+    ///
+    /// IMPORTANT: This event has NO indexed parameters (besides the event signature).
+    /// - Topics: 1 (event signature only)
+    /// - Data: 160 bytes (5 fields: leafType, originNetwork, originAddress, destinationAddress, amount)
+    ///
+    /// Previous bug: We were emitting globalIndex as a second topic, causing
+    /// "topic/field count mismatch" error in bridge-service.
     pub fn add_claim_event(
         &self,
         bridge_address: &str,
         block_number: u64,
         block_hash: [u8; 32],
         tx_hash: &str,
-        global_index: &[u8; 32],
+        _global_index: &[u8; 32], // Not used in topics for v2 ClaimEvent
         origin_network: u32,
         origin_address: &[u8; 20],
         destination_address: &[u8; 20],
         amount: u64,
     ) {
-        // ClaimEvent(uint256 globalIndex, uint32 originNetwork, address originAddress, address destinationAddress, uint256 amount)
+        // ClaimEvent(uint32 leafType, uint32 originNetwork, address originAddress, address destinationAddress, uint256 amount)
+        // NO indexed params - only 1 topic (event signature)
         let log = SyntheticLog {
             address: bridge_address.to_string(),
             topics: vec![
                 CLAIM_EVENT_TOPIC.to_string(),
-                format!("0x{}", hex::encode(global_index)), // globalIndex indexed
+                // No second topic - globalIndex is NOT indexed in v2 ClaimEvent
             ],
             data: encode_claim_event_data(origin_network, origin_address, destination_address, amount),
             block_number,
