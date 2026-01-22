@@ -21,8 +21,17 @@ AMOUNT_WEI=$(echo "$AMOUNT_ETH * 1000000000000000000" | bc | cut -d'.' -f1)
 PRIVATE_KEY="0x12d7de8621a77640c9241b2595ba78ce443d05e94090365ab3bb5e19df82c625"
 FROM_ADDRESS="0xE34aaF64b29273B7D567FCFc40544c014EEe9970"
 
-# Bridge contract address
-BRIDGE_ADDRESS="0xD71f8F956AD979Cc2988381B8A743a2fE280537D"
+# Bridge contract address - get from kurtosis or use override
+BRIDGE_ADDRESS="${BRIDGE_ADDRESS:-}"
+if [[ -z "$BRIDGE_ADDRESS" ]]; then
+    # Get from kurtosis combined.json
+    BRIDGE_ADDRESS=$(kurtosis service exec cdk-miden contracts-001 "cat /opt/zkevm/combined.json" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty')
+fi
+if [[ -z "$BRIDGE_ADDRESS" ]]; then
+    echo "ERROR: Cannot determine bridge address"
+    echo "Set BRIDGE_ADDRESS env var or ensure kurtosis cdk-miden is running"
+    exit 1
+fi
 
 # Destination network (Miden = 2)
 DEST_NETWORK=2
@@ -109,7 +118,10 @@ if [[ -n "$TX_HASH" ]]; then
     STATUS=$(echo "$RECEIPT" | jq -r '.status // "0x0"')
 
     if [[ "$STATUS" == "0x1" ]]; then
-        echo "✓ Transaction confirmed!"
+        BLOCK_NUM=$(echo "$RECEIPT" | jq -r '.blockNumber // "unknown"')
+        # Convert hex to decimal
+        BLOCK_DEC=$((BLOCK_NUM))
+        echo "✓ Transaction confirmed at block $BLOCK_DEC"
 
         # Get deposit count from logs
         LOGS=$(echo "$RECEIPT" | jq -r '.logs')
