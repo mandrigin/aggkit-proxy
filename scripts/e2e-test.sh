@@ -338,6 +338,8 @@ start_miden_services() {
     fi
 
     # Start proxy
+    # BRIDGE_FAUCET_ID enables Miden submission for claim transactions
+    # Uses deterministic seed for agglayer faucet creation
     log "Starting Miden proxy (CHAIN_ID=$MIDEN_NETWORK_ID)..."
     if ! docker run -d \
         --name miden-proxy-kurtosis \
@@ -346,6 +348,7 @@ start_miden_services() {
         -e CHAIN_ID="$MIDEN_NETWORK_ID" \
         -e MIDEN_RPC_URL="http://miden-node-kurtosis:57291" \
         -e MIDEN_STORE_PATH="/app/data/miden-client" \
+        -e BRIDGE_FAUCET_ID="0x000000000000000000000000000001" \
         -e LISTEN_PORT=8546 \
         miden-rpc-proxy:kurtosis; then
         fail "Failed to start miden-proxy-kurtosis container"
