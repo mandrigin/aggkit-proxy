@@ -232,6 +232,138 @@ For bridge-service compatibility, the proxy maintains:
 - **Log store**: `UpdateGlobalExitRoot` and `ClaimEvent` logs
 - **Receipt tracking**: Maps Miden tx IDs to Ethereum-format receipts
 
+## End-to-End Testing with Kurtosis
+
+### Prerequisites
+
+1. **Kurtosis CDK deployed** with Miden support:
+   ```bash
+   kurtosis run github.com/0xPolygon/kurtosis-cdk --args-file params.yml
+   ```
+
+2. **Proxy container running** connected to kurtosis network:
+   ```bash
+   docker run -d --name miden-proxy-kurtosis \
+     --network kt-cdk-v2 \
+     -e MIDEN_RPC_URL=http://miden-node-001:57291 \
+     -e BRIDGE_FAUCET_ID=0x... \
+     -p 8546:8546 \
+     miden-rpc-proxy:latest
+   ```
+
+### Complete Test Flow
+
+```
+┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
+│  L1 (anvil)     │ → │ Bridge DB    │ → │ Bridge Service  │
+│  send-deposit   │    │ ready_for_   │    │ claimAsset tx   │
+│                 │    │ claim=true   │    │                 │
+└─────────────────┘    └──────────────┘    └────────┬────────┘
+                                                     │
+                       ┌──────────────┐    ┌────────▼────────┐
+                       │ Miden Node   │ ← │ miden-rpc-proxy │
+                       │ CLAIM note   │    │ creates CLAIM   │
+                       │ on chain     │    │ note            │
+                       └──────────────┘    └─────────────────┘
+```
+
+### Step 1: Send L1 Deposit
+
+```bash
+# Send a deposit of 0.1234 ETH to the bridge on L1
+./scripts/send-deposit.sh 0.1234
+
+# Output shows deposit_cnt (e.g., 42)
+```
+
+### Step 2: Wait for L1 Finality
+
+Deposits need ~64 L1 blocks for finality before `ready_for_claim=true`:
+
+```bash
+# Check deposit status in bridge DB
+docker exec $(docker ps --filter 'name=postgres' -q | head -1) \
+  psql -U bridge_user -d bridge_db \
+  -c "SELECT deposit_cnt, ready_for_claim FROM sync.deposit WHERE dest_net = 2 ORDER BY deposit_cnt DESC LIMIT 10;"
+```
+
+Wait until your deposit shows `ready_for_claim = t`.
+
+### Step 3: Bridge Service Claims Automatically
+
+Once `ready_for_claim=true`, the bridge-service automatically:
+1. Queries deposits ready for claim
+2. Builds `claimAsset` transaction with SMT proofs
+3. Sends to proxy at `http://miden-proxy:8546`
+
+Monitor proxy logs:
+```bash
+docker logs -f miden-proxy-kurtosis 2>&1 | grep -E "(claimAsset|CLAIM note)"
+```
+
+### Step 4: Verify CLAIM Notes
+
+```bash
+# Run verification script
+./scripts/verify-claim-notes.sh miden-proxy-kurtosis
+
+# Example output:
+# ═══════════════════════════════════════════════════════════════════
+#                          RESULTS TABLE
+# ═══════════════════════════════════════════════════════════════════
+#
+# Deposit    Amount       Note ID                                    Status
+# -------    ------       -------                                    ------
+# 42         0.1234       0xdcf5ab7b...                              ✓ VERIFIED
+# 43         0.2000       0x374b891e...                              ✓ VERIFIED
+```
+
+### Automated E2E Test
+
+The `e2e-test.sh` script automates the entire flow:
+
+```bash
+./scripts/e2e-test.sh
+
+# This script:
+# 1. Cleans up previous test state
+# 2. Starts proxy if not running
+# 3. Sends multiple test deposits
+# 4. Waits for finality
+# 5. Verifies all CLAIM notes
+# 6. Reports success/failure
+```
+
+### Understanding L1 Finality Timing
+
+| Event | Typical Time |
+|-------|--------------|
+| Deposit tx confirmed on L1 | ~12 seconds |
+| Deposit appears in bridge DB | ~30 seconds |
+| `ready_for_claim=true` | ~13-15 minutes (64 L1 blocks) |
+| Bridge service claims | ~1-5 minutes after ready |
+| CLAIM note on Miden | ~10-30 seconds after claim |
+
+**Note**: In local kurtosis, L1 blocks are faster (~2s), so finality is quicker.
+
+### Debugging Test Failures
+
+```bash
+# 1. Check deposit status
+docker exec $(docker ps --filter 'name=postgres' -q | head -1) \
+  psql -U bridge_user -d bridge_db \
+  -c "SELECT deposit_cnt, ready_for_claim FROM sync.deposit WHERE dest_net = 2;"
+
+# 2. Check proxy logs for errors
+docker logs miden-proxy-kurtosis 2>&1 | grep -i error
+
+# 3. Check bridge-service logs
+docker logs $(docker ps --filter 'name=bridge-service' -q) 2>&1 | tail -50
+
+# 4. Verify miden-node is responding
+curl -s http://localhost:57291 || echo "miden-node not reachable"
+```
+
 ## Testing
 
 ```bash
@@ -267,10 +399,20 @@ curl -X POST http://localhost:8546 \
 | Script | Purpose |
 |--------|---------|
 | `scripts/send-deposit.sh <amount>` | Send ETH deposit to L1 bridge |
-| `scripts/list-deposits.sh` | List all deposits in bridge DB |
-| `scripts/wait-deposit.sh <num>` | Wait for deposit to be ready_for_claim |
 | `scripts/verify-notes.sh --note-id <id>` | Verify a note exists on miden-node |
 | `scripts/verify-claim-notes.sh [container]` | Verify all CLAIM notes from proxy logs |
+| `scripts/e2e-test.sh` | Run full end-to-end test (deposits, claims, verification) |
+
+### Checking Bridge DB Deposits
+
+To list deposits and their claim status:
+
+```bash
+# Find postgres container and query deposits for Miden (dest_net=2)
+docker exec $(docker ps --filter 'name=postgres' -q | head -1) \
+  psql -U bridge_user -d bridge_db \
+  -c "SELECT deposit_cnt, amount, ready_for_claim FROM sync.deposit WHERE dest_net = 2 ORDER BY deposit_cnt DESC LIMIT 20;"
+```
 
 ## Troubleshooting
 
