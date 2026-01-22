@@ -40,3 +40,9 @@ logs/
 /tmp/
 *.profraw
 *.profdata
+
+# Gas Town (added by gt)
+.runtime/
+.claude/
+.beads/
+.logs/
