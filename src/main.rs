@@ -1372,9 +1372,10 @@ impl EthApiServer for EthApiImpl {
             };
             Ok(response.to_string())
         } else {
-            // No function selector - return empty
-            debug!("eth_call: No function selector, returning empty");
-            Ok("0x".to_string())
+            // No function selector - return zero (for contract existence / fallback check)
+            // Bridge sanity checks may call with empty data and expect ABI-encoded response
+            debug!("eth_call: No function selector, returning zero");
+            Ok("0x0000000000000000000000000000000000000000000000000000000000000000".to_string())
         }
     }
 
