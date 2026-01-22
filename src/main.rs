@@ -1431,15 +1431,23 @@ impl EthApiServer for EthApiImpl {
         block_number: String,
         full_transactions: bool,
     ) -> Result<Option<serde_json::Value>, ErrorObjectOwned> {
-        let current = self.state.block_state.current_block_number();
-
-        let block_num = match block_number.to_lowercase().as_str() {
-            "latest" | "pending" => current,
+        // For "latest"/"pending", fetch actual block height from Miden
+        let block_num: u64 = match block_number.to_lowercase().as_str() {
+            "latest" | "pending" => {
+                match fetch_block_height(&self.miden_rpc_url, &self.miden_store_path).await {
+                    Ok(height) => height as u64,
+                    Err(e) => {
+                        warn!(error = %e, "Failed to fetch block height, using cached");
+                        self.state.block_state.current_block_number()
+                    }
+                }
+            }
             "earliest" => 0,
             hex if hex.starts_with("0x") => {
-                u64::from_str_radix(&hex[2..], 16).unwrap_or(current)
+                let fallback = self.state.block_state.current_block_number();
+                u64::from_str_radix(&hex[2..], 16).unwrap_or(fallback)
             }
-            _ => current,
+            _ => self.state.block_state.current_block_number(),
         };
 
         info!(
