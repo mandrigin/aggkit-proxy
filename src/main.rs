@@ -307,20 +307,24 @@ pub struct EthApiImpl {
 
 impl EthApiImpl {
     pub fn new(state: Arc<BridgeState>, miden_rpc_url: String) -> Self {
+        let store_path = PathBuf::from(
+            std::env::var("MIDEN_STORE_PATH").unwrap_or_else(|_| "/app/data/miden-client".to_string())
+        );
         Self {
             state,
             miden_config: None,
             miden_rpc_url,
-            miden_store_path: PathBuf::from("/app/data/miden-client"),
+            miden_store_path: store_path,
         }
     }
 
     pub fn with_miden_config(state: Arc<BridgeState>, config: MidenSubmissionConfig, miden_rpc_url: String) -> Self {
+        let store_path = config.store_path.clone();
         Self {
             state,
             miden_config: Some(config),
             miden_rpc_url,
-            miden_store_path: PathBuf::from("/app/data/miden-client"),
+            miden_store_path: store_path,
         }
     }
 }
@@ -1501,8 +1505,9 @@ impl EthApiServer for EthApiImpl {
         block: Option<String>,
     ) -> Result<String, ErrorObjectOwned> {
         info!(address = %address, block = ?block, "eth_getCode");
-        // No EVM contracts on Miden - return empty
-        Ok("0x".to_string())
+        // Return minimal placeholder bytecode (STOP opcode) for bridge service compatibility
+        // The bridge service checks eth_getCode to verify contract existence
+        Ok("0x00".to_string())
     }
 
     async fn get_storage_at(
@@ -1730,7 +1735,9 @@ async fn main() -> anyhow::Result<()> {
         .map(PathBuf::from);
     let listen_host = std::env::var("LISTEN_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let listen_port = std::env::var("LISTEN_PORT").unwrap_or_else(|_| "8546".to_string());
-    let store_path = PathBuf::from("/app/data/miden-client");
+    let store_path = PathBuf::from(
+        std::env::var("MIDEN_STORE_PATH").unwrap_or_else(|_| "/app/data/miden-client".to_string())
+    );
 
     info!("=======================================================");
     info!("  Miden RPC Proxy - Ethereum JSON-RPC to Miden Bridge  ");
