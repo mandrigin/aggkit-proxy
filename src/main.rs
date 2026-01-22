@@ -1043,6 +1043,20 @@ impl EthApiServer for EthApiImpl {
                                     "Parsed GER from updateExitRoot transaction"
                                 );
 
+                                // Compute the GER: keccak256(mainnet_exit_root, rollup_exit_root)
+                                let global_exit_root = {
+                                    let mut hasher = Keccak256::new();
+                                    hasher.update(&mainnet_exit_root);
+                                    hasher.update(&rollup_exit_root);
+                                    let result: [u8; 32] = hasher.finalize().into();
+                                    result
+                                };
+
+                                info!(
+                                    global_exit_root = %hex::encode(&global_exit_root),
+                                    "Computed GER from updateExitRoot"
+                                );
+
                                 // Get current block number and ensure block exists
                                 let block_number = self.state.block_state.current_block_number();
                                 let timestamp = std::time::SystemTime::now()
@@ -1053,8 +1067,8 @@ impl EthApiServer for EthApiImpl {
 
                                 // Store GER and get synthetic tx hash
                                 let tx_hash = self.state.ger_store.inject_ger(
-                                    mainnet_exit_root,
-                                    rollup_exit_root,
+                                    global_exit_root,
+                                    [0u8; 32], // rollup_exit_root not used for sovereign chains
                                     block_number,
                                 );
 
@@ -1062,20 +1076,27 @@ impl EthApiServer for EthApiImpl {
                                 let block_hash = self.state.block_state.get_block_hash(block_number)
                                     .unwrap_or([0u8; 32]);
 
-                                // Emit UpdateGlobalExitRoot event
-                                self.state.log_store.add_ger_update_event(
+                                // Emit UpdateHashChainValue event (sovereign chain L2 event)
+                                let is_new_ger = self.state.log_store.add_ger_update_event(
                                     block_number,
                                     block_hash,
                                     &tx_hash,
-                                    &mainnet_exit_root,
-                                    &rollup_exit_root,
+                                    &global_exit_root,
                                 );
 
-                                info!(
-                                    tx_hash = %tx_hash,
-                                    block_number = block_number,
-                                    "GER injection processed, UpdateGlobalExitRoot event emitted"
-                                );
+                                if is_new_ger {
+                                    info!(
+                                        tx_hash = %tx_hash,
+                                        block_number = block_number,
+                                        ger = %hex::encode(&global_exit_root),
+                                        "GER injection processed, UpdateHashChainValue event emitted"
+                                    );
+                                } else {
+                                    debug!(
+                                        ger = %hex::encode(&global_exit_root),
+                                        "GER already seen, skipping duplicate event emission"
+                                    );
+                                }
 
                                 // Record transaction as confirmed
                                 self.state.record_tx(tx_hash.clone(), TxStatus::Confirmed { block_number });
@@ -1108,15 +1129,10 @@ impl EthApiServer for EthApiImpl {
                                     .as_secs();
                                 self.state.block_state.set_current_block(block_number, timestamp);
 
-                                // For insertGlobalExitRoot, we use the GER as mainnet_exit_root
-                                // and set rollup_exit_root to zeros (not provided in this call)
-                                let mainnet_exit_root = global_exit_root;
-                                let rollup_exit_root = [0u8; 32];
-
                                 // Store GER and get synthetic tx hash
                                 let tx_hash = self.state.ger_store.inject_ger(
-                                    mainnet_exit_root,
-                                    rollup_exit_root,
+                                    global_exit_root,
+                                    [0u8; 32], // rollup_exit_root not used for sovereign chains
                                     block_number,
                                 );
 
@@ -1124,20 +1140,28 @@ impl EthApiServer for EthApiImpl {
                                 let block_hash = self.state.block_state.get_block_hash(block_number)
                                     .unwrap_or([0u8; 32]);
 
-                                // Emit UpdateGlobalExitRoot event
-                                self.state.log_store.add_ger_update_event(
+                                // Emit UpdateHashChainValue event (sovereign chain L2 event)
+                                // This event includes the GER directly, matching what the bridge expects
+                                let is_new_ger = self.state.log_store.add_ger_update_event(
                                     block_number,
                                     block_hash,
                                     &tx_hash,
-                                    &mainnet_exit_root,
-                                    &rollup_exit_root,
+                                    &global_exit_root,
                                 );
 
-                                info!(
-                                    tx_hash = %tx_hash,
-                                    block_number = block_number,
-                                    "GER injection processed, UpdateGlobalExitRoot event emitted"
-                                );
+                                if is_new_ger {
+                                    info!(
+                                        tx_hash = %tx_hash,
+                                        block_number = block_number,
+                                        ger = %hex::encode(&global_exit_root),
+                                        "GER injection processed, UpdateHashChainValue event emitted"
+                                    );
+                                } else {
+                                    debug!(
+                                        ger = %hex::encode(&global_exit_root),
+                                        "GER already seen, skipping duplicate event emission"
+                                    );
+                                }
 
                                 // Record transaction as confirmed
                                 self.state.record_tx(tx_hash.clone(), TxStatus::Confirmed { block_number });

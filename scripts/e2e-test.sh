@@ -74,6 +74,34 @@ fail() { echo -e "${RED}✗ FAIL:${NC} $1"; exit 1; }
 warn() { echo -e "${YELLOW}!${NC} $1"; }
 step() { echo -e "\n${CYAN}${BOLD}=== $1 ===${NC}\n"; }
 
+# Clean bridge database for fresh sync (used when --skip-cdk)
+clean_bridge_db() {
+    step "Cleaning Bridge Database for Fresh Sync"
+
+    local postgres_container
+    postgres_container=$(docker ps --filter "name=postgres" --format "{{.Names}}" | head -1)
+
+    if [[ -z "$postgres_container" ]]; then
+        warn "Postgres container not found, skipping DB cleanup"
+        return 0
+    fi
+
+    log "Found postgres container: $postgres_container"
+    log "Cleaning L2 sync data (network_id=2) from bridge DB..."
+
+    # Clean L2 data from sync tables to force fresh sync
+    docker exec "$postgres_container" psql -U bridge_user -d bridge_db -c "
+        -- Clean L2 exit roots
+        DELETE FROM sync.exit_root WHERE network_id = 2;
+        -- Clean L2 blocks
+        DELETE FROM sync.block WHERE network_id = 2;
+        -- Clean L2 deposits
+        DELETE FROM sync.deposit WHERE network_id = 2;
+        -- Clean L2 claims
+        DELETE FROM sync.claim WHERE dest_net = 2;
+    " 2>/dev/null && success "Cleaned L2 sync data from bridge DB" || warn "Failed to clean bridge DB (tables may not exist yet)"
+}
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -1000,6 +1028,9 @@ main() {
 
     if ! $SKIP_CDK; then
         deploy_kurtosis_cdk
+    else
+        # When skipping CDK, clean the bridge DB for fresh L2 sync
+        clean_bridge_db
     fi
 
     if ! $SKIP_MIDEN; then

@@ -15,9 +15,15 @@ pub const CLAIM_EVENT_TOPIC: &str =
     "0x25308c93ceeed162da955b3f7ce3e3f93606579e40fb92029faa9efe27545983";
 
 /// UpdateGlobalExitRoot topic hash: keccak256("UpdateGlobalExitRoot(bytes32,bytes32)")
-/// Emitted when aggoracle injects a new GER into L2
+/// Emitted by L1 GlobalExitRootManager (NOT used on sovereign L2 chains)
 pub const UPDATE_GER_TOPIC: &str =
     "0x61014378f82a0d809aefaf87a8ac9505b89c321808287a6e7810f29304c1fce3";
+
+/// UpdateHashChainValue topic hash: keccak256("UpdateHashChainValue(bytes32,bytes32)")
+/// Emitted by L2 GlobalExitRootManagerL2SovereignChain when a GER is inserted
+/// This is the correct event for sovereign chains - the GER is directly in the event
+pub const UPDATE_HASH_CHAIN_VALUE_TOPIC: &str =
+    "0x65d3bf36615f1f02a134d12dfa9ea6b1d4a52386e825973cd27ddb70895c2319";
 
 /// L2 GlobalExitRoot contract address (receives GER updates from aggoracle)
 pub const L2_GLOBAL_EXIT_ROOT_ADDRESS: &str = "0xa40D5f56745a118D0906a34E69aeC8C0Db1cB8fA";
@@ -198,6 +204,10 @@ pub struct LogStore {
     logs_by_tx: RwLock<HashMap<String, Vec<SyntheticLog>>>,
     /// Global log counter for unique log indices
     log_counter: RwLock<u64>,
+    /// Seen GERs for deduplication (GER bytes -> block number where first seen)
+    seen_gers: RwLock<HashMap<[u8; 32], u64>>,
+    /// Hash chain value for UpdateHashChainValue event (cumulative)
+    hash_chain_value: RwLock<[u8; 32]>,
 }
 
 impl LogStore {
@@ -207,6 +217,24 @@ impl LogStore {
             logs_by_block: RwLock::new(HashMap::new()),
             logs_by_tx: RwLock::new(HashMap::new()),
             log_counter: RwLock::new(0),
+            seen_gers: RwLock::new(HashMap::new()),
+            hash_chain_value: RwLock::new([0u8; 32]),
+        }
+    }
+
+    /// Check if a GER has already been seen
+    pub fn has_seen_ger(&self, ger: &[u8; 32]) -> bool {
+        self.seen_gers.read().contains_key(ger)
+    }
+
+    /// Mark a GER as seen (returns true if it was new, false if already seen)
+    pub fn mark_ger_seen(&self, ger: &[u8; 32], block_number: u64) -> bool {
+        let mut seen = self.seen_gers.write();
+        if seen.contains_key(ger) {
+            false
+        } else {
+            seen.insert(*ger, block_number);
+            true
         }
     }
 
@@ -263,24 +291,41 @@ impl LogStore {
         self.add_log(log);
     }
 
-    /// Create an UpdateGlobalExitRoot log for a GER injection transaction
-    /// This is emitted when aggoracle sends a GER update to L2
+    /// Create an UpdateHashChainValue log for a GER injection on sovereign L2
+    /// This is the event emitted by GlobalExitRootManagerL2SovereignChain
+    /// Returns true if the event was emitted, false if this GER was already seen
     pub fn add_ger_update_event(
         &self,
         block_number: u64,
         block_hash: [u8; 32],
         tx_hash: &str,
-        mainnet_exit_root: &[u8; 32],
-        rollup_exit_root: &[u8; 32],
-    ) {
-        // UpdateGlobalExitRoot(bytes32 indexed mainnetExitRoot, bytes32 indexed rollupExitRoot)
+        global_exit_root: &[u8; 32],
+    ) -> bool {
+        // Check if we've already seen this GER
+        if !self.mark_ger_seen(global_exit_root, block_number) {
+            return false; // Already seen, skip
+        }
+
+        // Update hash chain value: hashChain = keccak256(previousHashChain, newGER)
+        let new_hash_chain = {
+            use sha3::{Digest, Keccak256};
+            let mut hasher = Keccak256::new();
+            let prev_hash_chain = *self.hash_chain_value.read();
+            hasher.update(&prev_hash_chain);
+            hasher.update(global_exit_root);
+            let result: [u8; 32] = hasher.finalize().into();
+            *self.hash_chain_value.write() = result;
+            result
+        };
+
+        // UpdateHashChainValue(bytes32 indexed newGlobalExitRoot, bytes32 indexed newHashChainValue)
         // Both parameters are indexed, so they go in topics
         let log = SyntheticLog {
             address: L2_GLOBAL_EXIT_ROOT_ADDRESS.to_string(),
             topics: vec![
-                UPDATE_GER_TOPIC.to_string(),
-                format!("0x{}", hex::encode(mainnet_exit_root)),
-                format!("0x{}", hex::encode(rollup_exit_root)),
+                UPDATE_HASH_CHAIN_VALUE_TOPIC.to_string(),
+                format!("0x{}", hex::encode(global_exit_root)),
+                format!("0x{}", hex::encode(new_hash_chain)),
             ],
             data: "0x".to_string(), // No non-indexed data
             block_number,
@@ -291,6 +336,7 @@ impl LogStore {
             removed: false,
         };
         self.add_log(log);
+        true
     }
 
     /// Query logs matching filter
