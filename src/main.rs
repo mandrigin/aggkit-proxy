@@ -360,22 +360,75 @@ pub trait EthApi {
     ) -> Result<String, ErrorObjectOwned>;
 }
 
-/// Configuration for Miden network submission
+/// Configuration for Miden network submission.
+///
+/// # Account Initialization Strategy
+///
+/// This config stores pre-initialized AccountIds that are created ONCE at proxy startup.
+/// This design prevents the "account already being tracked" error that occurred when
+/// accounts were created per-claim.
+///
+/// ## Why Pre-Initialization?
+///
+/// The Miden client's `add_account()` method fails if an account is already tracked
+/// in the SQLite store. Originally, bridge/faucet accounts were created on each claim,
+/// causing the second claim to fail with:
+///
+/// ```text
+/// Failed to add bridge account to client: account with id 0x... is already being tracked
+/// ```
+///
+/// ## Solution: Initialize Once at Startup
+///
+/// 1. `ephemeral_account_id` - The submitter account for CLAIM note transactions
+/// 2. `agglayer_faucet_id` - The faucet that processes CLAIM notes and mints tokens
+/// 3. `bridge_account_id` - Local reference for faucet validation (NoAuth, not deployed)
+///
+/// These are created in `initialize_miden_accounts()` at server startup, stored in this
+/// config, and reused for ALL subsequent claims. The keys are stored in the keystore,
+/// so the client can sign transactions even in later sessions.
+///
+/// ## Fallback Behavior
+///
+/// If these IDs are None (e.g., if initialization is skipped), `submit_claim_to_miden()`
+/// will attempt per-transaction creation as a fallback. However, this is NOT recommended
+/// as it will fail on the second claim with "already being tracked" unless the error
+/// is handled gracefully (see `src/agglayer_faucet.rs`).
 #[derive(Debug, Clone)]
 pub struct MidenSubmissionConfig {
-    /// RPC endpoint for Miden node
+    /// RPC endpoint for Miden node (e.g., "http://localhost:57291")
     pub rpc_endpoint: String,
-    /// Path to SQLite store for client state
+
+    /// Path to SQLite store directory for client state.
+    /// The miden client creates several SQLite databases here for:
+    /// - Account tracking
+    /// - Note management
+    /// - Transaction history
     pub store_path: PathBuf,
-    /// Bridge faucet account ID (hex string, e.g., "0x...")
+
+    /// Bridge faucet account ID from genesis (hex string, e.g., "0x...").
+    /// This is the native faucet configured in miden-node's genesis.toml,
+    /// NOT the agglayer faucet we create. Used as seed input for deterministic
+    /// bridge/agglayer-faucet ID generation.
     pub bridge_faucet_id_hex: String,
-    /// Path to faucet account file (.mac) containing keys
+
+    /// Path to faucet account file (.mac) containing keys.
+    /// Optional - only needed if using a pre-existing faucet file.
     pub faucet_account_file: Option<PathBuf>,
-    /// Ephemeral submitter account ID (created once at startup)
+
+    /// Ephemeral submitter account ID (created once at startup).
+    /// This account submits CLAIM note transactions. Has BasicWallet component
+    /// and RpoFalcon512 authentication. Keys stored in keystore for signing.
     pub ephemeral_account_id: Option<AccountId>,
-    /// Agglayer faucet account ID (created once at startup)
+
+    /// Agglayer faucet account ID (created once at startup).
+    /// This faucet processes CLAIM notes: validates SMT proofs and mints tokens
+    /// to destination accounts. Created with deterministic seed from bridge_faucet_id_hex.
     pub agglayer_faucet_id: Option<AccountId>,
-    /// Bridge account ID (created once at startup)
+
+    /// Bridge account ID (created once at startup).
+    /// Local reference for agglayer faucet validation. NoAuth account, not deployed
+    /// to network - the actual bridge exists in miden-node genesis.
     pub bridge_account_id: Option<AccountId>,
 }
 
@@ -1883,22 +1936,64 @@ impl EthApiServer for EthApiImpl {
     }
 }
 
-/// Result of initializing Miden accounts at startup
+/// Result of initializing Miden accounts at proxy startup.
+///
+/// These AccountIds are stored in `MidenSubmissionConfig` and reused for ALL claims.
+/// This prevents the "account already being tracked" error from repeated `add_account()` calls.
 #[derive(Debug, Clone)]
 struct InitializedAccounts {
-    /// Ephemeral submitter account ID
+    /// Ephemeral submitter account - submits CLAIM note transactions
     ephemeral_account_id: AccountId,
-    /// Agglayer faucet account ID
+    /// Agglayer faucet - processes CLAIM notes, validates proofs, mints tokens
     agglayer_faucet_id: AccountId,
-    /// Bridge account ID
+    /// Bridge account - local reference for faucet validation (NoAuth, not deployed)
     bridge_account_id: AccountId,
 }
 
-/// Initialize all Miden accounts once at startup
-/// Returns the AccountIds that should be stored and reused for all transactions
+/// Initialize all Miden accounts once at proxy startup.
 ///
-/// The accounts and signing keys are stored in the SQLite store and keystore respectively,
-/// so subsequent client instances can use them for transaction signing.
+/// # Why This Function Exists
+///
+/// The miden client's `add_account()` fails if an account is "already being tracked".
+/// Originally, accounts were created per-claim, causing the second claim to fail:
+///
+/// ```text
+/// Failed to add bridge account: account with id 0x... is already being tracked
+/// ```
+///
+/// This function solves this by:
+/// 1. Creating all accounts ONCE at server startup
+/// 2. Storing them in SQLite store and keystore
+/// 3. Returning AccountIds for reuse in all subsequent claims
+///
+/// # Accounts Created
+///
+/// ## 1. Ephemeral Submitter Account
+/// - Type: `RegularAccountUpdatableCode`
+/// - Storage: `Public`
+/// - Auth: `RpoFalcon512` (key stored in keystore for transaction signing)
+/// - Component: `BasicWallet`
+/// - Purpose: Submits CLAIM note transactions to the network
+///
+/// ## 2. Agglayer Faucet
+/// - Created via `create_and_deploy_agglayer_faucet()` (see `src/agglayer_faucet.rs`)
+/// - Has `agglayer_faucet_component` procedures for CLAIM note processing
+/// - Deterministic seed derived from `bridge_faucet_id_hex`
+/// - Purpose: Receives CLAIM notes, validates SMT proofs, mints tokens to recipients
+///
+/// ## 3. Bridge Account
+/// - NoAuth account (local reference only, not deployed)
+/// - Deterministic seed derived from `bridge_faucet_id_hex`
+/// - Purpose: Provides `bridge_account_id` for agglayer faucet validation
+///   (the actual bridge is in miden-node genesis)
+///
+/// # Persistence
+///
+/// - Accounts: Stored in SQLite store (`store_path`)
+/// - Signing keys: Stored in filesystem keystore (`store_path/../keystore`)
+///
+/// This ensures the proxy can sign transactions even after restart, as long as
+/// the same store/keystore paths are used.
 async fn initialize_miden_accounts(
     rpc_endpoint: &str,
     store_path: &PathBuf,

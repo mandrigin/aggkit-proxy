@@ -1,6 +1,6 @@
 # miden-rpc-proxy
 
-JSON-RPC proxy server bridging Ethereum-style RPC to Miden network. Enables AggLayer bridge claim processing by translating `eth_sendRawTransaction` calls containing `claimAsset` transactions into Miden P2ID note distributions.
+JSON-RPC proxy server bridging Ethereum-style RPC to Miden network. Enables AggLayer bridge claim processing by translating `eth_sendRawTransaction` calls containing `claimAsset` transactions into Miden CLAIM notes.
 
 ## Architecture
 
@@ -11,34 +11,86 @@ JSON-RPC proxy server bridging Ethereum-style RPC to Miden network. Enables AggL
                                     +--------^---------+
                                              |
 +-------------+    JSON-RPC    +-------------+-------------+
-|   Wallet    | ------------> |      miden-rpc-proxy      |
-| (MetaMask)  |   :8545       |                           |
+|   Bridge    | ------------> |      miden-rpc-proxy      |
+|   Service   |   :8546       |                           |
 +-------------+               | +-------+ +-------------+ |
                               | |Decoder| |Address      | |
                               | |       | |Mapper       | |
                               | +-------+ +-------------+ |
                               | +-------+ +-------------+ |
-                              | |Bridge | |Miden Client | |
-                              | |State  | |Wrapper      | |
+                              | |CLAIM  | |Miden Client | |
+                              | |Notes  | |Wrapper      | |
                               | +-------+ +-------------+ |
                               +---------------------------+
 ```
 
-**Flow:**
-1. User submits `claimAsset` transaction via Ethereum wallet
-2. Proxy decodes RLP transaction and extracts claim parameters
-3. Address mapper resolves Ethereum address to Miden AccountId
-4. Miden client creates P2ID note for the recipient
-5. Transaction submitted to Miden network
-6. Receipt returned in Ethereum format
+## How It Works
+
+### CLAIM Note Flow
+
+1. **L1 Deposit**: User deposits ETH to the bridge contract on L1 (Ethereum)
+2. **Bridge DB Sync**: kurtosis-cdk's bridge-service monitors L1 and records deposits
+3. **Ready for Claim**: Once L1 finality is reached, deposit becomes `ready_for_claim=true`
+4. **Bridge Service**: Sends `claimAsset` transaction to the proxy
+5. **Proxy Processing**:
+   - Decodes the `claimAsset` calldata (SMT proofs, roots, amounts, etc.)
+   - Creates a CLAIM note using `miden-agglayer` library
+   - Submits transaction to Miden network
+6. **Token Minting**: Agglayer faucet consumes CLAIM note and mints tokens to recipient
+
+### Key Components
+
+| Component | Purpose |
+|-----------|---------|
+| `src/main.rs` | RPC server, claim processing, account initialization |
+| `src/agglayer_faucet.rs` | Bridge/faucet account creation |
+| `src/decode.rs` | RLP transaction and claimAsset calldata decoding |
+| `src/receipt.rs` | Ethereum-format receipt generation |
+| `src/client.rs` | Miden client wrapper |
+| `src/block_state.rs` | Synthetic EVM block state for kurtosis-cdk |
+| `src/log_synthesis.rs` | Synthetic EVM logs for bridge-service |
+
+## Account Initialization
+
+The proxy creates three Miden accounts at startup to enable CLAIM note processing:
+
+### 1. Ephemeral Submitter Account
+- **Purpose**: Submits CLAIM note transactions to the network
+- **Type**: `RegularAccountUpdatableCode` with `BasicWallet` component
+- **Auth**: `RpoFalcon512` (key stored in filesystem keystore)
+- **Created**: Once at startup, reused for ALL claims
+
+### 2. Agglayer Faucet Account
+- **Purpose**: Processes CLAIM notes - validates SMT proofs and mints tokens
+- **Components**: `agglayer_faucet_component` from `miden-agglayer`
+- **Token**: "LUMIA" with 8 decimals
+- **Seed**: Deterministic from `BRIDGE_FAUCET_ID` for reproducibility
+
+### 3. Bridge Account (Local Reference)
+- **Purpose**: Provides `bridge_account_id` for faucet validation
+- **Auth**: NoAuth (not deployed - actual bridge is in miden-node genesis)
+- **Seed**: Deterministic from `BRIDGE_FAUCET_ID`
+
+### Why Pre-Initialize?
+
+The Miden client's `add_account()` fails if an account is "already being tracked".
+Originally, accounts were created per-claim, causing the second claim to fail:
+
+```
+Failed to add bridge account: account with id 0x... is already being tracked
+```
+
+Solution: Initialize all accounts ONCE at startup, store their IDs in config,
+and reuse them for all subsequent claims.
 
 ## Prerequisites
 
 - Rust 1.82 or later
-- Docker (for integration tests)
+- Docker (for kurtosis-cdk integration)
 - Miden node **agglayer-v0.1** tag (required for compatibility)
   - Built from source via `Dockerfile.miden-node`
   - Source: https://github.com/0xPolygonMiden/miden-node (tag: agglayer-v0.1)
+- kurtosis-cdk deployment (for bridge-service integration)
 
 ## Building
 
@@ -60,86 +112,125 @@ make release    # release
 
 ## Configuration
 
-Create a `config.toml` file:
-
-```toml
-# Port for JSON-RPC server (default: 8545)
-listen_port = 8545
-
-# Miden node RPC endpoint
-miden_rpc_url = "http://localhost:57291"
-
-# Chain ID returned by eth_chainId (default: 1)
-chain_id = 1296123973  # "MIDE" in hex
-
-# Bridge faucet account ID (hex string)
-bridge_account_id = "0x..."
-```
-
-### Configuration Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `listen_port` | u16 | 8545 | HTTP port for JSON-RPC server |
-| `miden_rpc_url` | string | `http://localhost:57291` | Miden node gRPC endpoint |
-| `chain_id` | u64 | 1 | EIP-155 chain ID for signing |
-| `bridge_account_id` | string | (required) | Miden account holding bridged assets |
-
 ### Environment Variables
 
-- `RUST_LOG` - Logging level (e.g., `info`, `debug`, `miden_rpc=debug`)
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MIDEN_RPC_URL` | No | `http://localhost:57291` | Miden node gRPC endpoint |
+| `BRIDGE_FAUCET_ID` | Yes | - | Bridge faucet account ID from genesis (hex) |
+| `BRIDGE_ADDRESS` | No | `0xc8cbebf950b9df44d987c8619f092bea980ff038` | L2 bridge contract for receipts |
+| `CHAIN_ID` | No | `2` | Chain ID returned by `eth_chainId` |
+| `LISTEN_HOST` | No | `0.0.0.0` | HTTP server bind address |
+| `LISTEN_PORT` | No | `8546` | HTTP server port |
+| `MIDEN_STORE_PATH` | No | `/app/data/miden-client` | SQLite store directory |
+| `RUST_LOG` | No | - | Logging level (e.g., `info`, `debug`) |
+
+### Finding Configuration Values
+
+**BRIDGE_FAUCET_ID** - Get from miden-node genesis:
+```bash
+# From kurtosis deployment
+kurtosis service exec cdk-miden miden-node-001 \
+  "cat /opt/miden-node/config/genesis.toml" | grep -A2 'faucet'
+```
+
+**BRIDGE_ADDRESS** - Get from kurtosis-cdk contracts:
+```bash
+kurtosis service exec cdk-miden contracts-001 \
+  "cat /opt/zkevm/combined.json" | jq -r '.polygonZkEVMBridgeAddress'
+```
+
+### Example Configuration
+
+```bash
+export MIDEN_RPC_URL="http://miden-node-001:57291"
+export BRIDGE_FAUCET_ID="0x4d2cddb05296de102132d80d8896be"
+export BRIDGE_ADDRESS="0xc8cbebf950b9df44d987c8619f092bea980ff038"
+export CHAIN_ID="2"
+export LISTEN_PORT="8546"
+export RUST_LOG="info,miden_rpc_proxy=debug"
+```
 
 ## Running
 
-```bash
-# Start with default config
-./target/release/miden-rpc-proxy
+### Standalone
 
-# Start with custom config
-./target/release/miden-rpc-proxy --config /path/to/config.toml
+```bash
+# Start with environment variables
+MIDEN_RPC_URL=http://localhost:57291 \
+BRIDGE_FAUCET_ID=0x... \
+./target/release/miden-rpc-proxy
 
 # With debug logging
 RUST_LOG=debug ./target/release/miden-rpc-proxy
 ```
 
-The server listens on `http://127.0.0.1:8545` by default.
+### With Docker (Kurtosis)
 
-## Quick Demo
-
-One-command test to verify the proxy is working:
+The proxy is typically deployed as a container in kurtosis-cdk:
 
 ```bash
-# Build and run unit tests
-make dev
+# Build the image
+docker build -t miden-rpc-proxy:latest .
 
-# Or run the full test suite
-make test
+# Run with kurtosis network
+docker run --rm \
+  --network kurtosis-cdk \
+  -e MIDEN_RPC_URL=http://miden-node-001:57291 \
+  -e BRIDGE_FAUCET_ID=0x... \
+  -p 8546:8546 \
+  miden-rpc-proxy:latest
 ```
 
-### Manual RPC Test
+## Integration with kurtosis-cdk
 
-```bash
-# Start the proxy (in one terminal)
-cargo run
+### Bridge Service Configuration
 
-# Test eth_chainId (in another terminal)
-curl -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+Update the bridge-service config to point to the proxy:
 
-# Expected response:
-# {"jsonrpc":"2.0","result":"0x4d494445","id":1}
-
-# Test eth_blockNumber
-curl -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-
-# Test eth_gasPrice (always returns 0x0 - no gas on Miden)
-curl -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_gasPrice","params":[],"id":1}'
+```toml
+# In bridge-service config
+l2_rpc_url = "http://miden-proxy:8546"
 ```
+
+### Deposit Flow
+
+1. **Send L1 Deposit**:
+   ```bash
+   ./scripts/send-deposit.sh 0.1234
+   ```
+
+2. **Check Bridge DB**:
+   ```bash
+   ./scripts/list-deposits.sh
+   ```
+
+3. **Wait for ready_for_claim**:
+   ```bash
+   ./scripts/wait-deposit.sh <deposit_num>
+   ```
+
+4. **Verify CLAIM Notes**:
+   ```bash
+   ./scripts/verify-claim-notes.sh miden-proxy-kurtosis
+   ```
+
+### Global Exit Root (GER) Handling
+
+The proxy handles GER injection from aggoracle:
+
+1. **updateExitRoot** transactions target `0xa40d5f56745a118d0906a34e69aec8c0db1cb8fa`
+2. Proxy extracts `mainnet_exit_root` and `rollup_exit_root`
+3. Computes `global_exit_root = keccak256(mainnet_exit_root || rollup_exit_root)`
+4. Stores for future SMT proof validation
+
+### Synthetic EVM State
+
+For bridge-service compatibility, the proxy maintains:
+
+- **Block state**: Synthetic blocks with incrementing numbers and timestamps
+- **Log store**: `UpdateGlobalExitRoot` and `ClaimEvent` logs
+- **Receipt tracking**: Maps Miden tx IDs to Ethereum-format receipts
 
 ## Testing
 
@@ -147,32 +238,108 @@ curl -X POST http://localhost:8545 \
 # Run all tests
 make test
 
-# Run unit tests only (fast)
+# Unit tests only (fast)
 make test-phase1
 
-# Run integration tests
+# Integration tests
 make test-phase2
 
-# Run slow/ignored tests
-make test-phase3
-
-# Development workflow (format + check + lint + unit tests)
+# Development workflow
 make dev
+```
+
+### Manual RPC Test
+
+```bash
+# Test eth_chainId
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+
+# Test eth_blockNumber
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
+## Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/send-deposit.sh <amount>` | Send ETH deposit to L1 bridge |
+| `scripts/list-deposits.sh` | List all deposits in bridge DB |
+| `scripts/wait-deposit.sh <num>` | Wait for deposit to be ready_for_claim |
+| `scripts/verify-notes.sh --note-id <id>` | Verify a note exists on miden-node |
+| `scripts/verify-claim-notes.sh [container]` | Verify all CLAIM notes from proxy logs |
+
+## Troubleshooting
+
+### "account with id ... is already being tracked"
+
+**Cause**: Account creation was attempted multiple times.
+
+**Solution**: This is handled automatically by `src/agglayer_faucet.rs` which
+checks for "already being tracked" and treats it as success.
+
+### Claims stop processing after N deposits
+
+**Possible causes**:
+- Bridge-service polling interval (deposits need L1 finality)
+- Miden-node sync issues
+- Proxy restart required
+
+**Debug**:
+```bash
+# Check proxy logs
+docker logs miden-proxy-kurtosis
+
+# Check bridge DB status
+./scripts/list-deposits.sh
+
+# Verify notes exist
+./scripts/verify-claim-notes.sh
+```
+
+### "Note not found" in verification
+
+**Possible causes**:
+- Note was consumed by faucet (normal for processed claims)
+- Transaction didn't complete
+- Wrong note ID format
+
+**Debug**:
+```bash
+# Verify specific note
+./scripts/verify-notes.sh --note-id 0x...
+
+# Check miden-node state
+docker exec miden-node-001 miden-node info
 ```
 
 ## Project Structure
 
 ```
 src/
-├── main.rs          # RPC server and Ethereum API implementation
-├── lib.rs           # Library root
-├── config.rs        # Configuration loading (TOML)
-├── client.rs        # Miden client wrapper (P2ID notes, transactions)
-├── address_mapper.rs # Ethereum <-> Miden address mapping
-├── storage.rs       # SQLite persistence for address mappings
-├── decode.rs        # Transaction/claimAsset calldata decoder
-├── types.rs         # Core types (ClaimAssetParams)
-└── error.rs         # Error types with JSON-RPC codes
+├── main.rs              # RPC server, claim processing, account init
+├── lib.rs               # Library root, re-exports
+├── agglayer_faucet.rs   # Bridge/faucet account creation
+├── client.rs            # Miden client wrapper
+├── config.rs            # TOML configuration (legacy)
+├── decode.rs            # RLP and claimAsset decoding
+├── receipt.rs           # Ethereum receipt generation
+├── types.rs             # Core types (ClaimAssetParams)
+├── error.rs             # Error types with JSON-RPC codes
+├── address_mapper.rs    # Ethereum <-> Miden address mapping
+├── storage.rs           # SQLite persistence
+├── block_state.rs       # Synthetic EVM blocks
+└── log_synthesis.rs     # Synthetic EVM logs
+
+scripts/
+├── send-deposit.sh          # Send L1 deposit
+├── list-deposits.sh         # List bridge DB deposits
+├── wait-deposit.sh          # Wait for ready_for_claim
+├── verify-notes.sh          # Verify single note
+└── verify-claim-notes.sh    # Verify all CLAIM notes
 ```
 
 ## License
