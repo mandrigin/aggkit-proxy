@@ -645,9 +645,10 @@ get_deployment_info() {
 send_test_deposit() {
     step "Sending Test Deposit (L1 → Miden)"
 
-    local amount="1000000000000000000"  # 1 ETH
+    # Distinctive amount: 0.123321 ETH (easy to identify in DB)
+    local amount="123321000000000000"  # 0.123321 ETH
 
-    log "Deposit: 1 ETH to Miden (network $MIDEN_NETWORK_ID)"
+    log "Deposit: 0.123321 ETH to Miden (network $MIDEN_NETWORK_ID)"
     log "From: $KURTOSIS_ADDRESS"
     log "Bridge: $BRIDGE_ADDRESS"
 
