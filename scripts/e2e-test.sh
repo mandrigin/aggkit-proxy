@@ -575,7 +575,7 @@ EOF
     # Container filesystem is read-only, so we extract config, modify locally, and recreate with volume mount
     log "Configuring aggkit to use Miden proxy for GER injection..."
     local aggkit_container
-    aggkit_container=$(docker ps --filter "name=aggkit-001--" --format "{{.Names}}" | grep -v bridge | head -1)
+    aggkit_container=$(docker ps --filter "name=aggkit-001--" --format "{{.Names}}" | grep -v bridge | head -1 || true)
 
     if [[ -n "$aggkit_container" ]]; then
         log "Found aggkit container: $aggkit_container"
@@ -602,7 +602,7 @@ EOF
             local image
             image=$(docker inspect "$aggkit_container" --format '{{.Config.Image}}')
             local network
-            network=$(docker inspect "$aggkit_container" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' | head -1)
+            network=$(docker inspect "$aggkit_container" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' | head -1 || true)
 
             log "Stopping original aggkit container..."
             docker stop "$aggkit_container" 2>/dev/null || true
