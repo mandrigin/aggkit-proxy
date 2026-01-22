@@ -494,6 +494,50 @@ EOF
     sleep 5
     success "Bridge container restarted"
 
+    # Step 5: Also configure zkevm-bridge-service (handles claims)
+    log "Configuring zkevm-bridge-service..."
+    local zkevm_bridge
+    zkevm_bridge=$(docker ps -a --filter "name=zkevm-bridge-service" --format "{{.Names}}" | head -1)
+
+    if [[ -n "$zkevm_bridge" ]]; then
+        log "Found zkevm-bridge-service: $zkevm_bridge"
+
+        # Update L2URLs in the config (uses array format, different from aggkit)
+        docker exec "$zkevm_bridge" sh -c "
+            if [ -f /etc/zkevm/bridge-config.toml ]; then
+                cp /etc/zkevm/bridge-config.toml /etc/zkevm/bridge-config.toml.bak
+                # Replace L2URLs array to use forwarder
+                sed -i 's|L2URLs = \\[\"http://op-el-1-op-geth-op-node-001:8545\"\\]|L2URLs = [\"http://miden-l2-forwarder:8545\"]|g' /etc/zkevm/bridge-config.toml
+            fi
+        " 2>/dev/null || warn "Could not modify zkevm-bridge config"
+
+        # Verify change
+        local l2urls
+        l2urls=$(docker exec "$zkevm_bridge" grep "L2URLs" /etc/zkevm/bridge-config.toml 2>/dev/null | head -1 || echo "")
+        log "zkevm-bridge L2URLs: $l2urls"
+
+        # Clear L2 database and restart
+        docker exec "$zkevm_bridge" sh -c "rm -f /tmp/*l2*.sqlite* 2>/dev/null" 2>/dev/null || true
+        docker restart "$zkevm_bridge" 2>/dev/null
+        sleep 5
+
+        # Check if it's running
+        if docker ps --filter "name=$zkevm_bridge" --format "{{.Names}}" | grep -q .; then
+            success "zkevm-bridge-service restarted and running"
+        else
+            # Check logs for the networkID error
+            local zkevm_logs
+            zkevm_logs=$(docker logs "$zkevm_bridge" --tail 10 2>&1 || echo "")
+            if echo "$zkevm_logs" | grep -q "networkID received is 0"; then
+                warn "zkevm-bridge-service crashed - networkID issue (proxy may need 'input' field fix)"
+            else
+                warn "zkevm-bridge-service not running - check logs: docker logs $zkevm_bridge"
+            fi
+        fi
+    else
+        log "zkevm-bridge-service not found (may not be deployed)"
+    fi
+
     # Step 6: Verify bridge is connecting to proxy
     log "Verifying bridge connection to Miden proxy..."
     sleep 5  # Give bridge time to start
