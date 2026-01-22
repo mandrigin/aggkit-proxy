@@ -1,0 +1,28 @@
+# Miden Integration Parameters for kurtosis-cdk
+#
+# Add these parameters to your kurtosis-cdk params.yml file
+# to enable Miden integration.
+#
+# Usage:
+#   1. Copy these parameters to your kurtosis-cdk params.yml
+#   2. Import aggkit-proxy-miden.star in main.star
+#   3. Enable deploy_miden_integration stage
+
+# Enable Miden integration
+deploy_miden_integration: true
+
+# Aggkit Proxy for Miden configuration
+aggkit_proxy_miden_image: "ghcr.io/0xmiden/aggkit-proxy:latest"
+aggkit_proxy_miden_http_port: 8123
+aggkit_proxy_miden_ws_port: 8133
+aggkit_proxy_miden_metrics_port: 9123
+
+# Miden node configuration
+miden_node_image: "ghcr.io/0xmiden/miden-node:latest"
+miden_node_grpc_port: 443
+
+# Network ID assigned by Agglayer for Miden
+miden_network_id: 2
+
+# Log level for proxy service
+miden_proxy_log_level: "info"
