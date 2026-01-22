@@ -1074,12 +1074,15 @@ impl EthApiServer for EthApiImpl {
                                     .as_secs();
                                 self.state.block_state.set_current_block(block_number, timestamp);
 
-                                // Store GER and get synthetic tx hash
-                                let tx_hash = self.state.ger_store.inject_ger(
+                                // Store GER (for internal tracking)
+                                let _synthetic_hash = self.state.ger_store.inject_ger(
                                     global_exit_root,
                                     [0u8; 32], // rollup_exit_root not used for sovereign chains
                                     block_number,
                                 );
+
+                                // Use original RLP tx hash for receipt tracking (so bridge can find it)
+                                let tx_hash = original_tx_hash.clone();
 
                                 // Get block hash for this block
                                 let block_hash = self.state.block_state.get_block_hash(block_number)
@@ -1107,7 +1110,7 @@ impl EthApiServer for EthApiImpl {
                                     );
                                 }
 
-                                // Record transaction as confirmed
+                                // Record transaction as confirmed using original tx hash
                                 self.state.record_tx(tx_hash.clone(), TxStatus::Confirmed { block_number });
 
                                 return Ok(tx_hash);
@@ -1138,12 +1141,15 @@ impl EthApiServer for EthApiImpl {
                                     .as_secs();
                                 self.state.block_state.set_current_block(block_number, timestamp);
 
-                                // Store GER and get synthetic tx hash
-                                let tx_hash = self.state.ger_store.inject_ger(
+                                // Store GER (for internal tracking)
+                                let _synthetic_hash = self.state.ger_store.inject_ger(
                                     global_exit_root,
                                     [0u8; 32], // rollup_exit_root not used for sovereign chains
                                     block_number,
                                 );
+
+                                // Use original RLP tx hash for receipt tracking (so bridge can find it)
+                                let tx_hash = original_tx_hash.clone();
 
                                 // Get block hash for this block
                                 let block_hash = self.state.block_state.get_block_hash(block_number)
@@ -1172,7 +1178,7 @@ impl EthApiServer for EthApiImpl {
                                     );
                                 }
 
-                                // Record transaction as confirmed
+                                // Record transaction as confirmed using original tx hash
                                 self.state.record_tx(tx_hash.clone(), TxStatus::Confirmed { block_number });
 
                                 return Ok(tx_hash);
