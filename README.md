@@ -1,5 +1,6 @@
 # miden-rpc-proxy
 
+
 JSON-RPC proxy server bridging Ethereum-style RPC to Miden network. Enables AggLayer bridge claim processing by translating `eth_sendRawTransaction` calls containing `claimAsset` transactions into Miden CLAIM notes.
 
 ## Architecture
