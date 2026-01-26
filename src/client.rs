@@ -332,9 +332,21 @@ pub async fn submit_transaction<AUTH>(
 where
     AUTH: miden_client::auth::TransactionAuthenticator + Sync + 'static,
 {
-    info!("Submitting transaction to Miden network");
+    // Log detailed transaction parameters
+    let account_bytes: [u8; 15] = account_id.into();
+    let account_hex = format!("0x{}", hex::encode(account_bytes));
+
+    info!("═══ submit_transaction() ═══");
+    info!("  Submitter account: {}", account_hex);
+    info!("  Submitter account (debug): {:?}", account_id);
+    info!("  Input notes to consume: {}", tx_request.input_notes().len());
+    for (i, input_note) in tx_request.input_notes().iter().enumerate() {
+        info!("    Note [{}]: {:?}", i, input_note);
+    }
+    info!("═════════════════════════════");
 
     // Execute, prove, and submit the transaction in one operation
+    info!("Calling client.submit_new_transaction()...");
     let tx_id = client
         .submit_new_transaction(account_id, tx_request)
         .await

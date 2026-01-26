@@ -375,11 +375,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Build and submit consume transaction
             println!("Building consume transaction...");
+            println!();
+            println!("═══ DEBUG: Transaction Details ═══");
+            println!("  Account ID: {}", claimer_hex);
+            println!("  Account ID (raw): {:?}", claimer_account_id);
+            println!("  Note to consume:");
+            println!("    ID: {}", note_id_hex);
+            println!("    Assets: {:?}", note.assets());
+            println!("    Script root: 0x{}", hex::encode(note.script().root().as_bytes()));
+            println!("    Inputs ({}):", note.inputs().num_values());
+            for (i, val) in note.inputs().values().iter().enumerate() {
+                println!("      [{}]: {}", i, val.as_int());
+            }
+            println!("═══════════════════════════════════════════════════════════════");
+            println!();
+
             let tx_request = TransactionRequestBuilder::new()
                 .build_consume_notes(vec![note])
                 .map_err(|e| format!("Failed to build consume request: {}", e))?;
 
-            println!("Submitting transaction...");
+            println!("Transaction request built successfully");
+            println!("  Input notes to consume: {}", tx_request.input_notes().len());
+            println!();
+
+            println!("Submitting transaction to RPC: {}", rpc_url);
             let tx_id = client
                 .submit_new_transaction(claimer_account_id, tx_request)
                 .await
