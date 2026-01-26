@@ -267,6 +267,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await
                 .map_err(|e| format!("Failed to get input notes: {}", e))?;
 
+            // Print all notes in local store for debugging
+            println!();
+            println!("═══ DEBUG: All notes in local store ({}) ═══", input_notes.len());
+            for note_record in &input_notes {
+                let note_id_hex = format!("0x{}", hex::encode(note_record.id().as_bytes()));
+                println!("  Note ID: {}", note_id_hex);
+                println!("    State: {:?}", note_record.state());
+                if let Some(metadata) = note_record.metadata() {
+                    let sender_hex = format!("0x{}", hex::encode(<[u8; 15]>::from(metadata.sender())));
+                    println!("    Sender: {}", sender_hex);
+                    println!("    Tag: {:?}", metadata.tag());
+                }
+                println!();
+            }
+            println!("═══════════════════════════════════════════════════════════════");
+            println!();
+
             let note_in_store = input_notes.iter().find(|n| n.id() == note_id);
 
             if note_in_store.is_none() {
@@ -298,6 +315,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .get_consumable_notes(Some(claimer_account_id))
                 .await
                 .map_err(|e| format!("Failed to get consumable notes: {}", e))?;
+
+            // Print all consumable notes for debugging
+            println!();
+            println!("═══ DEBUG: Consumable notes for account {} ({}) ═══", claimer_hex, consumable.len());
+            for (note_record, relevance) in &consumable {
+                let note_id_hex = format!("0x{}", hex::encode(note_record.id().as_bytes()));
+                println!("  Note ID: {}", note_id_hex);
+                println!("    Relevance: {:?}", relevance);
+                if let Some(metadata) = note_record.metadata() {
+                    let sender_hex = format!("0x{}", hex::encode(<[u8; 15]>::from(metadata.sender())));
+                    println!("    Sender: {}", sender_hex);
+                }
+                println!();
+            }
+            println!("═══════════════════════════════════════════════════════════════");
+            println!();
 
             let note_record = consumable
                 .into_iter()
