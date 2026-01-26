@@ -1,0 +1,306 @@
+[
+    {
+        "Id": "8212a8d404eefa09251db18945d8dc8cc087f9a7651604d423b4e5e3c126bd2f",
+        "Created": "2026-01-26T12:06:19.324772876Z",
+        "Path": "/usr/local/bin/aggkit",
+        "Args": [
+            "run",
+            "--cfg=/etc/aggkit/config.toml",
+            "--components=aggsender,aggoracle"
+        ],
+        "State": {
+            "Status": "running",
+            "Running": true,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 64799,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-01-26T12:06:19.382489751Z",
+            "FinishedAt": "0001-01-01T00:00:00Z"
+        },
+        "Image": "sha256:f3475e2cf185b26699b3219ed81986472314026634770df530c506041a1e0472",
+        "ResolvConfPath": "/var/lib/docker/containers/8212a8d404eefa09251db18945d8dc8cc087f9a7651604d423b4e5e3c126bd2f/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/8212a8d404eefa09251db18945d8dc8cc087f9a7651604d423b4e5e3c126bd2f/hostname",
+        "HostsPath": "/var/lib/docker/containers/8212a8d404eefa09251db18945d8dc8cc087f9a7651604d423b4e5e3c126bd2f/hosts",
+        "LogPath": "",
+        "Name": "/aggkit-001--9387e0bcff1a43af9b41c7f4fb2f03b1",
+        "RestartCount": 0,
+        "Driver": "overlay2",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": [
+                "aggkit-tmp-001--b1b018c5e9c3421db927f231cc2af16d:/tmp",
+                "files-artifact-expansion--f15d365ab8d34d1ab477645665c8aaa7--b1b018c5e9c3421db927f231cc2af16d:/etc/aggkit",
+                "aggkit-data-001--b1b018c5e9c3421db927f231cc2af16d:/data"
+            ],
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "fluentd",
+                "Config": {
+                    "fluentd-address": "172.16.0.3:9713",
+                    "fluentd-async": "true",
+                    "labels": "com.kurtosistech.container-type,kurtosis_enclave_uuid,kurtosis_service_uuid,kurtosis_service_name"
+                }
+            },
+            "NetworkMode": "bridge",
+            "PortBindings": {
+                "5576/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": ""
+                    }
+                ],
+                "6060/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": ""
+                    }
+                ]
+            },
+            "RestartPolicy": {
+                "Name": "no",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": [],
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": null,
+            "DnsOptions": null,
+            "DnsSearch": null,
+            "ExtraHosts": [],
+            "GroupAdd": null,
+            "IpcMode": "private",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": [],
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 67108864,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": null,
+            "BlkioDeviceReadBps": null,
+            "BlkioDeviceWriteBps": null,
+            "BlkioDeviceReadIOps": null,
+            "BlkioDeviceWriteIOps": null,
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": null,
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 0,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": null,
+            "Ulimits": null,
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/acpi",
+                "/proc/asound",
+                "/proc/interrupts",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/sys/devices/virtual/powercap",
+                "/sys/firmware"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ],
+            "Init": true
+        },
+        "GraphDriver": {
+            "Data": {
+                "ID": "8212a8d404eefa09251db18945d8dc8cc087f9a7651604d423b4e5e3c126bd2f",
+                "LowerDir": "/var/lib/docker/overlay2/e575f909d38785ca45cf756097ecc8c8710358bb1b3b1daf8caade1fd179f07d-init/diff:/var/lib/docker/overlay2/bbe2df8651362a1bd206b9911f3459efb6be513d383a6947ff82e4da0b9b76a9/diff:/var/lib/docker/overlay2/fa5a301c015690745383aaf3895b54a4c266396dba5f66430c87a6cedcdd68b3/diff:/var/lib/docker/overlay2/12504cac21f462dcd5ccf80e90a28255f1fcb6a188c6bf5d320b42b3331e7881/diff:/var/lib/docker/overlay2/06d85119574a50bf4fa7daec2f9911913dd08e228e58c70d663b0e5dd2ec4f02/diff:/var/lib/docker/overlay2/70f79316abd6aaf85386db49f97d2b439e2bea7e8aeed691ab0c4704125151c9/diff:/var/lib/docker/overlay2/39e9331f9c4ca384688ece295914b013ac32a66da6dbe9d351dd1cd2fc646a2d/diff:/var/lib/docker/overlay2/16febf500cdd1f5f7294bd4cbe0be89d4cbc5f96a7bf1a652a666c68aa4df563/diff",
+                "MergedDir": "/var/lib/docker/overlay2/e575f909d38785ca45cf756097ecc8c8710358bb1b3b1daf8caade1fd179f07d/merged",
+                "UpperDir": "/var/lib/docker/overlay2/e575f909d38785ca45cf756097ecc8c8710358bb1b3b1daf8caade1fd179f07d/diff",
+                "WorkDir": "/var/lib/docker/overlay2/e575f909d38785ca45cf756097ecc8c8710358bb1b3b1daf8caade1fd179f07d/work"
+            },
+            "Name": "overlay2"
+        },
+        "Mounts": [
+            {
+                "Type": "volume",
+                "Name": "aggkit-tmp-001--b1b018c5e9c3421db927f231cc2af16d",
+                "Source": "/var/lib/docker/volumes/aggkit-tmp-001--b1b018c5e9c3421db927f231cc2af16d/_data",
+                "Destination": "/tmp",
+                "Driver": "local",
+                "Mode": "z",
+                "RW": true,
+                "Propagation": ""
+            },
+            {
+                "Type": "volume",
+                "Name": "files-artifact-expansion--f15d365ab8d34d1ab477645665c8aaa7--b1b018c5e9c3421db927f231cc2af16d",
+                "Source": "/var/lib/docker/volumes/files-artifact-expansion--f15d365ab8d34d1ab477645665c8aaa7--b1b018c5e9c3421db927f231cc2af16d/_data",
+                "Destination": "/etc/aggkit",
+                "Driver": "local",
+                "Mode": "z",
+                "RW": true,
+                "Propagation": ""
+            },
+            {
+                "Type": "volume",
+                "Name": "aggkit-data-001--b1b018c5e9c3421db927f231cc2af16d",
+                "Source": "/var/lib/docker/volumes/aggkit-data-001--b1b018c5e9c3421db927f231cc2af16d/_data",
+                "Destination": "/data",
+                "Driver": "local",
+                "Mode": "z",
+                "RW": true,
+                "Propagation": ""
+            }
+        ],
+        "Config": {
+            "Hostname": "8212a8d404ee",
+            "Domainname": "",
+            "User": "appuser",
+            "AttachStdin": false,
+            "AttachStdout": false,
+            "AttachStderr": false,
+            "ExposedPorts": {
+                "5576/tcp": {},
+                "6060/tcp": {}
+            },
+            "Tty": false,
+            "OpenStdin": true,
+            "StdinOnce": false,
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ],
+            "Cmd": [
+                "run",
+                "--cfg=/etc/aggkit/config.toml",
+                "--components=aggsender,aggoracle"
+            ],
+            "Image": "ghcr.io/agglayer/aggkit:0.8.0",
+            "Volumes": null,
+            "WorkingDir": "/home/appuser",
+            "Entrypoint": [
+                "/usr/local/bin/aggkit"
+            ],
+            "Labels": {
+                "com.kurtosistech.app-id": "kurtosis",
+                "com.kurtosistech.container-type": "user-service",
+                "com.kurtosistech.enclave-id": "b1b018c5e9c3421db927f231cc2af16d",
+                "com.kurtosistech.guid": "9387e0bcff1a43af9b41c7f4fb2f03b1",
+                "com.kurtosistech.id": "aggkit-001",
+                "com.kurtosistech.ports": "pprof:6060/TCP/http,rpc:5576/TCP/http",
+                "com.kurtosistech.private-ip": "172.16.0.50",
+                "kurtosis_enclave_uuid": "b1b018c5e9c3421db927f231cc2af16d",
+                "kurtosis_service_name": "aggkit-001",
+                "kurtosis_service_uuid": "9387e0bcff1a43af9b41c7f4fb2f03b1",
+                "org.opencontainers.image.created": "2026-01-22T17:36:18.209Z",
+                "org.opencontainers.image.description": "Connect any chain to the Agglayer",
+                "org.opencontainers.image.licenses": "Apache-2.0",
+                "org.opencontainers.image.revision": "fd98fb77a70e245414574fcf929521451b44bbc1",
+                "org.opencontainers.image.source": "https://github.com/agglayer/aggkit",
+                "org.opencontainers.image.title": "aggkit",
+                "org.opencontainers.image.url": "https://github.com/agglayer/aggkit",
+                "org.opencontainers.image.version": "0.8.0-dev",
+                "traefik.enable": "true",
+                "traefik.http.routers.b1b018c5e9c3-9387e0bcff1a-5576.rule": "HostRegexp(`{^name:5576-9387e0bcff1a-b1b018c5e9c3-?.*$}`)",
+                "traefik.http.routers.b1b018c5e9c3-9387e0bcff1a-5576.service": "b1b018c5e9c3-9387e0bcff1a-5576",
+                "traefik.http.routers.b1b018c5e9c3-9387e0bcff1a-6060.rule": "HostRegexp(`{^name:6060-9387e0bcff1a-b1b018c5e9c3-?.*$}`)",
+                "traefik.http.routers.b1b018c5e9c3-9387e0bcff1a-6060.service": "b1b018c5e9c3-9387e0bcff1a-6060",
+                "traefik.http.services.b1b018c5e9c3-9387e0bcff1a-5576.loadbalancer.server.port": "5576",
+                "traefik.http.services.b1b018c5e9c3-9387e0bcff1a-6060.loadbalancer.server.port": "6060"
+            },
+            "StopTimeout": 1
+        },
+        "NetworkSettings": {
+            "SandboxID": "2ab15e5abb627abb6a6067a55f1b7f28c9424ef85344b892a2540d7930005e15",
+            "SandboxKey": "/var/run/docker/netns/2ab15e5abb62",
+            "Ports": {
+                "5576/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "60704"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "60704"
+                    }
+                ],
+                "6060/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "60703"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "60703"
+                    }
+                ]
+            },
+            "Networks": {
+                "kt-cdk-miden": {
+                    "IPAMConfig": {
+                        "IPv4Address": "172.16.0.50",
+                        "IPv6Address": ""
+                    },
+                    "Links": null,
+                    "Aliases": [
+                        "aggkit-001"
+                    ],
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "5822f16cfadebfd9f1514809004e7bae2b9c5e2a96a12eb634fd7fb982f0b2c1",
+                    "EndpointID": "bfa529a2cf7fab83e65f6a1a469430473655001621ee7eaf503948ab587cc03d",
+                    "Gateway": "172.16.0.1",
+                    "IPAddress": "172.16.0.50",
+                    "MacAddress": "ae:c3:35:e8:35:ed",
+                    "IPPrefixLen": 22,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "aggkit-001--9387e0bcff1a43af9b41c7f4fb2f03b1",
+                        "aggkit-001",
+                        "8212a8d404ee"
+                    ]
+                }
+            }
+        }
+    }
+]

@@ -538,12 +538,14 @@ async fn submit_claim_to_miden(
     claim_data: ClaimSubmissionData,
 ) -> Result<u64, ClientError> {
     use miden_client::crypto::FeltRng;
+    use miden_client::note::NoteType;
     use miden_client::rpc::domain::account::AccountStorageRequirements;
     use miden_client::transaction::{ForeignAccount, TransactionRequestBuilder};
     use miden_protocol::crypto::rand::RpoRandomCoin;
     use miden_protocol::note::NoteTag;
     use miden_protocol::{Felt, FieldElement, Word};
     use miden_rpc_proxy::{create_bridge_claim_note, BridgeClaimParams};
+    use miden_standards::note::create_p2id_note;
 
     info!(
         recipient = hex::encode(&claim_data.recipient_account_bytes),
@@ -900,6 +902,53 @@ async fn submit_claim_to_miden(
             }
 
             info!("  ✓ Synced to block {}", current_block);
+
+            // ============================================================================
+            // REGISTER P2ID SCRIPT
+            // ============================================================================
+            // The CLAIM note, when consumed, creates a P2ID note as output.
+            // The executor needs the P2ID script to be registered in the store.
+            // We do this by creating and submitting a dummy P2ID note first.
+            // ============================================================================
+
+            info!("╔══════════════════════════════════════════════════════════════════╗");
+            info!("║  STEP 6b: Register P2ID script                                    ║");
+            info!("╚══════════════════════════════════════════════════════════════════╝");
+            info!("  The CLAIM note creates a P2ID note output.");
+            info!("  We must register the P2ID script in the store first...");
+
+            // Create a dummy P2ID note (with no assets) to register the script
+            let p2id_note = create_p2id_note(
+                submitter_account_id,    // sender
+                recipient_account_id,    // target (same as CLAIM recipient)
+                vec![],                  // no assets needed - just registering script
+                NoteType::Public,        // MUST be public to register on network
+                Default::default(),      // no attachment
+                &mut rng,
+            ).map_err(|e| ClientError::NoteCreationError(format!(
+                "Failed to create P2ID note for script registration: {}", e
+            )))?;
+            info!("  ✓ P2ID note created for script registration");
+            info!("    Note ID: {}", p2id_note.id());
+
+            // Submit the P2ID note to register the script
+            let p2id_output_note = OutputNote::Full(p2id_note);
+            let p2id_tx_request = TransactionRequestBuilder::new()
+                .own_output_notes(vec![p2id_output_note])
+                .build()
+                .map_err(|e| ClientError::TransactionError(format!(
+                    "Failed to build P2ID script registration request: {}", e
+                )))?;
+
+            info!("  Submitting P2ID note to register script...");
+            let p2id_tx_id = submit_transaction(&mut client, submitter_account_id, p2id_tx_request).await?;
+            info!("  ✓ P2ID script registered");
+            info!("    TX ID: {}", p2id_tx_id);
+
+            // Sync to ensure P2ID script is in store
+            client.sync_state().await
+                .map_err(|e| ClientError::SyncError(format!("Sync after P2ID registration failed: {}", e)))?;
+            info!("  ✓ Synced after P2ID script registration");
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 7: Phase 2 - Faucet consumes CLAIM note                     ║");
