@@ -810,14 +810,52 @@ async fn submit_claim_to_miden(
             info!("  → Note assets: {:?}", claim_note.assets());
             info!("  → Note tag: {:?}", claim_note.metadata().tag());
 
+            // ============================================================================
+            // TWO-PHASE CLAIM NOTE FLOW
+            // ============================================================================
+            // Phase 1: Submitter creates CLAIM note as OUTPUT (commits to network)
+            // Phase 2: Faucet consumes CLAIM note as INPUT (mints P2ID to recipient)
+            // This matches the bridge_in.rs unit test flow.
+            // ============================================================================
+
             info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!("║  STEP 6: Faucet consumes CLAIM note (single transaction)          ║");
+            info!("║  STEP 6: Phase 1 - Submit CLAIM note to network                   ║");
             info!("╚══════════════════════════════════════════════════════════════════╝");
-            // The faucet directly consumes the CLAIM note to mint a P2ID note
-            // This is done in a single transaction where the faucet is the executor
-            info!("  Building TransactionRequest for faucet to consume CLAIM note...");
+            info!("  The CLAIM note must be committed to the network before the faucet");
+            info!("  can consume it. Submitting from ephemeral account...");
+            info!("    - Executor: submitter ({})", submitter_account_id);
+            info!("    - Output: CLAIM note (to be consumed by faucet later)");
+
+            // Build transaction request with CLAIM note as output
+            use miden_client::transaction::OutputNote;
+            let claim_output_note = OutputNote::Full(claim_note.clone());
+            let phase1_tx_request = TransactionRequestBuilder::new()
+                .own_output_notes(vec![claim_output_note])
+                .build()
+                .map_err(|e| ClientError::TransactionError(format!(
+                    "Failed to build phase 1 request: {}", e
+                )))?;
+
+            info!("  Submitting CLAIM note creation transaction...");
+            let start_time = std::time::Instant::now();
+            let phase1_tx_id = submit_transaction(&mut client, submitter_account_id, phase1_tx_request).await?;
+            let phase1_elapsed = start_time.elapsed();
+            info!("  ✓ Phase 1 complete - CLAIM note submitted to network");
+            info!("    TX ID: {}", phase1_tx_id);
+            info!("    Time: {:.2}s", phase1_elapsed.as_secs_f64());
+
+            // Sync state to see the new CLAIM note
+            info!("  Syncing state to confirm CLAIM note commitment...");
+            let sync_result = client.sync_state().await
+                .map_err(|e| ClientError::SyncError(e.to_string()))?;
+            info!("  ✓ Synced to block {}", sync_result.block_num.as_u32());
+
+            info!("╔══════════════════════════════════════════════════════════════════╗");
+            info!("║  STEP 7: Phase 2 - Faucet consumes CLAIM note                     ║");
+            info!("╚══════════════════════════════════════════════════════════════════╝");
+            info!("  Now the faucet will consume the CLAIM note and mint P2ID...");
             info!("    - Executor: faucet ({})", agglayer_faucet_id);
-            info!("    - Input: CLAIM note (to be consumed)");
+            info!("    - Input: CLAIM note (now on network)");
             info!("    - Output: P2ID note to recipient");
 
             // Get bridge account ID for FPI (Foreign Procedure Invocation)
@@ -826,9 +864,6 @@ async fn submit_claim_to_miden(
                 ClientError::AccountNotFound("Bridge account ID not configured".to_string())
             })?;
             info!("    - Foreign account (FPI): bridge ({})", bridge_account_id);
-
-            // Convert Note to the format needed for consumption
-            let claim_note_for_consume: miden_protocol::note::Note = claim_note;
 
             // Create foreign account reference for the bridge account
             // The bridge account is public, and we don't need specific storage slots
@@ -842,29 +877,22 @@ async fn submit_claim_to_miden(
             // Build transaction request with:
             // - Input: CLAIM note (to be consumed by faucet)
             // - Foreign accounts: bridge account (for FPI during CLAIM processing)
-            let tx_request = TransactionRequestBuilder::new()
-                .input_notes(vec![(claim_note_for_consume, None)])
+            let phase2_tx_request = TransactionRequestBuilder::new()
+                .input_notes(vec![(claim_note, None)])
                 .foreign_accounts([foreign_account])
                 .build()
                 .map_err(|e| ClientError::TransactionError(format!(
-                    "Failed to build consume request: {}", e
+                    "Failed to build phase 2 request: {}", e
                 )))?;
             info!("  ✓ TransactionRequest built successfully (with bridge as foreign account)");
 
-            info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!("║  STEP 7: Submitting transaction to network                       ║");
-            info!("╚══════════════════════════════════════════════════════════════════╝");
-            info!("  Transaction details:");
-            info!("    - Executor account: {} (faucet)", agglayer_faucet_id);
-            info!("    - Amount (Miden units): {}", claim_data.amount);
-            info!("    - Recipient: {}", recipient_account_id);
-            info!("  Calling submit_transaction()...");
+            info!("  Submitting faucet transaction to consume CLAIM and mint P2ID...");
             info!("  (This may take several seconds for proving)");
 
             // Submit the transaction from the faucet account
             // The faucet consumes the CLAIM note and mints a P2ID note to the recipient
             let start_time = std::time::Instant::now();
-            let miden_tx_id = submit_transaction(&mut client, agglayer_faucet_id, tx_request).await?;
+            let miden_tx_id = submit_transaction(&mut client, agglayer_faucet_id, phase2_tx_request).await?;
             let elapsed = start_time.elapsed();
 
             info!("  ✓ Transaction submitted successfully!");
