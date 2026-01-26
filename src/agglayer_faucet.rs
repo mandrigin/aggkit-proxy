@@ -63,11 +63,12 @@
 
 use miden_agglayer::{create_agglayer_faucet, create_bridge_account};
 use miden_client::keystore::FilesystemKeyStore;
+use miden_client::transaction::TransactionRequestBuilder;
 use miden_client::Client;
 use miden_protocol::account::AccountId;
 use miden_protocol::{Felt, Word};
 use sha3::{Digest, Keccak256};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::ClientError;
 
@@ -153,17 +154,19 @@ pub async fn create_and_deploy_agglayer_faucet(
     info!("  ✓ Bridge account created (NoAuth - local reference only)");
     info!("  → Bridge account ID: {}", bridge_account_id);
 
-    // Add bridge account to client (local only, not deployed)
+    // Add bridge account to client
     // Note: This may fail if account is already tracked (from previous claim) - that's OK
     info!("  Adding bridge account to client...");
-    match client.add_account(&bridge_account, false).await {
+    let bridge_already_tracked = match client.add_account(&bridge_account, false).await {
         Ok(_) => {
-            info!("  ✓ Bridge account added to client (local only)");
+            info!("  ✓ Bridge account added to client");
+            false
         }
         Err(e) => {
             let err_str = e.to_string();
             if err_str.contains("already being tracked") {
-                info!("  ✓ Bridge account already tracked (reusing from previous claim)");
+                info!("  ✓ Bridge account already tracked (reusing from previous session)");
+                true
             } else {
                 return Err(ClientError::InitializationError(format!(
                     "Failed to add bridge account to client: {}",
@@ -171,6 +174,36 @@ pub async fn create_and_deploy_agglayer_faucet(
                 )));
             }
         }
+    };
+
+    // Deploy bridge account to the network (required for FPI)
+    // The bridge account must exist on-chain for the CLAIM note's FPI to work
+    if !bridge_already_tracked {
+        info!("  Deploying bridge account to network...");
+        let deploy_request = TransactionRequestBuilder::new()
+            .build()
+            .map_err(|e| ClientError::InitializationError(format!(
+                "Failed to build bridge deploy request: {}", e
+            )))?;
+
+        match client.submit_new_transaction(bridge_account_id, deploy_request).await {
+            Ok(tx_id) => {
+                info!("  ✓ Bridge account deployed to network");
+                info!("    TX ID: {}", hex::encode(tx_id.as_bytes()));
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                // If account already exists on network, that's fine
+                if err_str.contains("already exists") || err_str.contains("Account already") {
+                    info!("  ✓ Bridge account already exists on network");
+                } else {
+                    warn!("  ⚠ Failed to deploy bridge account: {}", e);
+                    warn!("    Will attempt to continue - account may already exist on network");
+                }
+            }
+        }
+    } else {
+        info!("  ✓ Bridge account already tracked - assuming deployed");
     }
 
     info!("╔══════════════════════════════════════════════════════════════════╗");
@@ -205,14 +238,16 @@ pub async fn create_and_deploy_agglayer_faucet(
     // Add agglayer faucet to client
     // Note: This may fail if account is already tracked (from previous claim) - that's OK
     info!("  Adding agglayer faucet to client...");
-    match client.add_account(&agglayer_faucet, false).await {
+    let faucet_already_tracked = match client.add_account(&agglayer_faucet, false).await {
         Ok(_) => {
             info!("  ✓ Agglayer faucet added to client");
+            false
         }
         Err(e) => {
             let err_str = e.to_string();
             if err_str.contains("already being tracked") {
-                info!("  ✓ Agglayer faucet already tracked (reusing from previous claim)");
+                info!("  ✓ Agglayer faucet already tracked (reusing from previous session)");
+                true
             } else {
                 return Err(ClientError::InitializationError(format!(
                     "Failed to add agglayer faucet to client: {}",
@@ -220,12 +255,39 @@ pub async fn create_and_deploy_agglayer_faucet(
                 )));
             }
         }
+    };
+
+    // Deploy agglayer faucet to the network
+    // The faucet must exist on-chain to process CLAIM notes
+    if !faucet_already_tracked {
+        info!("  Deploying agglayer faucet to network...");
+        let deploy_request = TransactionRequestBuilder::new()
+            .build()
+            .map_err(|e| ClientError::InitializationError(format!(
+                "Failed to build faucet deploy request: {}", e
+            )))?;
+
+        match client.submit_new_transaction(agglayer_faucet_id, deploy_request).await {
+            Ok(tx_id) => {
+                info!("  ✓ Agglayer faucet deployed to network");
+                info!("    TX ID: {}", hex::encode(tx_id.as_bytes()));
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                // If account already exists on network, that's fine
+                if err_str.contains("already exists") || err_str.contains("Account already") {
+                    info!("  ✓ Agglayer faucet already exists on network");
+                } else {
+                    warn!("  ⚠ Failed to deploy agglayer faucet: {}", e);
+                    warn!("    Will attempt to continue - faucet may already exist on network");
+                }
+            }
+        }
+    } else {
+        info!("  ✓ Agglayer faucet already tracked - assuming deployed");
     }
 
-    // Note: We do NOT deploy the faucet to the network here.
-    // The agglayer faucet should already exist in the miden-node genesis.
-    // We only create a local reference for tracking purposes.
-    info!("  ✓ Agglayer faucet created locally (not deployed - expects existing faucet in genesis)");
+    info!("  ✓ Both accounts ready for CLAIM note processing");
 
     Ok(AgglayerFaucetResult {
         faucet_id: agglayer_faucet_id,
