@@ -836,8 +836,9 @@ async fn submit_claim_to_miden(
             info!("  (This may take several seconds for proving)");
 
             // Step 10: Submit the transaction from the faucet account
+            // The faucet is the one that mints assets, so it should execute the transaction
             let start_time = std::time::Instant::now();
-            let miden_tx_id = submit_transaction(&mut client, submitter_account_id, tx_request).await?;
+            let miden_tx_id = submit_transaction(&mut client, agglayer_faucet_id, tx_request).await?;
             let elapsed = start_time.elapsed();
 
             info!("  ✓ Transaction submitted successfully!");
