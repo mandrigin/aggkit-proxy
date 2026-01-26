@@ -278,6 +278,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let sender_hex = format!("0x{}", hex::encode(<[u8; 15]>::from(metadata.sender())));
                     println!("    Sender: {}", sender_hex);
                     println!("    Tag: {:?}", metadata.tag());
+                    println!("    Note Type: {:?}", metadata.note_type());
+                }
+                // Print note details (inputs, script)
+                let details = note_record.details();
+                println!("    Script Root: 0x{}", hex::encode(details.script().root().as_bytes()));
+                let inputs = details.inputs();
+                println!("    Inputs ({} values):", inputs.num_values());
+                for (i, value) in inputs.values().iter().enumerate() {
+                    // Try to interpret first input as account ID (P2ID pattern)
+                    if i == 0 {
+                        let bytes: [u8; 8] = value.as_int().to_le_bytes();
+                        println!("      [{}]: {} (raw: 0x{})", i, value.as_int(), hex::encode(bytes));
+                    } else {
+                        println!("      [{}]: {}", i, value.as_int());
+                    }
                 }
                 println!();
             }
