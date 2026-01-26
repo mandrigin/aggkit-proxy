@@ -810,17 +810,22 @@ async fn submit_claim_to_miden(
             info!("  → Note tag: {:?}", claim_note.metadata().tag());
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!("║  STEP 6: Building transaction request                            ║");
+            info!("║  STEP 6: Faucet consumes CLAIM note (single transaction)          ║");
             info!("╚══════════════════════════════════════════════════════════════════╝");
-            // Step 9: Build transaction request with the CLAIM note as output
-            // The CLAIM note is sent TO the agglayer faucet
-            info!("  Building TransactionRequest with CLAIM note as output...");
-            info!("    - Output notes: 1 (CLAIM note)");
+            // The faucet directly consumes the CLAIM note to mint a P2ID note
+            // This is done in a single transaction where the faucet is the executor
+            info!("  Building TransactionRequest for faucet to consume CLAIM note...");
+            info!("    - Executor: faucet ({})", agglayer_faucet_id);
+            info!("    - Input: CLAIM note (to be consumed)");
+            info!("    - Output: P2ID note to recipient");
+
+            // Convert Note to the format needed for consumption
+            let claim_note_for_consume: miden_protocol::note::Note = claim_note;
+
             let tx_request = TransactionRequestBuilder::new()
-                .own_output_notes(vec![OutputNote::Full(claim_note)])
-                .build()
+                .build_consume_notes(vec![claim_note_for_consume])
                 .map_err(|e| ClientError::TransactionError(format!(
-                    "Failed to build transaction request: {}", e
+                    "Failed to build consume request: {}", e
                 )))?;
             info!("  ✓ TransactionRequest built successfully");
 
@@ -828,15 +833,14 @@ async fn submit_claim_to_miden(
             info!("║  STEP 7: Submitting transaction to network                       ║");
             info!("╚══════════════════════════════════════════════════════════════════╝");
             info!("  Transaction details:");
-            info!("    - Submitter account: {}", submitter_account_id);
+            info!("    - Executor account: {} (faucet)", agglayer_faucet_id);
             info!("    - Amount (Miden units): {}", claim_data.amount);
             info!("    - Recipient: {}", recipient_account_id);
-            info!("    - Faucet: {}", agglayer_faucet_id);
             info!("  Calling submit_transaction()...");
             info!("  (This may take several seconds for proving)");
 
-            // Step 10: Submit the transaction from the faucet account
-            // The faucet is the one that mints assets, so it should execute the transaction
+            // Submit the transaction from the faucet account
+            // The faucet consumes the CLAIM note and mints a P2ID note to the recipient
             let start_time = std::time::Instant::now();
             let miden_tx_id = submit_transaction(&mut client, agglayer_faucet_id, tx_request).await?;
             let elapsed = start_time.elapsed();
@@ -847,12 +851,11 @@ async fn submit_claim_to_miden(
             info!("  → Current block: {}", block_num);
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!("║  CLAIM NOTE SUBMISSION COMPLETE                                  ║");
+            info!("║  CLAIM PROCESSING COMPLETE                                        ║");
             info!("╠══════════════════════════════════════════════════════════════════╣");
             info!("║  Summary:                                                        ║");
             info!("║    TX ID:      {}", miden_tx_id);
-            info!("║    Submitter:  {}", submitter_account_id);
-            info!("║    Faucet:     {}", agglayer_faucet_id);
+            info!("║    Executor:   {} (faucet)", agglayer_faucet_id);
             info!("║    Recipient:  {}", recipient_account_id);
             info!("║    Amount:     {} Miden units", claim_data.amount);
             info!("║    Block:      {}", block_num);
