@@ -15,16 +15,17 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 
 # Create dummy src to build dependencies
+# Only build the main proxy binary to save memory (utility binaries are for local use)
 RUN mkdir -p src src/bin && \
     echo 'fn main() { println!("dummy"); }' > src/main.rs && \
     echo 'fn main() { println!("dummy"); }' > src/bin/verify_notes.rs && \
     echo 'fn main() { println!("dummy"); }' > src/bin/claim_note.rs && \
-    cargo build --release && \
+    cargo build --release --bin miden-rpc-proxy && \
     rm -rf src
 
 # Copy actual source and rebuild
 COPY src ./src
-RUN touch src/main.rs src/bin/verify_notes.rs src/bin/claim_note.rs && cargo build --release
+RUN touch src/main.rs && cargo build --release --bin miden-rpc-proxy
 
 # Runtime stage
 FROM debian:bookworm-slim
