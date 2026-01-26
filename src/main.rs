@@ -847,11 +847,50 @@ async fn submit_claim_to_miden(
             info!("    TX ID: {}", phase1_tx_id);
             info!("    Time: {:.2}s", phase1_elapsed.as_secs_f64());
 
-            // Sync state to see the new CLAIM note
-            info!("  Syncing state to confirm CLAIM note commitment...");
-            let sync_result = client.sync_state().await
-                .map_err(|e| ClientError::SyncError(e.to_string()))?;
-            info!("  ✓ Synced to block {}", sync_result.block_num.as_u32());
+            // Wait for the CLAIM note to be committed to a block
+            // The note must be in a proven block before it can be consumed.
+            // We poll sync_state until the block number increases.
+            info!("  Waiting for CLAIM note to be included in a proven block...");
+
+            // First sync to get current block height
+            let initial_sync = client.sync_state().await
+                .map_err(|e| ClientError::SyncError(format!("Initial sync failed: {}", e)))?;
+            let initial_block = initial_sync.block_num.as_u32();
+            info!("    Initial block: {}", initial_block);
+
+            // Poll until block advances (note is committed) or timeout
+            let max_wait_secs = 60; // Maximum wait time
+            let poll_interval = std::time::Duration::from_secs(2);
+            let start_wait = std::time::Instant::now();
+            let mut current_block = initial_block;
+
+            loop {
+                if start_wait.elapsed().as_secs() > max_wait_secs {
+                    warn!("    ⚠ Timeout waiting for block to advance. Attempting Phase 2 anyway...");
+                    break;
+                }
+
+                // Wait before polling
+                tokio::time::sleep(poll_interval).await;
+
+                // Sync and check block height
+                match client.sync_state().await {
+                    Ok(sync_result) => {
+                        current_block = sync_result.block_num.as_u32();
+                        info!("    Polled block: {} (waiting for > {})", current_block, initial_block);
+
+                        if current_block > initial_block {
+                            info!("  ✓ Block advanced! CLAIM note should be committed.");
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("    Sync error during poll: {}. Retrying...", e);
+                    }
+                }
+            }
+
+            info!("  ✓ Synced to block {}", current_block);
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 7: Phase 2 - Faucet consumes CLAIM note                     ║");
