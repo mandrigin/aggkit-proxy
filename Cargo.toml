@@ -57,6 +57,7 @@ parking_lot = "0.12"
 
 # Random number generation
 rand = "0.9"
+rand_chacha = "0.9"
 
 # CLI parsing
 clap = { version = "4", features = ["derive", "env"] }
@@ -73,6 +74,10 @@ miden-protocol = { version = "0.13", features = ["std", "testing"] }
 [[bin]]
 name = "verify-notes"
 path = "src/bin/verify_notes.rs"
+
+[[bin]]
+name = "claim-note"
+path = "src/bin/claim_note.rs"
 
 [[example]]
 name = "gen_signed_tx"

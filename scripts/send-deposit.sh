@@ -3,16 +3,51 @@
 # Send a test deposit from L1 to Miden (network 2)
 #
 # Usage:
-#   ./scripts/send-deposit.sh [amount_in_eth]
+#   ./scripts/send-deposit.sh [amount_in_eth] [destination_miden_address]
 #
 # Example:
 #   ./scripts/send-deposit.sh 0.1
+#   ./scripts/send-deposit.sh 0.1 0x112233445566778899aabbccddeeff  # Send to specific Miden address
+#
+# The destination can be:
+#   - A Miden AccountId (15 bytes / 30 hex chars): 0x112233...
+#   - Omitted to send to the sender's address
+#
+# Miden addresses are converted to Eth format by prepending 5 zero bytes:
+#   Miden: 0x112233445566778899aabbccddeeff
+#   Eth:   0x0000000000112233445566778899aabbccddeeff
 #
 
 set -euo pipefail
 
+# ============================================================================
+# Address conversion utilities (Miden <-> Eth)
+# ============================================================================
+
+# Convert Miden AccountId (15 bytes / 30 hex chars) to Ethereum address (20 bytes / 40 hex chars)
+# Pads with 5 bytes (10 hex chars) of leading zeros
+miden_to_eth() {
+    local miden_addr="$1"
+    # Remove 0x prefix if present
+    miden_addr="${miden_addr#0x}"
+    # Validate length (should be 30 hex chars)
+    if [[ ${#miden_addr} -ne 30 ]]; then
+        echo "ERROR: Miden address must be 30 hex chars (15 bytes), got ${#miden_addr}" >&2
+        return 1
+    fi
+    # Miden is 30 hex chars, Eth is 40 hex chars, so pad with 10 zeros
+    echo "0x0000000000${miden_addr}"
+}
+
+# ============================================================================
+# Parse arguments
+# ============================================================================
+
 # Default amount: 0.01 ETH
 AMOUNT_ETH="${1:-0.01}"
+
+# Destination: optional Miden address
+DEST_MIDEN="${2:-}"
 
 # Convert to wei
 AMOUNT_WEI=$(echo "$AMOUNT_ETH * 1000000000000000000" | bc | cut -d'.' -f1)
@@ -20,6 +55,15 @@ AMOUNT_WEI=$(echo "$AMOUNT_ETH * 1000000000000000000" | bc | cut -d'.' -f1)
 # Kurtosis funded account
 PRIVATE_KEY="0x12d7de8621a77640c9241b2595ba78ce443d05e94090365ab3bb5e19df82c625"
 FROM_ADDRESS="0xE34aaF64b29273B7D567FCFc40544c014EEe9970"
+
+# Destination address: use provided Miden address or fall back to sender
+if [[ -n "$DEST_MIDEN" ]]; then
+    DEST_ADDRESS=$(miden_to_eth "$DEST_MIDEN") || exit 1
+    echo "Destination: $DEST_MIDEN (Miden) -> $DEST_ADDRESS (Eth)"
+else
+    DEST_ADDRESS="$FROM_ADDRESS"
+    echo "Destination: $FROM_ADDRESS (sender's address)"
+fi
 
 # Bridge contract address - get from kurtosis or use override
 BRIDGE_ADDRESS="${BRIDGE_ADDRESS:-}"
@@ -65,6 +109,10 @@ fi
 echo "=== Miden Deposit Script ==="
 echo "L1 RPC:      $L1_RPC"
 echo "From:        $FROM_ADDRESS"
+echo "To (Eth):    $DEST_ADDRESS"
+if [[ -n "$DEST_MIDEN" ]]; then
+echo "To (Miden):  $DEST_MIDEN"
+fi
 echo "Bridge:      $BRIDGE_ADDRESS"
 echo "Dest Net:    $DEST_NETWORK"
 echo "Amount:      $AMOUNT_ETH ETH ($AMOUNT_WEI wei)"
@@ -84,7 +132,7 @@ fi
 # bridgeAsset(uint32 destinationNetwork, address destinationAddress, uint256 amount, address token, bool forceUpdateGlobalExitRoot, bytes permitData)
 CALLDATA=$(cast calldata "bridgeAsset(uint32,address,uint256,address,bool,bytes)" \
     "$DEST_NETWORK" \
-    "$FROM_ADDRESS" \
+    "$DEST_ADDRESS" \
     "$AMOUNT_WEI" \
     "0x0000000000000000000000000000000000000000" \
     true \

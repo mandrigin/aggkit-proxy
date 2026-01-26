@@ -75,28 +75,43 @@ impl AddressMapper {
 
     /// Get or create a Miden AccountId for an Ethereum address.
     ///
-    /// If the address is unknown, derives a seed deterministically and creates
-    /// a new Miden wallet account, storing the mapping for future lookups.
+    /// **Simple encoding**: If the Eth address starts with 5 zero bytes (our encoding),
+    /// the Miden AccountId is extracted directly by stripping those zeros.
+    /// This allows users to encode their Miden address as: `0x0000000000<miden_addr>`
+    ///
+    /// **Legacy/fallback**: If the address doesn't use simple encoding and no mapping
+    /// exists, derives a seed deterministically and creates a new Miden wallet account.
     ///
     /// Returns `(account_id, was_created)` where `was_created` is true if a new
-    /// account was auto-created.
+    /// account was auto-created (only for legacy derivation, not simple encoding).
     pub fn get_or_create(&self, eth_address: &EthAddress) -> Result<(MidenAccountId, bool)> {
-        // Check if mapping already exists
+        // First, check if this is a simple zero-padded encoding
+        if eth_address.is_miden_encoded() {
+            let miden_account_id = eth_address.to_miden_simple()?;
+            info!(
+                eth = %eth_address,
+                miden = %miden_account_id,
+                "Using simple zero-padded encoding (Miden address embedded in Eth address)"
+            );
+            return Ok((miden_account_id, false));
+        }
+
+        // Check if mapping already exists in storage
         if let Some(mapping) = self.storage.get_by_eth_address(&eth_address.0)? {
             let miden_account_id = MidenAccountId::from_slice(&mapping.miden_account_id)?;
             debug!(
                 eth = %eth_address,
                 miden = %miden_account_id,
-                "Found existing mapping"
+                "Found existing mapping in storage"
             );
             return Ok((miden_account_id, false));
         }
 
-        // Derive seed deterministically from Ethereum address
+        // Fallback: Derive seed deterministically from Ethereum address
         let seed = self.derive_seed(eth_address);
         info!(
             eth = %eth_address,
-            "Deriving new Miden account from Ethereum address"
+            "Deriving new Miden account from Ethereum address (legacy mode)"
         );
 
         // Create the Miden account with proper metadata bits
@@ -117,7 +132,7 @@ impl AddressMapper {
             miden = %miden_account_id,
             account_type = ?miden_account_id.inner().account_type(),
             storage_mode = ?miden_account_id.inner().storage_mode(),
-            "Auto-created new Miden account mapping"
+            "Auto-created new Miden account mapping (legacy derivation)"
         );
 
         Ok((miden_account_id, true))
@@ -252,6 +267,10 @@ impl AddressMapper {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EthAddress(pub [u8; 20]);
 
+/// Number of padding bytes when encoding Miden AccountId as Eth address.
+/// Eth = 20 bytes, Miden = 15 bytes, so 5 bytes of padding.
+pub const MIDEN_ETH_PADDING_BYTES: usize = 5;
+
 impl EthAddress {
     /// Create from a byte slice.
     pub fn from_slice(bytes: &[u8]) -> Result<Self> {
@@ -284,6 +303,49 @@ impl EthAddress {
     /// Convert to an alloy Address type.
     pub fn to_alloy(&self) -> alloy_primitives::Address {
         alloy_primitives::Address::from_slice(&self.0)
+    }
+
+    /// Create an Eth address from a Miden AccountId using zero-padding.
+    ///
+    /// The encoding is: `eth_addr = 0x0000000000 || miden_addr`
+    /// (5 zero bytes prefix + 15 bytes of Miden AccountId)
+    ///
+    /// This is the inverse of `to_miden_simple()`.
+    pub fn from_miden_simple(miden_id: &MidenAccountId) -> Self {
+        let mut eth_bytes = [0u8; 20];
+        // First 5 bytes are zeros (padding)
+        // Last 15 bytes are the Miden AccountId
+        eth_bytes[MIDEN_ETH_PADDING_BYTES..].copy_from_slice(&miden_id.to_bytes());
+        Self(eth_bytes)
+    }
+
+    /// Convert to a Miden AccountId using simple zero-stripping.
+    ///
+    /// Expects the first 5 bytes to be zeros (our encoding convention).
+    /// Returns an error if the padding bytes are not zero.
+    ///
+    /// This is the inverse of `from_miden_simple()`.
+    pub fn to_miden_simple(&self) -> Result<MidenAccountId> {
+        // Verify the first 5 bytes are zeros
+        let padding = &self.0[..MIDEN_ETH_PADDING_BYTES];
+        if padding != [0u8; MIDEN_ETH_PADDING_BYTES] {
+            return Err(ProxyError::AccountResolution {
+                eth_address: self.to_string(),
+                reason: format!(
+                    "invalid padding: expected {} zero bytes, got {:?}",
+                    MIDEN_ETH_PADDING_BYTES, padding
+                ),
+            });
+        }
+
+        // Take the last 15 bytes as the Miden AccountId
+        let miden_bytes = &self.0[MIDEN_ETH_PADDING_BYTES..];
+        MidenAccountId::from_slice(miden_bytes)
+    }
+
+    /// Check if this Eth address uses our simple Miden encoding (5 zero byte prefix).
+    pub fn is_miden_encoded(&self) -> bool {
+        self.0[..MIDEN_ETH_PADDING_BYTES] == [0u8; MIDEN_ETH_PADDING_BYTES]
     }
 }
 
@@ -345,6 +407,21 @@ impl MidenAccountId {
     /// Get the underlying AccountId.
     pub fn inner(&self) -> AccountId {
         self.0
+    }
+
+    /// Convert to an Eth address using zero-padding.
+    ///
+    /// The encoding is: `eth_addr = 0x0000000000 || miden_addr`
+    /// (5 zero bytes prefix + 15 bytes of Miden AccountId)
+    pub fn to_eth_padded(&self) -> EthAddress {
+        EthAddress::from_miden_simple(self)
+    }
+
+    /// Create from an Eth address that uses our zero-padding encoding.
+    ///
+    /// Expects the Eth address to be in format: `0x0000000000<miden_addr>`
+    pub fn from_eth_padded(eth_addr: &EthAddress) -> Result<Self> {
+        eth_addr.to_miden_simple()
     }
 }
 
@@ -504,5 +581,50 @@ mod tests {
 
         let back = eth_addr.to_alloy();
         assert_eq!(back, alloy_addr);
+    }
+
+    #[test]
+    fn test_simple_miden_encoding_roundtrip() {
+        // Create a test Miden AccountId
+        let miden_id = create_test_account_id([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+                                               0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+
+        // Convert to Eth address (should add 5 zero bytes prefix)
+        let eth_addr = EthAddress::from_miden_simple(&miden_id);
+
+        // Verify the first 5 bytes are zeros
+        assert_eq!(&eth_addr.0[..5], &[0u8; 5]);
+        assert!(eth_addr.is_miden_encoded());
+
+        // Convert back to Miden (should strip the zeros)
+        let miden_back = eth_addr.to_miden_simple().unwrap();
+        assert_eq!(miden_id.to_bytes(), miden_back.to_bytes());
+    }
+
+    #[test]
+    fn test_simple_encoding_in_get_or_create() {
+        let mapper = AddressMapper::in_memory(test_config()).unwrap();
+
+        // Create a Miden AccountId and encode as Eth address
+        let miden_id = create_test_account_id([0xaa; 15]);
+        let eth_addr = miden_id.to_eth_padded();
+
+        // get_or_create should recognize the simple encoding and return the same ID
+        let (retrieved_id, was_created) = mapper.get_or_create(&eth_addr).unwrap();
+
+        // Should NOT be marked as created (simple encoding doesn't create new accounts)
+        assert!(!was_created);
+        assert_eq!(miden_id.to_bytes(), retrieved_id.to_bytes());
+    }
+
+    #[test]
+    fn test_non_miden_encoded_address() {
+        // An address that doesn't start with 5 zero bytes
+        let eth_addr = EthAddress([0x11; 20]);
+        assert!(!eth_addr.is_miden_encoded());
+
+        // to_miden_simple should fail
+        let result = eth_addr.to_miden_simple();
+        assert!(result.is_err());
     }
 }
