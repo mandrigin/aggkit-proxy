@@ -813,6 +813,15 @@ async fn submit_claim_to_miden(
             info!("  → Note assets: {:?}", claim_note.assets());
             info!("  → Note tag: {:?}", claim_note.metadata().tag());
 
+            // Debug: Log the script root for tracking
+            let claim_script = claim_note.recipient().script();
+            let claim_script_root = claim_script.root();
+            info!("  → CLAIM script root: {:?}", claim_script_root);
+            info!("  → CLAIM script root hex: 0x{}", claim_script_root.iter()
+                .map(|f| format!("{:016x}", f.as_int()))
+                .collect::<Vec<_>>()
+                .join(""));
+
             // ============================================================================
             // TWO-PHASE CLAIM NOTE FLOW
             // ============================================================================
