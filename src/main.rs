@@ -591,7 +591,10 @@ async fn submit_claim_to_miden(
 
             // Step 4: Sync state to get current block info
             let sync_result = client.sync_state().await
-                .map_err(|e| ClientError::SyncError(e.to_string()))?;
+                .map_err(|e| {
+                    error!(error = %e, error_debug = ?e, "Failed to sync state with network");
+                    ClientError::SyncError(format!("{}: {:?}", e, e))
+                })?;
             let block_num = sync_result.block_num.as_u32();
             info!(block_num = block_num, "State synced with network");
 
