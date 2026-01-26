@@ -538,7 +538,8 @@ async fn submit_claim_to_miden(
     claim_data: ClaimSubmissionData,
 ) -> Result<u64, ClientError> {
     use miden_client::crypto::FeltRng;
-    use miden_client::transaction::{OutputNote, TransactionRequestBuilder};
+    use miden_client::rpc::domain::account::AccountStorageRequirements;
+    use miden_client::transaction::{ForeignAccount, TransactionRequestBuilder};
     use miden_protocol::crypto::rand::RpoRandomCoin;
     use miden_protocol::note::NoteTag;
     use miden_protocol::{Felt, FieldElement, Word};
@@ -819,15 +820,36 @@ async fn submit_claim_to_miden(
             info!("    - Input: CLAIM note (to be consumed)");
             info!("    - Output: P2ID note to recipient");
 
+            // Get bridge account ID for FPI (Foreign Procedure Invocation)
+            // The CLAIM note script does FPI to the bridge account to verify exit roots
+            let bridge_account_id = config.bridge_account_id.ok_or_else(|| {
+                ClientError::AccountNotFound("Bridge account ID not configured".to_string())
+            })?;
+            info!("    - Foreign account (FPI): bridge ({})", bridge_account_id);
+
             // Convert Note to the format needed for consumption
             let claim_note_for_consume: miden_protocol::note::Note = claim_note;
 
+            // Create foreign account reference for the bridge account
+            // The bridge account is public, and we don't need specific storage slots
+            let foreign_account = ForeignAccount::public(
+                bridge_account_id,
+                AccountStorageRequirements::default(),
+            ).map_err(|e| ClientError::TransactionError(format!(
+                "Failed to create foreign account: {}", e
+            )))?;
+
+            // Build transaction request with:
+            // - Input: CLAIM note (to be consumed by faucet)
+            // - Foreign accounts: bridge account (for FPI during CLAIM processing)
             let tx_request = TransactionRequestBuilder::new()
-                .build_consume_notes(vec![claim_note_for_consume])
+                .input_notes(vec![(claim_note_for_consume, None)])
+                .foreign_accounts([foreign_account])
+                .build()
                 .map_err(|e| ClientError::TransactionError(format!(
                     "Failed to build consume request: {}", e
                 )))?;
-            info!("  ✓ TransactionRequest built successfully");
+            info!("  ✓ TransactionRequest built successfully (with bridge as foreign account)");
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 7: Submitting transaction to network                       ║");
