@@ -18,12 +18,13 @@ COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src src/bin && \
     echo 'fn main() { println!("dummy"); }' > src/main.rs && \
     echo 'fn main() { println!("dummy"); }' > src/bin/verify_notes.rs && \
+    echo 'fn main() { println!("dummy"); }' > src/bin/claim_note.rs && \
     cargo build --release && \
     rm -rf src
 
 # Copy actual source and rebuild
 COPY src ./src
-RUN touch src/main.rs src/bin/verify_notes.rs && cargo build --release
+RUN touch src/main.rs src/bin/verify_notes.rs src/bin/claim_note.rs && cargo build --release
 
 # Runtime stage
 FROM debian:bookworm-slim
