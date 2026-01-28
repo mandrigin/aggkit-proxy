@@ -26,8 +26,21 @@ set -euo pipefail
 # IMPORTANT: Change this to your own secret phrase!
 CLAIMER_SEED="my-test-claimer-seed-change-me"
 
-# Miden node RPC endpoint
-MIDEN_RPC_URL="${MIDEN_RPC_URL:-http://localhost:57291}"
+# Miden node RPC endpoint (auto-detected from Docker if not set)
+_auto_detect_rpc_url() {
+    local container
+    container=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^miden-node' | head -1)
+    if [[ -n "$container" ]]; then
+        local port
+        port=$(docker port "$container" 57291/tcp 2>/dev/null | head -1 | cut -d: -f2)
+        if [[ -n "$port" ]]; then
+            echo "http://localhost:$port"
+            return
+        fi
+    fi
+    echo "http://localhost:57291"
+}
+MIDEN_RPC_URL="${MIDEN_RPC_URL:-$(_auto_detect_rpc_url)}"
 
 # Store path for miden client (keystore and SQLite store)
 # If not set, the binary creates a unique temp folder per run

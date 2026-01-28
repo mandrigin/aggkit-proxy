@@ -17,8 +17,23 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Auto-detect RPC URL from Docker if not set
+_auto_detect_rpc_url() {
+    local container
+    container=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^miden-node' | head -1)
+    if [[ -n "$container" ]]; then
+        local port
+        port=$(docker port "$container" 57291/tcp 2>/dev/null | head -1 | cut -d: -f2)
+        if [[ -n "$port" ]]; then
+            echo "http://localhost:$port"
+            return
+        fi
+    fi
+    echo "http://localhost:57291"
+}
+
 # Defaults
-RPC_URL="${MIDEN_RPC_URL:-http://localhost:57291}"
+RPC_URL="${MIDEN_RPC_URL:-$(_auto_detect_rpc_url)}"
 STORE_PATH="${MIDEN_STORE_PATH:-/tmp/verify-notes-store}"
 BUILD_MODE="debug"
 FORCE_BUILD=false
