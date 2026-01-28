@@ -69,11 +69,11 @@ fi
 BRIDGE_ADDRESS="${BRIDGE_ADDRESS:-}"
 if [[ -z "$BRIDGE_ADDRESS" ]]; then
     # Get from kurtosis combined.json
-    BRIDGE_ADDRESS=$(kurtosis service exec cdk-miden contracts-001 "cat /opt/zkevm/combined.json" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty')
+    BRIDGE_ADDRESS=$(kurtosis service exec miden-cdk contracts-001 "cat /opt/output/combined.json" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty')
 fi
 if [[ -z "$BRIDGE_ADDRESS" ]]; then
     echo "ERROR: Cannot determine bridge address"
-    echo "Set BRIDGE_ADDRESS env var or ensure kurtosis cdk-miden is running"
+    echo "Set BRIDGE_ADDRESS env var or ensure kurtosis miden-cdk is running"
     exit 1
 fi
 
@@ -84,7 +84,7 @@ DEST_NETWORK=2
 L1_RPC="${L1_RPC:-}"
 if [[ -z "$L1_RPC" ]]; then
     # Try kurtosis
-    L1_RPC=$(kurtosis port print cdk-miden el-1-geth-lighthouse rpc 2>/dev/null || true)
+    L1_RPC=$(kurtosis port print miden-cdk el-1-geth-lighthouse rpc 2>/dev/null || true)
 fi
 if [[ -z "$L1_RPC" ]]; then
     # Try to find the container directly
@@ -102,7 +102,7 @@ if [[ -z "$L1_RPC" ]]; then
     echo "Options:"
     echo "  1. Set L1_RPC environment variable: L1_RPC=http://... $0"
     echo "  2. Deploy kurtosis-cdk: ./scripts/e2e-test.sh"
-    echo "  3. Start existing enclave: kurtosis enclave start cdk-miden"
+    echo "  3. Start existing enclave: kurtosis enclave start miden-cdk"
     exit 1
 fi
 
