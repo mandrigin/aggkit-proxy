@@ -5,7 +5,7 @@ services:
   # Miden node (agglayer-v0.1 - built from source)
   # Image tag uses miden-node repo commit SHA, not proxy repo
   miden-node:
-    image: miden-node:${MIDEN_NODE_COMMIT:-agglayer-v0.1}
+    image: miden-infra/miden-node:${MIDEN_NODE_COMMIT:-agglayer-v0.1}
     build:
       context: .
       dockerfile: Dockerfile.miden-node
@@ -23,7 +23,7 @@ services:
 
   # The proxy service (minimal config for decode testing)
   proxy:
-    image: miden-proxy:${GIT_COMMIT:-latest}
+    image: miden-infra/miden-proxy:${GIT_COMMIT:-latest}
     build:
       context: .
       dockerfile: Dockerfile

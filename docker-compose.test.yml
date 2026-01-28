@@ -13,6 +13,7 @@ services:
       retries: 5
 
   miden-node:
+    image: miden-infra/miden-node
     build:
       context: .
       dockerfile: Dockerfile.miden-node
@@ -42,6 +43,7 @@ services:
         condition: service_healthy
 
   proxy:
+    image: miden-infra/miden-proxy
     build: .
     environment:
       MIDEN_RPC_URL: http://miden-node:57291
@@ -55,6 +57,7 @@ services:
       - bridge-service
 
   test-runner:
+    image: miden-infra/miden-test-runner
     build:
       context: .
       dockerfile: Dockerfile.test

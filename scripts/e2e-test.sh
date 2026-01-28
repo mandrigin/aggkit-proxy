@@ -283,11 +283,11 @@ start_miden_services() {
 
     # Stop existing containers
     log "Cleaning up existing miden containers..."
-    docker rm -f miden-node-kurtosis miden-proxy-kurtosis miden-l2-forwarder 2>/dev/null || true
+    docker rm -f miden-node-kurtosis miden-proxy-kurtosis miden-infra-l2-forwarder 2>/dev/null || true
 
     # Check if miden-node image exists
-    if ! docker image inspect miden-node:agglayer-v0.1 &>/dev/null; then
-        fail "miden-node:agglayer-v0.1 image not found. Build it first with: docker build -t miden-node:agglayer-v0.1 -f Dockerfile.miden-node ."
+    if ! docker image inspect miden-infra/miden-node:agglayer-v0.1 &>/dev/null; then
+        fail "miden-infra/miden-node:agglayer-v0.1 image not found. Build it first with: docker build -t miden-infra/miden-node:agglayer-v0.1 -f Dockerfile.miden-node ."
     fi
 
     # Start Miden node
@@ -296,7 +296,7 @@ start_miden_services() {
         --name miden-node-kurtosis \
         --network "$kurtosis_network" \
         -p "${MIDEN_NODE_PORT}:57291" \
-        miden-node:agglayer-v0.1; then
+        miden-infra/miden-node:agglayer-v0.1; then
         fail "Failed to start miden-node-kurtosis container"
     fi
 
@@ -326,14 +326,14 @@ start_miden_services() {
 
     # Build proxy image if needed or --rebuild flag is set
     # Tag as both :kurtosis and :latest for consistency
-    if $REBUILD_IMAGES || ! docker image inspect miden-rpc-proxy:kurtosis &>/dev/null; then
+    if $REBUILD_IMAGES || ! docker image inspect miden-infra/miden-proxy:kurtosis &>/dev/null; then
         log "Building miden-rpc-proxy image..."
-        if ! docker build -t miden-rpc-proxy:kurtosis -t miden-rpc-proxy:latest -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR"; then
+        if ! docker build -t miden-infra/miden-proxy:kurtosis -t miden-infra/miden-proxy:latest -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR"; then
             fail "Failed to build miden-rpc-proxy image"
         fi
         success "Proxy image built (tagged as :kurtosis and :latest)"
     else
-        log "Using existing miden-rpc-proxy:kurtosis image (use --rebuild to force)"
+        log "Using existing miden-infra/miden-proxy:kurtosis image (use --rebuild to force)"
     fi
 
     # Clean bridge DB before starting proxy to ensure fresh L2 sync from block 0
@@ -369,7 +369,7 @@ start_miden_services() {
         -e BRIDGE_FAUCET_ID="0x000000000000000000000000000001" \
         -e BRIDGE_ADDRESS="$BRIDGE_ADDRESS" \
         -e LISTEN_PORT=8546 \
-        miden-rpc-proxy:kurtosis; then
+        miden-infra/miden-proxy:kurtosis; then
         fail "Failed to start miden-proxy-kurtosis container"
     fi
 
@@ -449,9 +449,9 @@ reconfigure_bridge_service() {
 
     # Step 1: Create nginx forwarder to route bridge traffic to Miden proxy
     # The bridge expects to connect to op-geth on 8545, but we redirect to Miden proxy on 8546
-    log "Creating nginx TCP forwarder (miden-l2-forwarder)..."
+    log "Creating nginx TCP forwarder (miden-infra-l2-forwarder)..."
 
-    docker rm -f miden-l2-forwarder 2>/dev/null || true
+    docker rm -f miden-infra-l2-forwarder 2>/dev/null || true
 
     # Create nginx config for TCP stream proxy
     local nginx_conf="/tmp/miden-nginx-stream.conf"
@@ -471,7 +471,7 @@ stream {
 EOF
 
     docker run -d \
-        --name miden-l2-forwarder \
+        --name miden-infra-l2-forwarder \
         --network "$kurtosis_network" \
         -v "$nginx_conf:/etc/nginx/nginx.conf:ro" \
         nginx:alpine 2>/dev/null || {
@@ -484,9 +484,9 @@ EOF
 
     # Get forwarder IP
     local forwarder_ip
-    forwarder_ip=$(docker inspect -f "{{range \$k, \$v := .NetworkSettings.Networks}}{{if eq (printf \"%.3s\" \$k) \"kt-\"}}{{\$v.IPAddress}}{{end}}{{end}}" miden-l2-forwarder 2>/dev/null || echo "")
+    forwarder_ip=$(docker inspect -f "{{range \$k, \$v := .NetworkSettings.Networks}}{{if eq (printf \"%.3s\" \$k) \"kt-\"}}{{\$v.IPAddress}}{{end}}{{end}}" miden-infra-l2-forwarder 2>/dev/null || echo "")
     if [[ -z "$forwarder_ip" ]]; then
-        forwarder_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' miden-l2-forwarder 2>/dev/null | head -c 15)
+        forwarder_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' miden-infra-l2-forwarder 2>/dev/null | head -c 15)
     fi
     log "Forwarder IP: $forwarder_ip"
 
@@ -501,7 +501,7 @@ EOF
     fi
     log "Bridge container: $bridge_container"
 
-    # Step 3: Modify bridge config to use miden-l2-forwarder
+    # Step 3: Modify bridge config to use miden-infra-l2-forwarder
     log "Modifying bridge config to use Miden proxy..."
 
     # Update L2URL in the config
@@ -510,9 +510,9 @@ EOF
             # Backup original
             cp /etc/aggkit/config.toml /etc/aggkit/config.toml.bak
             # Replace op-geth L2URL with our forwarder
-            sed -i 's|L2URL = \"http://op-el-1-op-geth-op-node-001:8545\"|L2URL = \"http://miden-l2-forwarder:8545\"|g' /etc/aggkit/config.toml
+            sed -i 's|L2URL = \"http://op-el-1-op-geth-op-node-001:8545\"|L2URL = \"http://miden-infra-l2-forwarder:8545\"|g' /etc/aggkit/config.toml
             # Also update any RPCURL pointing to op-geth
-            sed -i 's|RPCURL = \"http://op-el-1-op-geth-op-node-001:8545\"|RPCURL = \"http://miden-l2-forwarder:8545\"|g' /etc/aggkit/config.toml
+            sed -i 's|RPCURL = \"http://op-el-1-op-geth-op-node-001:8545\"|RPCURL = \"http://miden-infra-l2-forwarder:8545\"|g' /etc/aggkit/config.toml
         fi
     " 2>/dev/null || warn "Could not modify bridge config"
 
@@ -559,7 +559,7 @@ EOF
                 cp /etc/zkevm/bridge-config.toml /etc/zkevm/bridge-config.toml.bak
                 # Replace L2URLs array to use forwarder
                 # Match any op-el-N-op-geth pattern (could be op-el-1 or op-el-2)
-                sed -i 's|L2URLs = \\[\"http://op-el-[0-9]*-op-geth-op-node-001:8545\"\\]|L2URLs = [\"http://miden-l2-forwarder:8545\"]|g' /etc/zkevm/bridge-config.toml
+                sed -i 's|L2URLs = \\[\"http://op-el-[0-9]*-op-geth-op-node-001:8545\"\\]|L2URLs = [\"http://miden-infra-l2-forwarder:8545\"]|g' /etc/zkevm/bridge-config.toml
             fi
         " 2>/dev/null || warn "Could not modify zkevm-bridge config"
 
@@ -611,7 +611,7 @@ EOF
     log "Testing forwarder routes traffic to proxy..."
     local test_result
     test_result=$(kurtosis service exec "$ENCLAVE_NAME" contracts-001 \
-        "curl -s -X POST http://miden-l2-forwarder:8545 -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}'" 2>&1 || echo "")
+        "curl -s -X POST http://miden-infra-l2-forwarder:8545 -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}'" 2>&1 || echo "")
 
     if echo "$test_result" | grep -q '"result"'; then
         local chain_id
@@ -643,8 +643,8 @@ EOF
 
             # Modify config to use forwarder for L2/RPC URLs
             # Note: URLRPCL2 and URLRPCL1 are deprecated - L2URL and RPCURL are used instead
-            sed -i.bak 's|L2URL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|L2URL = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
-            sed -i.bak 's|RPCURL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|RPCURL = "http://miden-l2-forwarder:8545"|g' "$config_dir/config.toml"
+            sed -i.bak 's|L2URL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|L2URL = "http://miden-infra-l2-forwarder:8545"|g' "$config_dir/config.toml"
+            sed -i.bak 's|RPCURL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|RPCURL = "http://miden-infra-l2-forwarder:8545"|g' "$config_dir/config.toml"
 
             # Uncomment TargetChainType (required for aggoracle to work)
             sed -i.bak 's|# TargetChainType = "EVM"|TargetChainType = "EVM"|g' "$config_dir/config.toml"
@@ -778,8 +778,8 @@ EOF
         log "Extracting aggsender config..."
         if docker cp "$aggsender_container:/etc/aggkit/." "$config_dir/aggkit-full/" 2>/dev/null; then
             # Modify config
-            sed -i.bak 's|L2URL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|L2URL = "http://miden-l2-forwarder:8545"|g' "$config_dir/aggkit-full/config.toml"
-            sed -i.bak 's|RPCURL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|RPCURL = "http://miden-l2-forwarder:8545"|g' "$config_dir/aggkit-full/config.toml"
+            sed -i.bak 's|L2URL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|L2URL = "http://miden-infra-l2-forwarder:8545"|g' "$config_dir/aggkit-full/config.toml"
+            sed -i.bak 's|RPCURL = "http://op-el-[0-9]*-op-geth-op-node-001:8545"|RPCURL = "http://miden-infra-l2-forwarder:8545"|g' "$config_dir/aggkit-full/config.toml"
 
             local l2url
             l2url=$(grep "^L2URL" "$config_dir/aggkit-full/config.toml" | head -1 || echo "")
