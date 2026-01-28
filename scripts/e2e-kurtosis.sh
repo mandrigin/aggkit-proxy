@@ -135,9 +135,7 @@ deploy_miden_cdk() {
 
     log "Deploying miden-cdk package..."
     cd "$KURTOSIS_PKG_DIR"
-    kurtosis run . --enclave "$ENCLAVE_NAME" $params_arg 2>&1 | while read -r line; do
-        echo -e "${BLUE}│${NC} $line"
-    done
+    kurtosis run . --enclave "$ENCLAVE_NAME" $params_arg
     cd - >/dev/null
 
     success "Miden-CDK deployed"
