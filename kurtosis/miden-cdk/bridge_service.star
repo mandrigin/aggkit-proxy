@@ -166,12 +166,19 @@ def _deploy_bridge_service(plan, deployment_suffix, cdk_args, contract_addresses
 
 def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc_url, l2_rpc_url):
     """
-    Deploy aggkit (aggsender + aggoracle) configured for Miden L2.
+    Deploy aggkit aggoracle configured for Miden L2.
 
-    The aggoracle injects Global Exit Root updates to L2.
-    The aggsender submits certificates to the agglayer.
+    The aggoracle injects Global Exit Root updates from L1 to L2.
+    This is required for deposits to become claimable.
     """
     service_name = "aggkit" + deployment_suffix
+
+    # Get aggoracle keystore from contracts service
+    aggoracle_keystore = plan.store_service_files(
+        name="aggoracle-keystore" + deployment_suffix,
+        service_name="contracts" + deployment_suffix,
+        src="/opt/keystores/aggoracle.keystore",
+    )
 
     # Generate aggkit config
     config_template = _get_aggkit_config_template()
@@ -184,10 +191,16 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
                     "log_level": cdk_args.get("log_level", "info"),
                     "l1_rpc_url": l1_rpc_url,
                     "l2_rpc_url": l2_rpc_url,
+                    "l1_chain_id": cdk_args.get("l1_chain_id", 1337),
+                    "l2_chain_id": cdk_args.get("l2_chain_id", 2),
                     "l1_ger_address": contract_addresses.get("l1_ger_address", ""),
                     "l2_ger_address": contract_addresses.get("l2_ger_address", ""),
+                    "l1_bridge_address": contract_addresses.get("l1_bridge_address", ""),
+                    "l2_bridge_address": contract_addresses.get("l2_bridge_address", ""),
                     "rollup_manager_address": contract_addresses.get("rollup_manager_address", ""),
+                    "pol_token_address": contract_addresses.get("pol_token_address", ""),
                     "agglayer_url": cdk_args.get("agglayer_grpc_url", "http://agglayer" + deployment_suffix + ":4443"),
+                    "l2_keystore_password": cdk_args.get("l2_keystore_password", ""),
                 },
             ),
         },
@@ -204,9 +217,12 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
                 ),
             },
             files={
-                "/etc/aggkit": config_artifact,
+                "/etc/aggkit": Directory(
+                    artifact_names=[config_artifact, aggoracle_keystore],
+                ),
             },
-            cmd=["run", "--cfg=/etc/aggkit/config.toml", "--components=aggsender,aggoracle"],
+            # Only run aggoracle for now (aggsender needs more config)
+            cmd=["run", "--cfg=/etc/aggkit/config.toml", "--components=aggoracle"],
             # Docker Desktop grouping label
             labels={
                 DOCKER_PROJECT_LABEL: BRIDGE_PROJECT_GROUP,
@@ -299,27 +315,53 @@ def _get_aggkit_config_template():
 [Log]
 Level = "{{.log_level}}"
 
-# L2 connection - points to Miden proxy via forwarder
-[L2]
-L2URL = "{{.l2_rpc_url}}"
-RPCURL = "{{.l2_rpc_url}}"
-# TargetChainType must be EVM for aggoracle to work
-TargetChainType = "EVM"
+# L1 configuration
+[L1Config]
+URL = "{{.l1_rpc_url}}"
+ChainID = {{.l1_chain_id}}
+polygonZkEVMGlobalExitRootAddress = "{{.l1_ger_address}}"
+polygonRollupManagerAddress = "{{.rollup_manager_address}}"
+polTokenAddress = "{{.pol_token_address}}"
+# For Miden sovereign chain, use bridge address as rollup placeholder
+polygonZkEVMAddress = "{{.l1_bridge_address}}"
+BridgeAddr = "{{.l1_bridge_address}}"
 
-# L1 connection
-[L1]
-L1URL = "{{.l1_rpc_url}}"
-RPCURL = "{{.l1_rpc_url}}"
+# L2 configuration
+[L2Config]
+GlobalExitRootAddr = "{{.l2_ger_address}}"
+BridgeAddr = "{{.l2_bridge_address}}"
+ChainID = {{.l2_chain_id}}
+URL = "{{.l2_rpc_url}}"
 
 # Agglayer connection
 [Agglayer]
 URL = "{{.agglayer_url}}"
 
-# Global Exit Root configuration
+# AggOracle - injects GER updates from L1 to L2
 [AggOracle]
-L1GERAddress = "{{.l1_ger_address}}"
-L2GERAddress = "{{.l2_ger_address}}"
+WaitPeriodNextGER = "5s"
+EnableAggOracleCommittee = false
 
-[AggSender]
-RollupManagerAddress = "{{.rollup_manager_address}}"
+[AggOracle.EVMSender]
+GlobalExitRootL2 = "{{.l2_ger_address}}"
+WaitPeriodMonitorTx = "5s"
+
+[AggOracle.EVMSender.EthTxManager]
+FrequencyToMonitorTxs = "1s"
+WaitTxToBeMined = "2m"
+GasPriceMarginFactor = 1
+MaxGasPriceLimit = 0
+ForcedGas = 0
+
+[[AggOracle.EVMSender.EthTxManager.PrivateKeys]]
+Path = "/etc/aggkit/aggoracle.keystore"
+Password = "{{.l2_keystore_password}}"
+
+[AggOracle.EVMSender.EthTxManager.Etherman]
+URL = "{{.l2_rpc_url}}"
+L1ChainID = {{.l2_chain_id}}
+
+# AggSender - submits certificates to agglayer (disabled for now)
+# [AggSender]
+# RollupManagerAddress = "{{.rollup_manager_address}}"
 """

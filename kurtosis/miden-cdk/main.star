@@ -92,10 +92,10 @@ MIDEN_DEFAULTS = {
     # Bridge faucet ID for claim transactions
     "bridge_faucet_id": "0x000000000000000000000000000001",
 
-    # Aggkit deployment (disabled by default for Miden)
-    # Aggkit requires a traditional rollup address which Miden doesn't have
-    # The bridge-service works for L1→L2 deposits without aggkit
-    "deploy_aggkit": False,
+    # Aggkit deployment (enabled - required for GER injection)
+    # The aggoracle component injects Global Exit Root updates from L1 to L2
+    # This is required for deposits to become claimable
+    "deploy_aggkit": True,
 
     # pgweb for DB browsing (optional)
     "deploy_pgweb": True,
