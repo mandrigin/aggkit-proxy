@@ -65,10 +65,17 @@ else
     echo "Destination: $FROM_ADDRESS (sender's address)"
 fi
 
-# Bridge contract address - get from kurtosis or use override
+# Bridge contract address - get from env, Docker (proxy), or kurtosis
 BRIDGE_ADDRESS="${BRIDGE_ADDRESS:-}"
 if [[ -z "$BRIDGE_ADDRESS" ]]; then
-    # Get from kurtosis combined.json
+    # Try reading from the proxy container's env (works even if kurtosis tracking is broken)
+    _proxy=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^miden-proxy' | head -1)
+    if [[ -n "$_proxy" ]]; then
+        BRIDGE_ADDRESS=$(docker exec "$_proxy" printenv BRIDGE_ADDRESS 2>/dev/null || true)
+    fi
+fi
+if [[ -z "$BRIDGE_ADDRESS" ]]; then
+    # Fallback: kurtosis combined.json
     BRIDGE_ADDRESS=$(kurtosis service exec miden-cdk contracts-001 "cat /opt/output/combined.json" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty')
 fi
 if [[ -z "$BRIDGE_ADDRESS" ]]; then
@@ -80,12 +87,8 @@ fi
 # Destination network (Miden = 2)
 DEST_NETWORK=2
 
-# Get L1 RPC - try multiple methods
+# Get L1 RPC - try Docker first (faster), then kurtosis
 L1_RPC="${L1_RPC:-}"
-if [[ -z "$L1_RPC" ]]; then
-    # Try kurtosis
-    L1_RPC=$(kurtosis port print miden-cdk el-1-geth-lighthouse rpc 2>/dev/null || true)
-fi
 if [[ -z "$L1_RPC" ]]; then
     # Try to find the container directly
     L1_CONTAINER=$(docker ps --filter "name=el-1-geth" --format "{{.Names}}" | head -1)
@@ -95,6 +98,10 @@ if [[ -z "$L1_RPC" ]]; then
             L1_RPC="http://localhost:$L1_PORT"
         fi
     fi
+fi
+if [[ -z "$L1_RPC" ]]; then
+    # Fallback: kurtosis
+    L1_RPC=$(kurtosis port print miden-cdk el-1-geth-lighthouse rpc 2>/dev/null || true)
 fi
 if [[ -z "$L1_RPC" ]]; then
     echo "ERROR: Cannot find L1 RPC endpoint"
