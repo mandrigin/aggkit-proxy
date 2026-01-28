@@ -198,6 +198,7 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
                     "l1_bridge_address": contract_addresses.get("l1_bridge_address", ""),
                     "l2_bridge_address": contract_addresses.get("l2_bridge_address", ""),
                     "rollup_manager_address": contract_addresses.get("rollup_manager_address", ""),
+                    "rollup_manager_block_number": contract_addresses.get("rollup_manager_block_number", "1"),
                     "pol_token_address": contract_addresses.get("pol_token_address", ""),
                     "agglayer_url": cdk_args.get("agglayer_grpc_url", "http://agglayer" + deployment_suffix + ":4443"),
                     "l2_keystore_password": cdk_args.get("l2_keystore_password", ""),
@@ -325,6 +326,9 @@ polTokenAddress = "{{.pol_token_address}}"
 # For Miden sovereign chain, use bridge address as rollup placeholder
 polygonZkEVMAddress = "{{.l1_bridge_address}}"
 BridgeAddr = "{{.l1_bridge_address}}"
+# Block numbers from contract deployment
+rollupManagerCreationBlockNumber = {{.rollup_manager_block_number}}
+rollupCreationBlockNumber = {{.rollup_manager_block_number}}
 
 # L2 configuration
 [L2Config]
