@@ -904,51 +904,66 @@ async fn submit_claim_to_miden(
             info!("  ✓ Synced to block {}", current_block);
 
             // ============================================================================
-            // REGISTER P2ID SCRIPT
+            // REGISTER P2ID SCRIPT (ONCE ONLY)
             // ============================================================================
             // The CLAIM note, when consumed, creates a P2ID note as output.
             // The executor needs the P2ID script to be registered in the store.
-            // We do this by creating and submitting a dummy P2ID note first.
+            // We only need to do this ONCE per proxy lifetime (not per claim).
+            // Use a static flag to track registration state.
             // ============================================================================
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static P2ID_SCRIPT_REGISTERED: AtomicBool = AtomicBool::new(false);
 
-            info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!("║  STEP 6b: Register P2ID script                                    ║");
-            info!("╚══════════════════════════════════════════════════════════════════╝");
-            info!("  The CLAIM note creates a P2ID note output.");
-            info!("  We must register the P2ID script in the store first...");
+            if !P2ID_SCRIPT_REGISTERED.load(Ordering::Acquire) {
+                info!("╔══════════════════════════════════════════════════════════════════╗");
+                info!("║  STEP 6b: Register P2ID script (ONE-TIME)                         ║");
+                info!("╚══════════════════════════════════════════════════════════════════╝");
+                info!("  The CLAIM note creates a P2ID note output.");
+                info!("  Registering P2ID script in the store (only once at first claim)...");
 
-            // Create a dummy P2ID note (with no assets) to register the script
-            let p2id_note = create_p2id_note(
-                submitter_account_id,    // sender
-                recipient_account_id,    // target (same as CLAIM recipient)
-                vec![],                  // no assets needed - just registering script
-                NoteType::Public,        // MUST be public to register on network
-                Default::default(),      // no attachment
-                &mut rng,
-            ).map_err(|e| ClientError::NoteCreationError(format!(
-                "Failed to create P2ID note for script registration: {}", e
-            )))?;
-            info!("  ✓ P2ID note created for script registration");
-            info!("    Note ID: {}", p2id_note.id());
+                // Use a null/burn address (0x0) as recipient for the dummy P2ID note
+                // This avoids sending to a real recipient
+                let null_account_id = submitter_account_id; // Send to self (will be ignored anyway)
 
-            // Submit the P2ID note to register the script
-            let p2id_output_note = OutputNote::Full(p2id_note);
-            let p2id_tx_request = TransactionRequestBuilder::new()
-                .own_output_notes(vec![p2id_output_note])
-                .build()
-                .map_err(|e| ClientError::TransactionError(format!(
-                    "Failed to build P2ID script registration request: {}", e
+                // Create a dummy P2ID note (with no assets) to register the script
+                let p2id_note = create_p2id_note(
+                    submitter_account_id,    // sender
+                    null_account_id,         // target: send to self (dummy registration)
+                    vec![],                  // no assets needed - just registering script
+                    NoteType::Public,        // MUST be public to register on network
+                    Default::default(),      // no attachment
+                    &mut rng,
+                ).map_err(|e| ClientError::NoteCreationError(format!(
+                    "Failed to create P2ID note for script registration: {}", e
                 )))?;
+                info!("  ✓ P2ID note created for script registration");
+                info!("    Note ID: {}", p2id_note.id());
 
-            info!("  Submitting P2ID note to register script...");
-            let p2id_tx_id = submit_transaction(&mut client, submitter_account_id, p2id_tx_request).await?;
-            info!("  ✓ P2ID script registered");
-            info!("    TX ID: {}", p2id_tx_id);
+                // Submit the P2ID note to register the script
+                let p2id_output_note = OutputNote::Full(p2id_note);
+                let p2id_tx_request = TransactionRequestBuilder::new()
+                    .own_output_notes(vec![p2id_output_note])
+                    .build()
+                    .map_err(|e| ClientError::TransactionError(format!(
+                        "Failed to build P2ID script registration request: {}", e
+                    )))?;
 
-            // Sync to ensure P2ID script is in store
-            client.sync_state().await
-                .map_err(|e| ClientError::SyncError(format!("Sync after P2ID registration failed: {}", e)))?;
-            info!("  ✓ Synced after P2ID script registration");
+                info!("  Submitting P2ID note to register script...");
+                let p2id_tx_id = submit_transaction(&mut client, submitter_account_id, p2id_tx_request).await?;
+                info!("  ✓ P2ID script registered");
+                info!("    TX ID: {}", p2id_tx_id);
+
+                // Sync to ensure P2ID script is in store
+                client.sync_state().await
+                    .map_err(|e| ClientError::SyncError(format!("Sync after P2ID registration failed: {}", e)))?;
+                info!("  ✓ Synced after P2ID script registration");
+
+                // Mark as registered so we don't do this again
+                P2ID_SCRIPT_REGISTERED.store(true, Ordering::Release);
+                info!("  ✓ P2ID script registration complete (will not repeat)");
+            } else {
+                info!("  ✓ P2ID script already registered (skipping)");
+            }
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 7: Phase 2 - Faucet consumes CLAIM note                     ║");
@@ -1719,6 +1734,8 @@ impl EthApiServer for EthApiImpl {
                         error = %e,
                         "Miden submission FAILED"
                     );
+                    // Rollback claim tracker - allow retry since submission failed
+                    self.state.claim_tracker.unclaim(&claim_params.global_index_raw);
                     self.state.record_tx(
                         tx_hash.clone(),
                         TxStatus::Failed { reason: e.to_string() },

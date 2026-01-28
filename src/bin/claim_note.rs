@@ -9,7 +9,7 @@
 //! Environment variables:
 //!   CLAIMER_SEED - Seed phrase for deterministic account derivation (required)
 //!   MIDEN_RPC_URL - Node RPC endpoint (default: http://localhost:57291)
-//!   MIDEN_STORE_PATH - Client store path (default: /tmp/miden-claimer)
+//!   MIDEN_STORE_PATH - Client store path (default: unique temp folder per run)
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -113,7 +113,7 @@ fn print_usage() {
     eprintln!("Environment variables:");
     eprintln!("  CLAIMER_SEED     - Seed phrase for account derivation (required)");
     eprintln!("  MIDEN_RPC_URL    - Node RPC endpoint (default: http://localhost:57291)");
-    eprintln!("  MIDEN_STORE_PATH - Client store path (default: /tmp/miden-claimer)");
+    eprintln!("  MIDEN_STORE_PATH - Client store path (default: unique temp folder per run)");
 }
 
 #[tokio::main]
@@ -187,7 +187,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let store_path = std::env::var("MIDEN_STORE_PATH")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("/tmp/miden-claimer"));
+                .unwrap_or_else(|_| {
+                    // Create unique temp folder each run using PID and timestamp
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis();
+                    let pid = std::process::id();
+                    PathBuf::from(format!("/tmp/miden-claimer-{}-{}", pid, timestamp))
+                });
 
             // Parse note ID
             let note_id_hex = if note_id_str.starts_with("0x") {

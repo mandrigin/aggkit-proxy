@@ -96,6 +96,29 @@ impl ClaimTracker {
         }
     }
 
+    /// Removes a claim from the tracker (rollback on failure).
+    ///
+    /// This should be called when a claim submission fails after `try_claim`
+    /// succeeded, to allow the claim to be retried.
+    pub fn unclaim(&self, global_index: &U256) {
+        if self.claimed.remove(global_index).is_some() {
+            // Persist after removal
+            if let Some(ref path) = self.persistence_path {
+                if let Err(e) = self.persist_to_file(path) {
+                    tracing::error!(
+                        error = %e,
+                        global_index = %global_index,
+                        "Failed to persist claim removal"
+                    );
+                }
+            }
+            tracing::info!(
+                global_index = %global_index,
+                "Claim rolled back (removed from tracker)"
+            );
+        }
+    }
+
     /// Returns the number of claimed indices.
     pub fn len(&self) -> usize {
         self.claimed.len()

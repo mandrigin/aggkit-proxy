@@ -2,7 +2,10 @@
 #
 # claim-note.sh - Claim a Miden note using a deterministic account
 #
-# Usage: ./claim-note.sh <command> [args]
+# Usage: ./claim-note.sh [--rebuild] <command> [args]
+#
+# Options:
+#   --rebuild            Force rebuild of the binary before running
 #
 # Commands:
 #   address              Print the derived claimer account address
@@ -27,7 +30,8 @@ CLAIMER_SEED="my-test-claimer-seed-change-me"
 MIDEN_RPC_URL="${MIDEN_RPC_URL:-http://localhost:57291}"
 
 # Store path for miden client (keystore and SQLite store)
-MIDEN_STORE_PATH="${MIDEN_STORE_PATH:-/tmp/miden-claimer}"
+# If not set, the binary creates a unique temp folder per run
+MIDEN_STORE_PATH="${MIDEN_STORE_PATH:-}"
 
 # ============================================================================
 # Address conversion utilities (for manual use)
@@ -62,7 +66,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 print_usage() {
-    echo "Usage: $0 <command> [args]"
+    echo "Usage: $0 [--rebuild] <command> [args]"
+    echo ""
+    echo "Options:"
+    echo "  --rebuild                    Force rebuild of the binary"
     echo ""
     echo "Commands:"
     echo "  address                      Print the derived claimer account address"
@@ -75,8 +82,15 @@ print_usage() {
     echo ""
     echo "Current config:"
     echo "  MIDEN_RPC_URL:    $MIDEN_RPC_URL"
-    echo "  MIDEN_STORE_PATH: $MIDEN_STORE_PATH"
+    echo "  MIDEN_STORE_PATH: ${MIDEN_STORE_PATH:-<unique temp folder per run>}"
 }
+
+# Parse --rebuild flag
+REBUILD=false
+if [[ $# -ge 1 && "$1" == "--rebuild" ]]; then
+    REBUILD=true
+    shift
+fi
 
 if [[ $# -lt 1 ]]; then
     print_usage
@@ -89,14 +103,28 @@ shift
 # Export environment variables for the Rust binary
 export CLAIMER_SEED
 export MIDEN_RPC_URL
-export MIDEN_STORE_PATH
+# Only export MIDEN_STORE_PATH if explicitly set
+if [[ -n "$MIDEN_STORE_PATH" ]]; then
+    export MIDEN_STORE_PATH
+fi
+
+BINARY="$PROJECT_ROOT/target/release/claim-note"
+
+# Build if --rebuild flag or binary doesn't exist
+maybe_build() {
+    if [[ "$REBUILD" == "true" ]]; then
+        echo "Rebuilding claim-note binary..."
+        cargo build --release --bin claim-note --manifest-path "$PROJECT_ROOT/Cargo.toml" 2>&1 | grep -v "Compiling\|Downloading\|Downloaded" || true
+    elif [[ ! -f "$BINARY" ]]; then
+        echo "Binary not found, building..."
+        cargo build --release --bin claim-note --manifest-path "$PROJECT_ROOT/Cargo.toml" 2>&1 | grep -v "Compiling\|Downloading\|Downloaded" || true
+    fi
+}
 
 case "$COMMAND" in
     address|addr|whoami)
-        # Build and run derive-address command
-        echo "Building claim-note binary..."
-        cargo build --release --bin claim-note --manifest-path "$PROJECT_ROOT/Cargo.toml" 2>&1 | grep -v "Compiling\|Downloading\|Downloaded" || true
-        exec "$PROJECT_ROOT/target/release/claim-note" derive-address
+        maybe_build
+        exec "$BINARY" derive-address
         ;;
 
     claim)
@@ -106,10 +134,8 @@ case "$COMMAND" in
         fi
         NOTE_ID="$1"
 
-        # Build and run claim command
-        echo "Building claim-note binary..."
-        cargo build --release --bin claim-note --manifest-path "$PROJECT_ROOT/Cargo.toml" 2>&1 | grep -v "Compiling\|Downloading\|Downloaded" || true
-        exec "$PROJECT_ROOT/target/release/claim-note" claim "$NOTE_ID"
+        maybe_build
+        exec "$BINARY" claim "$NOTE_ID"
         ;;
 
     miden-to-eth|m2e)
