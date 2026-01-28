@@ -61,11 +61,13 @@
 //! // Reuse for ALL subsequent claims
 //! ```
 
-use miden_agglayer::{create_agglayer_faucet, create_bridge_account};
+use miden_agglayer::{create_agglayer_faucet_builder, create_bridge_account};
+use miden_client::account::component::BasicWallet;
+use miden_client::auth::NoAuth;
 use miden_client::keystore::FilesystemKeyStore;
 use miden_client::transaction::TransactionRequestBuilder;
 use miden_client::Client;
-use miden_protocol::account::AccountId;
+use miden_protocol::account::{AccountComponent, AccountId, AccountStorageMode};
 use miden_protocol::{Felt, Word};
 use sha3::{Digest, Keccak256};
 use tracing::{info, warn};
@@ -223,13 +225,20 @@ pub async fn create_and_deploy_agglayer_faucet(
     info!("    - Decimals: 8");
     info!("    - Max supply: {} (u64::MAX)", u64::MAX);
     info!("    - Bridge account ID: {}", bridge_account_id);
-    let agglayer_faucet = create_agglayer_faucet(
+    let agglayer_faucet = create_agglayer_faucet_builder(
         faucet_seed,
         "LUMIA", // Token symbol (could be made configurable)
         8,       // Decimals matching ERC20 (18 decimals scaled to 8 for Miden)
         Felt::new(u64::MAX), // Max supply
         bridge_account_id,   // Bridge account for validation
-    );
+    )
+    .storage_mode(AccountStorageMode::Public)
+    .with_component(BasicWallet)
+    .with_auth_component(AccountComponent::from(NoAuth))
+    .build()
+    .map_err(|e| ClientError::InitializationError(format!(
+        "Failed to build agglayer faucet: {}", e
+    )))?;
 
     let agglayer_faucet_id = agglayer_faucet.id();
     info!("  ✓ Agglayer faucet created");
