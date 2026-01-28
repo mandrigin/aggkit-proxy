@@ -34,6 +34,9 @@ use miden_protocol::account::{AccountId, AccountIdV0};
 // Miden agglayer function for AccountId -> 20-byte destination conversion
 use miden_agglayer::EthAddressFormat;
 
+// Miden client for P2ID recipient building (needed for expected_output_recipients)
+use miden_client::note::build_p2id_recipient;
+
 /// Get chain ID from environment variable, defaults to 2 (agglayer Miden network ID)
 fn get_chain_id() -> u64 {
     std::env::var("CHAIN_ID")
@@ -803,6 +806,10 @@ async fn submit_claim_to_miden(
             };
             info!("  ✓ BridgeClaimParams built successfully");
 
+            // Save the P2ID serial number before bridge_claim_params is moved
+            // This will be used to build the expected P2ID recipient for Phase 2
+            let saved_p2id_serial_number = bridge_claim_params.p2id_serial_number;
+
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 5: Creating CLAIM note                                     ║");
             info!("╚══════════════════════════════════════════════════════════════════╝");
@@ -989,17 +996,30 @@ async fn submit_claim_to_miden(
                 "Failed to create foreign account: {}", e
             )))?;
 
+            // Build the expected P2ID recipient - this tells the client what output note to expect
+            // from the faucet transaction. Uses the same serial number we passed to BridgeClaimParams.
+            info!("  Building expected P2ID recipient for output note tracking...");
+            let expected_p2id_recipient = build_p2id_recipient(
+                recipient_account_id,
+                saved_p2id_serial_number,
+            ).map_err(|e| ClientError::TransactionError(format!(
+                "Failed to build expected P2ID recipient: {}", e
+            )))?;
+            info!("  ✓ Expected P2ID recipient built (serial: {:?})", saved_p2id_serial_number);
+
             // Build transaction request with:
             // - Input: CLAIM note (to be consumed by faucet)
             // - Foreign accounts: bridge account (for FPI during CLAIM processing)
+            // - Expected output recipients: P2ID note that faucet will mint to recipient
             let phase2_tx_request = TransactionRequestBuilder::new()
                 .input_notes(vec![(claim_note, None)])
                 .foreign_accounts([foreign_account])
+                .expected_output_recipients(vec![expected_p2id_recipient])
                 .build()
                 .map_err(|e| ClientError::TransactionError(format!(
                     "Failed to build phase 2 request: {}", e
                 )))?;
-            info!("  ✓ TransactionRequest built successfully (with bridge as foreign account)");
+            info!("  ✓ TransactionRequest built successfully (with bridge as foreign account, expected P2ID output)");
 
             info!("  Submitting faucet transaction to consume CLAIM and mint P2ID...");
             info!("  (This may take several seconds for proving)");

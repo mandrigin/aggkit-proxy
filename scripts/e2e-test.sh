@@ -482,6 +482,15 @@ EOF
     sleep 2
     success "Nginx forwarder started"
 
+    # Add network alias 'miden-l2-forwarder' for backwards compatibility
+    # (zkevm-bridge-service may have hardcoded this hostname)
+    log "Adding network alias miden-l2-forwarder..."
+    docker network disconnect "$kurtosis_network" miden-infra-l2-forwarder 2>/dev/null || true
+    docker network connect --alias miden-l2-forwarder "$kurtosis_network" miden-infra-l2-forwarder 2>/dev/null || {
+        warn "Could not add network alias (container may not be on network yet)"
+    }
+    success "Network alias added"
+
     # Get forwarder IP
     local forwarder_ip
     forwarder_ip=$(docker inspect -f "{{range \$k, \$v := .NetworkSettings.Networks}}{{if eq (printf \"%.3s\" \$k) \"kt-\"}}{{\$v.IPAddress}}{{end}}{{end}}" miden-infra-l2-forwarder 2>/dev/null || echo "")
