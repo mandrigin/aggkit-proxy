@@ -116,12 +116,8 @@ def _deploy_bridge_service(plan, deployment_suffix, cdk_args, contract_addresses
         },
     )
 
-    # Get claimsponsor keystore from contracts service
-    claimsponsor_keystore = plan.store_service_files(
-        name="claimsponsor-keystore" + deployment_suffix,
-        service_name="contracts" + deployment_suffix,
-        src="/opt/zkevm/keystores/claimsponsor.keystore",
-    )
+    # Note: claimsponsor keystore is not available since we don't deploy CDK bridge infra.
+    # The bridge can run without it for basic L2 sync functionality.
 
     return plan.add_service(
         name=service_name,
@@ -146,7 +142,7 @@ def _deploy_bridge_service(plan, deployment_suffix, cdk_args, contract_addresses
             },
             files={
                 "/etc/zkevm": Directory(
-                    artifact_names=[config_artifact, claimsponsor_keystore],
+                    artifact_names=[config_artifact],
                 ),
             },
             entrypoint=["/app/zkevm-bridge"],
