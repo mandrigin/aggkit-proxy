@@ -228,7 +228,7 @@ pub async fn create_and_deploy_agglayer_faucet(
     let agglayer_faucet = create_agglayer_faucet_builder(
         faucet_seed,
         "LUMIA", // Token symbol (could be made configurable)
-        8,       // Decimals matching ERC20 (18 decimals scaled to 8 for Miden)
+        8,       // 8 decimals: 0.1 ETH (18 dec) → 10_000_000 raw (8 dec) = 0.10000000 displayed
         Felt::new(u64::MAX), // Max supply
         bridge_account_id,   // Bridge account for validation
     )

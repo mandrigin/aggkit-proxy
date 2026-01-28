@@ -508,7 +508,7 @@ struct ClaimSubmissionData {
     destination_network: u32,
     /// Destination address (20 bytes)
     destination_address: [u8; 20],
-    /// Amount (scaled to Miden decimals)
+    /// Amount in Miden raw units (8 decimals, scaled from 18-decimal wei)
     amount: u64,
     /// Metadata bytes
     metadata: Vec<u8>,
@@ -1692,27 +1692,24 @@ impl EthApiServer for EthApiImpl {
 
         // Step 10: Submit to Miden network (blocking - errors propagate to RPC client)
         if let Some(ref config) = self.miden_config {
-            // Convert U256 amount from 18 decimals (ERC20 wei) to 3 decimals (genesis faucet)
-            // Scale factor: 10^15 (18 - 3 = 15 decimal places)
-            // Genesis faucet config: decimals=3, max_supply=100_000_000
-            const DECIMAL_SCALE: u128 = 1_000_000_000_000_000; // 10^15
-            const MIDEN_MAX_AMOUNT: u64 = 100_000_000; // Genesis faucet max_supply
+            // Scale from 18 decimals (ETH/ERC20 wei) to 8 decimals (Miden faucet).
+            // Divide by 10^10 to drop the 10 least-significant decimal places.
+            // Example: 0.1 ETH = 10^17 wei / 10^10 = 10_000_000 raw = 0.10000000 Miden
+            const DECIMAL_SCALE: u128 = 10_000_000_000; // 10^10 (18 - 8 = 10)
 
             let scaled_amount = claim_params.amount / alloy_primitives::U256::from(DECIMAL_SCALE);
             let amount_u64: u64 = scaled_amount.try_into().unwrap_or_else(|_| {
                 warn!(
                     original_amount = %claim_params.amount,
                     scaled_amount = %scaled_amount,
-                    "Scaled amount still exceeds u64::MAX, capping at genesis faucet max"
+                    "Scaled amount exceeds u64::MAX, capping"
                 );
-                MIDEN_MAX_AMOUNT
+                u64::MAX
             });
-            // Cap at genesis faucet max if needed
-            let amount_u64 = amount_u64.min(MIDEN_MAX_AMOUNT);
             info!(
-                original_wei = %claim_params.amount,
-                scaled_miden = amount_u64,
-                "Converted ERC20 amount (18 decimals) to Miden amount (3 decimals)"
+                wei = %claim_params.amount,
+                miden_raw = amount_u64,
+                "Converted amount: 18 decimals → 8 decimals (÷ 10^10)"
             );
 
             // Build full CLAIM note submission data from claimAsset calldata
