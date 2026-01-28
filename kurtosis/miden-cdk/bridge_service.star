@@ -15,7 +15,7 @@ DOCKER_PROJECT_LABEL = "com.docker.compose.project"
 AGGLAYER_PROJECT_GROUP = "miden-agglayer"
 
 
-def deploy(plan, cdk_args, contract_setup_addresses, miden_context):
+def deploy(plan, cdk_args, contract_setup_addresses, miden_context, deploy_aggkit=False):
     """
     Deploy bridge infrastructure configured for Miden L2.
 
@@ -24,6 +24,7 @@ def deploy(plan, cdk_args, contract_setup_addresses, miden_context):
         cdk_args: Parsed kurtosis-cdk arguments
         contract_setup_addresses: Contract addresses from L1 deployment
         miden_context: Miden services context (contains L2 RPC URL)
+        deploy_aggkit: Whether to deploy aggkit (disabled by default for Miden)
 
     Returns:
         dict: Bridge service context
@@ -43,14 +44,18 @@ def deploy(plan, cdk_args, contract_setup_addresses, miden_context):
     )
 
     # Deploy aggkit (aggsender + aggoracle) with Miden L2
-    aggkit_service = _deploy_aggkit(
-        plan,
-        deployment_suffix,
-        cdk_args,
-        contract_setup_addresses,
-        l1_rpc_url,
-        l2_rpc_url,
-    )
+    # NOTE: Disabled by default for Miden as it requires a traditional rollup address
+    # The bridge-service can function for L1→L2 deposits without aggkit
+    aggkit_service = None
+    if deploy_aggkit:
+        aggkit_service = _deploy_aggkit(
+            plan,
+            deployment_suffix,
+            cdk_args,
+            contract_setup_addresses,
+            l1_rpc_url,
+            l2_rpc_url,
+        )
 
     bridge_url = "http://zkevm-bridge-service{}:{}".format(deployment_suffix, BRIDGE_RPC_PORT)
 

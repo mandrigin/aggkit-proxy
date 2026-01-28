@@ -92,6 +92,11 @@ MIDEN_DEFAULTS = {
     # Bridge faucet ID for claim transactions
     "bridge_faucet_id": "0x000000000000000000000000000001",
 
+    # Aggkit deployment (disabled by default for Miden)
+    # Aggkit requires a traditional rollup address which Miden doesn't have
+    # The bridge-service works for L1→L2 deposits without aggkit
+    "deploy_aggkit": False,
+
     # pgweb for DB browsing (optional)
     "deploy_pgweb": True,
     "pgweb_port": 8082,
@@ -179,6 +184,7 @@ def run(plan, args={}):
         parsed_args,
         contract_setup_addresses,
         miden_context,
+        deploy_aggkit=miden_args.get("deploy_aggkit", False),
     )
 
     # Step 4: Deploy optional services (pgweb)
