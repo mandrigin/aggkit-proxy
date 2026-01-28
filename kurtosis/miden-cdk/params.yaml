@@ -1,0 +1,87 @@
+# Miden-CDK Default Parameters
+#
+# This file configures the Miden bridge infrastructure deployment.
+#
+# Usage:
+#   kurtosis run . --args-file params.yaml --enclave miden-cdk
+#
+# Or with overrides:
+#   kurtosis run . --args-file params.yaml --enclave miden-cdk \
+#     --arg "miden.miden_proxy_image=my-registry/miden-proxy:latest"
+
+# Deployment stages - control which components to deploy
+deployment_stages:
+  # Deploy local L1 (Ethereum devnet)
+  deploy_l1: true
+
+  # Deploy agglayer contracts on L1
+  deploy_agglayer_contracts_on_l1: true
+
+  # Deploy databases (PostgreSQL for bridge)
+  deploy_databases: true
+
+  # Deploy agglayer service
+  deploy_agglayer: true
+
+  # DISABLED: We use Miden instead of OP-Geth
+  deploy_cdk_central_environment: false
+  deploy_cdk_bridge_infra: false  # We deploy custom bridge config
+  deploy_op_succinct: false
+  deploy_l2_contracts: false
+  deploy_aggkit_node: false
+
+# Miden-specific configuration
+miden:
+  # Miden network ID (assigned by Agglayer)
+  miden_network_id: 2
+  miden_chain_id: 2
+
+  # Miden node image
+  # Build with: docker build -t miden-infra/miden-node:agglayer-v0.1 -f Dockerfile.miden-node .
+  miden_node_image: "miden-infra/miden-node:agglayer-v0.1"
+  miden_node_port: 57291
+
+  # Miden RPC proxy image
+  # Build with: docker build -t miden-infra/miden-proxy:latest .
+  miden_proxy_image: "miden-infra/miden-proxy:latest"
+  miden_proxy_port: 8546
+
+  # Bridge faucet ID for claim transactions
+  # This account ID is used by the proxy to mint tokens for claims
+  bridge_faucet_id: "0x000000000000000000000000000001"
+
+  # Deploy pgweb for browsing bridge database
+  deploy_pgweb: true
+  pgweb_port: 8082
+
+# kurtosis-cdk configuration (passed through)
+args:
+  # L1 configuration
+  l1_engine: "geth"
+  l1_chain_id: 271828
+  l1_preset: "minimal"
+  l1_seconds_per_slot: 2
+  l1_funding_amount: "1000000ether"
+  l1_participants_count: 1
+
+  # L2 configuration (Miden network)
+  l2_chain_id: 2
+  l2_network_id: 2
+  l2_keystore_password: "pSnv6Dh5s9ahuzGzH9RoCDrKAMddaX3m"
+
+  # Deployment suffix
+  deployment_suffix: "-001"
+
+  # Log level
+  log_level: "info"
+  log_format: "pretty"
+
+  # Images (can be overridden)
+  # zkevm_bridge_service_image: "hermeznetwork/zkevm-bridge-service:v0.6.0-RC1"
+  # aggkit_image: "ghcr.io/0xpolygon/aggkit:latest"
+
+  # Agglayer configuration
+  agglayer_prover_primary_prover: "mock-prover"
+
+  # Additional services (optional)
+  additional_services: []

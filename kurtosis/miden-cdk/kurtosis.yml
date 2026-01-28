@@ -1,0 +1,14 @@
+name: miden-cdk
+description: |
+  Miden-CDK Kurtosis package for provisioning Miden bridge infrastructure.
+
+  This package extends kurtosis-cdk to deploy:
+  - L1 (Ethereum devnet with lighthouse/geth)
+  - Agglayer infrastructure
+  - Bridge contracts on L1
+  - Miden node (instead of OP-Geth L2)
+  - Miden RPC proxy (EVM-compatible interface)
+  - Bridge services configured to use Miden as L2
+
+  Usage:
+    kurtosis run . --args-file params.yaml --enclave miden-cdk

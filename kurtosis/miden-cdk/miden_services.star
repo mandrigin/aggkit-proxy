@@ -1,0 +1,232 @@
+"""
+Miden Services Module
+
+Deploys the Miden node, RPC proxy, and nginx forwarder for bridge integration.
+These services replace the OP-Geth L2 in the standard kurtosis-cdk deployment.
+"""
+
+# Service port definitions
+MIDEN_NODE_PORT = 57291
+MIDEN_PROXY_PORT = 8546
+FORWARDER_PORT = 8545  # Bridge expects L2 on 8545
+
+# Default images
+DEFAULT_MIDEN_NODE_IMAGE = "miden-infra/miden-node:agglayer-v0.1"
+DEFAULT_MIDEN_PROXY_IMAGE = "miden-infra/miden-proxy:latest"
+
+# Docker Desktop grouping label
+DOCKER_PROJECT_LABEL = "com.docker.compose.project"
+MIDEN_PROJECT_GROUP = "miden"
+
+
+def deploy(plan, miden_args, contract_setup_addresses, cdk_args):
+    """
+    Deploy all Miden services.
+
+    Args:
+        plan: Kurtosis plan object
+        miden_args: Miden-specific configuration
+        contract_setup_addresses: Contract addresses from L1 deployment
+        cdk_args: Parsed kurtosis-cdk arguments
+
+    Returns:
+        dict: Service context with URLs and service references
+    """
+    deployment_suffix = cdk_args.get("deployment_suffix", "-001")
+
+    # Get configuration
+    miden_node_image = miden_args.get("miden_node_image", DEFAULT_MIDEN_NODE_IMAGE)
+    miden_proxy_image = miden_args.get("miden_proxy_image", DEFAULT_MIDEN_PROXY_IMAGE)
+    miden_network_id = miden_args.get("miden_network_id", 2)
+    bridge_faucet_id = miden_args.get("bridge_faucet_id", "0x000000000000000000000000000001")
+
+    # Get bridge address from contract deployment
+    bridge_address = contract_setup_addresses.get("l1_bridge_address", "")
+    if not bridge_address:
+        bridge_address = contract_setup_addresses.get("polygon_bridge_address", "")
+
+    # 1. Deploy Miden node
+    miden_node = _deploy_miden_node(plan, deployment_suffix, miden_node_image)
+
+    # Wait for Miden node to be ready
+    plan.wait(
+        service_name="miden-node" + deployment_suffix,
+        recipe=ExecRecipe(command=["nc", "-z", "localhost", str(MIDEN_NODE_PORT)]),
+        field="code",
+        assertion="==",
+        target_value=0,
+        timeout="120s",
+    )
+
+    # 2. Deploy Miden proxy
+    miden_proxy = _deploy_miden_proxy(
+        plan,
+        deployment_suffix,
+        miden_proxy_image,
+        miden_network_id,
+        bridge_address,
+        bridge_faucet_id,
+    )
+
+    # Wait for proxy to be ready
+    plan.wait(
+        service_name="miden-proxy" + deployment_suffix,
+        recipe=PostHttpRequestRecipe(
+            port_id="rpc",
+            endpoint="/",
+            content_type="application/json",
+            body='{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}',
+        ),
+        field="code",
+        assertion="==",
+        target_value=200,
+        timeout="120s",
+    )
+
+    # 3. Deploy nginx forwarder
+    # This routes traffic from port 8545 (where bridge expects L2) to proxy on 8546
+    forwarder = _deploy_l2_forwarder(plan, deployment_suffix)
+
+    # Build context
+    proxy_url = "http://miden-proxy{}:{}".format(deployment_suffix, MIDEN_PROXY_PORT)
+    forwarder_url = "http://miden-l2-forwarder{}:{}".format(deployment_suffix, FORWARDER_PORT)
+    node_url = "http://miden-node{}:{}".format(deployment_suffix, MIDEN_NODE_PORT)
+
+    return {
+        "node_service": miden_node,
+        "proxy_service": miden_proxy,
+        "forwarder_service": forwarder,
+        "node_url": node_url,
+        "proxy_url": proxy_url,
+        "forwarder_url": forwarder_url,
+        "l2_rpc_url": forwarder_url,  # Bridge uses this as L2 endpoint
+        "network_id": miden_network_id,
+        "chain_id": miden_network_id,
+    }
+
+
+def _deploy_miden_node(plan, deployment_suffix, image):
+    """Deploy Miden node service."""
+    service_name = "miden-node" + deployment_suffix
+
+    return plan.add_service(
+        name=service_name,
+        config=ServiceConfig(
+            image=image,
+            ports={
+                "rpc": PortSpec(
+                    number=MIDEN_NODE_PORT,
+                    transport_protocol="TCP",
+                ),
+            },
+            # Miden node runs in devnet mode for testing
+            env_vars={
+                "RUST_LOG": "info",
+            },
+            # Docker Desktop grouping label
+            labels={
+                DOCKER_PROJECT_LABEL: MIDEN_PROJECT_GROUP,
+            },
+        ),
+    )
+
+
+def _deploy_miden_proxy(plan, deployment_suffix, image, network_id, bridge_address, faucet_id):
+    """Deploy Miden RPC proxy service."""
+    service_name = "miden-proxy" + deployment_suffix
+    miden_node_url = "http://miden-node{}:{}".format(deployment_suffix, MIDEN_NODE_PORT)
+
+    return plan.add_service(
+        name=service_name,
+        config=ServiceConfig(
+            image=image,
+            ports={
+                "rpc": PortSpec(
+                    number=MIDEN_PROXY_PORT,
+                    transport_protocol="TCP",
+                    application_protocol="http",
+                ),
+            },
+            env_vars={
+                "CHAIN_ID": str(network_id),
+                "MIDEN_RPC_URL": miden_node_url,
+                "MIDEN_STORE_PATH": "/app/data/miden-client",
+                "BRIDGE_FAUCET_ID": faucet_id,
+                "BRIDGE_ADDRESS": bridge_address,
+                "LISTEN_PORT": str(MIDEN_PROXY_PORT),
+                "RUST_LOG": "info",
+            },
+            # Docker Desktop grouping label
+            labels={
+                DOCKER_PROJECT_LABEL: MIDEN_PROJECT_GROUP,
+            },
+        ),
+    )
+
+
+def _deploy_l2_forwarder(plan, deployment_suffix):
+    """
+    Deploy nginx TCP forwarder to route L2 traffic to Miden proxy.
+
+    The bridge services expect L2 on port 8545 (standard Ethereum RPC).
+    This forwarder routes that traffic to the Miden proxy on 8546.
+    """
+    service_name = "miden-l2-forwarder" + deployment_suffix
+    proxy_host = "miden-proxy" + deployment_suffix
+
+    # Generate nginx config for TCP stream proxy
+    nginx_config = """
+events {{
+    worker_connections 1024;
+}}
+stream {{
+    upstream miden_proxy {{
+        server {proxy_host}:{proxy_port};
+    }}
+    server {{
+        listen {forwarder_port};
+        proxy_pass miden_proxy;
+    }}
+}}
+""".format(
+        proxy_host=proxy_host,
+        proxy_port=MIDEN_PROXY_PORT,
+        forwarder_port=FORWARDER_PORT,
+    )
+
+    # Create config artifact
+    config_artifact = plan.render_templates(
+        name="nginx-forwarder-config" + deployment_suffix,
+        config={
+            "nginx.conf": struct(
+                template=nginx_config,
+                data={},
+            ),
+        },
+    )
+
+    return plan.add_service(
+        name=service_name,
+        config=ServiceConfig(
+            image="nginx:alpine",
+            ports={
+                "l2-rpc": PortSpec(
+                    number=FORWARDER_PORT,
+                    transport_protocol="TCP",
+                    application_protocol="http",
+                ),
+            },
+            files={
+                "/etc/nginx": config_artifact,
+            },
+            # Docker Desktop grouping label
+            labels={
+                DOCKER_PROJECT_LABEL: MIDEN_PROJECT_GROUP,
+            },
+        ),
+    )
+
+
+def get_l2_rpc_url(deployment_suffix):
+    """Get the L2 RPC URL for bridge configuration."""
+    return "http://miden-l2-forwarder{}:{}".format(deployment_suffix, FORWARDER_PORT)
