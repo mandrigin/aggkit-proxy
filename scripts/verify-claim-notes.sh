@@ -17,7 +17,19 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONTAINER_NAME="${1:-miden-proxy-kurtosis}"
+
+# Auto-detect miden-proxy container if not specified
+if [[ -n "${1:-}" ]]; then
+    CONTAINER_NAME="$1"
+else
+    CONTAINER_NAME=$(docker ps --format '{{.Names}}' | grep -E '^miden-proxy' | head -1)
+    if [[ -z "$CONTAINER_NAME" ]]; then
+        echo "Error: No miden-proxy container found"
+        echo "Available containers:"
+        docker ps --format '  {{.Names}}' | grep -i miden || echo "  (none)"
+        exit 1
+    fi
+fi
 
 echo "╔══════════════════════════════════════════════════════════════════╗"
 echo "║           CLAIM Note Verification Tool                           ║"

@@ -30,11 +30,8 @@ EXPECTED_CONTAINERS=(
     "op-node"
 )
 
-# RPC endpoints to check
-RPC_CHECKS=(
-    "miden-proxy-kurtosis:8545"
-    "miden-node-kurtosis:57291"
-)
+# RPC endpoints to check (auto-detected later)
+RPC_CHECKS=()
 
 passed=0
 failed=0
@@ -234,8 +231,8 @@ fi
 section "Recent Errors (last 5 min)"
 
 error_count=0
-for container in miden-proxy-kurtosis aggkit-miden-proxy aggkit-001-miden-proxy; do
-    if docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
+for container in $(docker ps --format '{{.Names}}' | grep -E "miden-proxy" || true); do
+    if [[ -n "$container" ]]; then
         errors=$(docker logs --since 5m "$container" 2>&1 | grep -ciE "error|panic|fatal" || true)
         if [[ "$errors" -gt 0 ]]; then
             log_warn "$container: $errors error(s) in last 5 minutes"
