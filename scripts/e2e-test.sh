@@ -15,7 +15,7 @@
 #
 # Options:
 #   --fresh              Deploy fresh (destroys existing enclave)
-#   --enclave NAME       Enclave name (default: cdk-miden)
+#   --enclave NAME       Enclave name (default: miden-cdk)
 #   --skip-cdk           Skip kurtosis-cdk deployment
 #   --skip-miden         Skip Miden node/proxy startup
 #   --skip-deposit       Skip test deposit
@@ -35,7 +35,7 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # Configuration
-ENCLAVE_NAME="${ENCLAVE_NAME:-cdk-miden}"
+ENCLAVE_NAME="${ENCLAVE_NAME:-miden-cdk}"
 DEPLOY_FRESH=false
 SKIP_CDK=false
 SKIP_MIDEN=false
@@ -343,8 +343,8 @@ start_miden_services() {
     # Get bridge contract address from kurtosis deployment
     # This is needed for ClaimEvent emission - must match what bridge-service queries
     log "Getting bridge contract address from kurtosis..."
-    BRIDGE_ADDRESS=$(kurtosis service exec cdk-miden contracts-001 \
-        "cat /opt/zkevm/combined.json" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty')
+    BRIDGE_ADDRESS=$(kurtosis service exec miden-cdk contracts-001 \
+        "cat /opt/output/combined.json" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty')
     if [[ -z "$BRIDGE_ADDRESS" ]]; then
         warn "Could not get bridge address from kurtosis, using default"
         BRIDGE_ADDRESS="0xc8cbebf950b9df44d987c8619f092bea980ff038"
@@ -890,7 +890,7 @@ get_deployment_info() {
 
     # Bridge address
     BRIDGE_ADDRESS=$(kurtosis service exec "$ENCLAVE_NAME" contracts-001 \
-        "cat /opt/zkevm/combined.json 2>/dev/null" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty' || echo "")
+        "cat /opt/output/combined.json 2>/dev/null" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty' || echo "")
 
     if [[ -z "$BRIDGE_ADDRESS" ]]; then
         BRIDGE_ADDRESS="0xC8cbEBf950B9Df44d987c8619f092beA980fF038"

@@ -162,7 +162,7 @@ get_service_urls() {
 
     # Get bridge address from contracts service
     BRIDGE_ADDRESS=$(kurtosis service exec "$ENCLAVE_NAME" contracts-001 \
-        "cat /opt/zkevm/combined.json 2>/dev/null" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty' || echo "")
+        "cat /opt/output/combined.json 2>/dev/null" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty' || echo "")
     if [[ -z "$BRIDGE_ADDRESS" ]]; then
         BRIDGE_ADDRESS="0xC8cbEBf950B9Df44d987c8619f092beA980fF038"
     fi
