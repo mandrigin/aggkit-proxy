@@ -23,6 +23,43 @@ bridge_service = import_module("./bridge_service.star")
 DOCKER_PROJECT_LABEL = "com.docker.compose.project"
 AGGLAYER_PROJECT_GROUP = "miden-agglayer"
 
+
+def get_contract_addresses(plan):
+    """
+    Extract contract addresses from combined.json with correct field names.
+    The upstream kurtosis-cdk uses outdated field names, so we do it ourselves.
+    """
+    result = plan.exec(
+        service_name="contracts-001",
+        recipe=ExecRecipe(
+            command=["/bin/sh", "-c", "cat /opt/output/combined.json"],
+            extract={
+                "admin_address": ".admin",
+                "rollup_manager_address": ".polygonRollupManagerAddress",
+                "l1_bridge_address": ".polygonZkEVMBridgeAddress",
+                "l1_ger_address": ".polygonZkEVMGlobalExitRootAddress",
+                "agglayer_gateway_address": ".aggLayerGatewayAddress",
+                "pol_token_address": ".polTokenAddress",
+                "rollup_manager_block_number": ".deploymentRollupManagerBlockNumber",
+                # L2 addresses (same as L1 for unified bridge)
+                "l2_bridge_address": ".polygonZkEVML2BridgeAddress",
+                "l2_ger_address": ".LegacyAgglayerGERL2",
+            },
+        ),
+        description="Getting contract addresses from combined.json",
+    )
+    return {
+        "admin_address": result["extract.admin_address"],
+        "rollup_manager_address": result["extract.rollup_manager_address"],
+        "l1_bridge_address": result["extract.l1_bridge_address"],
+        "l1_ger_address": result["extract.l1_ger_address"],
+        "agglayer_gateway_address": result["extract.agglayer_gateway_address"],
+        "pol_token_address": result["extract.pol_token_address"],
+        "rollup_manager_block_number": result["extract.rollup_manager_block_number"],
+        "l2_bridge_address": result["extract.l2_bridge_address"],
+        "l2_ger_address": result["extract.l2_ger_address"],
+    }
+
 # Default deployment stages - skip OP Stack, deploy Miden instead
 DEFAULT_DEPLOYMENT_STAGES = {
     "deploy_l1": True,
@@ -111,9 +148,8 @@ def run(plan, args={}):
         plan.print("Deploying agglayer contracts on L1...")
         agglayer_contracts = import_module("github.com/0xPolygon/kurtosis-cdk/src/contracts/agglayer.star")
         agglayer_contracts.run(plan, parsed_args, deployment_stages, op_args)
-        contract_setup_addresses = kurtosis_cdk_contracts.get_contract_setup_addresses(
-            plan, parsed_args, deployment_stages
-        )
+        # Use our own address extraction with correct field names
+        contract_setup_addresses = get_contract_addresses(plan)
 
     # Deploy databases
     if deployment_stages.get("deploy_databases", False):
