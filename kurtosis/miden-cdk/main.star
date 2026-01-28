@@ -70,7 +70,7 @@ DEFAULT_DEPLOYMENT_STAGES = {
     "deploy_cdk_central_environment": False,
     "deploy_cdk_bridge_infra": False,  # We deploy our own bridge config
     "deploy_op_succinct": False,
-    "deploy_l2_contracts": False,
+    "deploy_l2_contracts": True,  # Creates rollup in rollup manager (needed for aggkit)
     "deploy_aggkit_node": False,
 }
 
