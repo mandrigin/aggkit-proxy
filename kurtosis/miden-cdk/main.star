@@ -21,7 +21,7 @@ bridge_service = import_module("./bridge_service.star")
 
 # Docker Desktop grouping label
 DOCKER_PROJECT_LABEL = "com.docker.compose.project"
-AGGLAYER_PROJECT_GROUP = "miden-agglayer"
+MIDEN_PROJECT_GROUP = "miden"
 
 
 def get_contract_addresses(plan):
@@ -229,7 +229,7 @@ def _deploy_pgweb(plan, args, miden_args):
             ],
             # Docker Desktop grouping label
             labels={
-                DOCKER_PROJECT_LABEL: AGGLAYER_PROJECT_GROUP,
+                DOCKER_PROJECT_LABEL: MIDEN_PROJECT_GROUP,
             },
         ),
     )

@@ -12,7 +12,7 @@ BRIDGE_METRICS_PORT = 8090
 
 # Docker Desktop grouping label
 DOCKER_PROJECT_LABEL = "com.docker.compose.project"
-AGGLAYER_PROJECT_GROUP = "miden-agglayer"
+BRIDGE_PROJECT_GROUP = "miden"
 
 
 def deploy(plan, cdk_args, contract_setup_addresses, miden_context, deploy_aggkit=False):
@@ -158,7 +158,7 @@ def _deploy_bridge_service(plan, deployment_suffix, cdk_args, contract_addresses
             cmd=["run", "--cfg", "/etc/zkevm/bridge-config.toml"],
             # Docker Desktop grouping label
             labels={
-                DOCKER_PROJECT_LABEL: AGGLAYER_PROJECT_GROUP,
+                DOCKER_PROJECT_LABEL: BRIDGE_PROJECT_GROUP,
             },
         ),
     )
@@ -209,7 +209,7 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
             cmd=["run", "--cfg=/etc/aggkit/config.toml", "--components=aggsender,aggoracle"],
             # Docker Desktop grouping label
             labels={
-                DOCKER_PROJECT_LABEL: AGGLAYER_PROJECT_GROUP,
+                DOCKER_PROJECT_LABEL: BRIDGE_PROJECT_GROUP,
             },
         ),
     )
