@@ -268,9 +268,10 @@ RequireSovereignChainSmcs = [true]
 L2PolygonZkEVMGlobalExitRootAddresses = ["{{.l2_ger_address}}"]
 
 [ClaimTxManager]
-Enabled = true
+# Disabled for Miden - claims are handled via CLAIM notes through the proxy
+Enabled = false
 FrequencyToMonitorTxs = "5s"
-PrivateKey = {Path = "/etc/zkevm/claimsponsor.keystore", Password = "{{.l2_keystore_password}}"}
+# PrivateKey not needed when disabled
 RetryInterval = "1s"
 RetryNumber = 10
 
