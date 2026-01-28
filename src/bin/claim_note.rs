@@ -362,8 +362,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  ✓ Note found in local store");
             }
 
-            // Find the target note in consumable notes (already fetched earlier)
-            let note_record = all_consumable
+            // Re-fetch consumable notes after potential import
+            let consumable_notes = client
+                .get_consumable_notes(Some(claimer_account_id))
+                .await
+                .map_err(|e| format!("Failed to get consumable notes: {}", e))?;
+
+            let note_record = consumable_notes
                 .into_iter()
                 .find(|(n, _)| n.id() == note_id)
                 .map(|(n, _)| n);
