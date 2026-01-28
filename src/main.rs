@@ -1015,6 +1015,46 @@ async fn submit_claim_to_miden(
             info!("  → Proving time: {:.2}s", elapsed.as_secs_f64());
             info!("  → Current block: {}", block_num);
 
+            // Sync to find the output P2ID note created for the recipient
+            info!("  Syncing to find output P2ID note...");
+            let mut output_note_id: Option<String> = None;
+            let mut output_note_recipient: Option<String> = None;
+            if let Ok(sync_result) = client.sync_state().await {
+                info!("    Synced to block {}", sync_result.block_num.as_u32());
+                info!("    New public notes: {}", sync_result.new_public_notes.len());
+
+                // List new note IDs (these are NoteIds, not full records)
+                for note_id in &sync_result.new_public_notes {
+                    let note_id_hex = format!("0x{}", hex::encode(note_id.as_bytes()));
+                    info!("    → New note: {}", note_id_hex);
+                    // Save the last one as the likely P2ID output note
+                    output_note_id = Some(note_id_hex.clone());
+                }
+
+                // Try to get full note details from the store
+                use miden_client::store::NoteFilter;
+                if let Ok(input_notes) = client.get_input_notes(NoteFilter::All).await {
+                    for note_record in &input_notes {
+                        if let Some(metadata) = note_record.metadata() {
+                            let sender = metadata.sender();
+                            if sender == agglayer_faucet_id {
+                                let note_id_hex = format!("0x{}", hex::encode(note_record.id().as_bytes()));
+                                output_note_id = Some(note_id_hex.clone());
+
+                                // Extract recipient from note inputs (first input is target account ID in P2ID)
+                                let details = note_record.details();
+                                let inputs = details.inputs();
+                                if inputs.num_values() > 0 {
+                                    let target_felt = inputs.values()[0].as_int();
+                                    output_note_recipient = Some(format!("0x{:x}", target_felt));
+                                    info!("    ✓ P2ID note {} → recipient: 0x{:x}", note_id_hex, target_felt);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  CLAIM PROCESSING COMPLETE                                        ║");
             info!("╠══════════════════════════════════════════════════════════════════╣");
@@ -1025,6 +1065,12 @@ async fn submit_claim_to_miden(
             info!("║    Amount:     {} Miden units", claim_data.amount);
             info!("║    Block:      {}", block_num);
             info!("║    Time:       {:.2}s", elapsed.as_secs_f64());
+            if let Some(ref p2id_note) = output_note_id {
+                info!("║    P2ID Note:  {}", p2id_note);
+            }
+            if let Some(ref p2id_recipient) = output_note_recipient {
+                info!("║    P2ID To:    {}", p2id_recipient);
+            }
             info!("╚══════════════════════════════════════════════════════════════════╝");
 
             Ok::<u64, ClientError>(block_num as u64)

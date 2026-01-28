@@ -384,16 +384,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Build and submit consume transaction
             println!("Building consume transaction...");
             println!();
-            println!("═══ DEBUG: Transaction Details ═══");
-            println!("  Account ID: {}", claimer_hex);
-            println!("  Account ID (raw): {:?}", claimer_account_id);
-            println!("  Note to consume:");
-            println!("    ID: {}", note_id_hex);
-            println!("    Assets: {:?}", note.assets());
-            println!("    Script root: 0x{}", hex::encode(note.script().root().as_bytes()));
-            println!("    Inputs ({}):", note.inputs().num_values());
+            println!("═══ Transaction Details ═══");
+            println!("  Account: {}", claimer_hex);
+            println!("  Note ID: {}", note_id_hex);
+            println!();
+            println!("  Assets to receive:");
+            for asset in note.assets().iter() {
+                match asset {
+                    miden_protocol::asset::Asset::Fungible(fungible) => {
+                        let faucet_bytes: [u8; 15] = fungible.faucet_id().into();
+                        let faucet_hex = format!("0x{}", hex::encode(faucet_bytes));
+                        println!("    - {} units from faucet {}", fungible.amount(), faucet_hex);
+                    }
+                    miden_protocol::asset::Asset::NonFungible(nft) => {
+                        println!("    - NFT: {:?}", nft);
+                    }
+                }
+            }
+            println!();
+            println!("  Script root: 0x{}", hex::encode(note.script().root().as_bytes()));
+            println!("  Note inputs ({}):", note.inputs().num_values());
             for (i, val) in note.inputs().values().iter().enumerate() {
-                println!("      [{}]: {}", i, val.as_int());
+                println!("    [{}]: {}", i, val.as_int());
             }
             println!("═══════════════════════════════════════════════════════════════");
             println!();
@@ -419,6 +431,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!();
             println!("  Note claimed successfully!");
             println!("  Transaction ID: {}", tx_id);
+            println!();
+
+            // Sync to confirm transaction
+            println!("Syncing to confirm transaction...");
+            if let Ok(sync_result) = client.sync_state().await {
+                println!("  ✓ Synced to block {}", sync_result.block_num.as_u32());
+                println!("  New notes received: {}", sync_result.new_public_notes.len());
+                println!("  Notes consumed: {}", sync_result.consumed_notes.len());
+            }
             println!();
         }
 
