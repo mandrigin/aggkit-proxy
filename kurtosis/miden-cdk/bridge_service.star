@@ -316,6 +316,12 @@ def _get_aggkit_config_template():
 [Log]
 Level = "{{.log_level}}"
 
+# Top-level required fields
+L2URL = "{{.l2_rpc_url}}"
+AggLayerURL = "{{.agglayer_url}}"
+SequencerPrivateKeyPath = "/etc/aggkit/aggoracle.keystore"
+SequencerPrivateKeyPassword = "{{.l2_keystore_password}}"
+
 # L1 configuration
 [L1Config]
 URL = "{{.l1_rpc_url}}"
