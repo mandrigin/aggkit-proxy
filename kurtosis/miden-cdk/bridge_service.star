@@ -110,6 +110,7 @@ def _deploy_bridge_service(plan, deployment_suffix, cdk_args, contract_addresses
                     "l1_ger_address": l1_ger_address,
                     "rollup_manager_address": rollup_manager_address,
                     "rollup_manager_block_number": rollup_manager_block_number,
+                    "rollup_address": contract_addresses.get("rollup_address", l1_bridge_address),
                     "l2_bridge_address": l2_bridge_address,
                     "l2_ger_address": l2_ger_address,
                     "l2_keystore_password": cdk_args.get("l2_keystore_password", ""),
@@ -199,6 +200,7 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
                     "l2_bridge_address": contract_addresses.get("l2_bridge_address", ""),
                     "rollup_manager_address": contract_addresses.get("rollup_manager_address", ""),
                     "rollup_manager_block_number": contract_addresses.get("rollup_manager_block_number", "1"),
+                    "rollup_address": contract_addresses.get("rollup_address", contract_addresses.get("l1_bridge_address", "")),
                     "pol_token_address": contract_addresses.get("pol_token_address", ""),
                     "agglayer_url": cdk_args.get("agglayer_grpc_url", "http://agglayer" + deployment_suffix + ":4443"),
                     "l2_keystore_password": cdk_args.get("l2_keystore_password", ""),
@@ -287,8 +289,8 @@ L2GenBlockNumbers = [0]
 PolygonBridgeAddress = "{{.l1_bridge_address}}"
 PolygonZkEVMGlobalExitRootAddress = "{{.l1_ger_address}}"
 PolygonRollupManagerAddress = "{{.rollup_manager_address}}"
-# Miden integration: sovereign chain addresses
-PolygonZkEVMAddress = "{{.l1_bridge_address}}"
+# Rollup address registered in rollup manager
+PolygonZkEVMAddress = "{{.rollup_address}}"
 L2PolygonBridgeAddresses = ["{{.l2_bridge_address}}"]
 RequireSovereignChainSmcs = [true]
 L2PolygonZkEVMGlobalExitRootAddresses = ["{{.l2_ger_address}}"]
@@ -337,8 +339,8 @@ chainId = "{{.l1_chain_id}}"
 polygonZkEVMGlobalExitRootAddress = "{{.l1_ger_address}}"
 polygonRollupManagerAddress = "{{.rollup_manager_address}}"
 polTokenAddress = "{{.pol_token_address}}"
-# For Miden sovereign chain, use bridge address as rollup placeholder
-polygonZkEVMAddress = "{{.l1_bridge_address}}"
+# Rollup address from create_rollup_output.json (registered in rollup manager)
+polygonZkEVMAddress = "{{.rollup_address}}"
 BridgeAddr = "{{.l1_bridge_address}}"
 
 # L2 configuration

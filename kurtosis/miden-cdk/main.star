@@ -41,6 +41,8 @@ def get_contract_addresses(plan):
                 "agglayer_gateway_address": "fromjson | .aggLayerGatewayAddress",
                 "pol_token_address": "fromjson | .polTokenAddress",
                 "rollup_manager_block_number": "fromjson | .deploymentRollupManagerBlockNumber",
+                # Rollup address from create_rollup_output.json (merged into combined.json)
+                "rollup_address": "fromjson | .rollupAddress",
                 # L2 addresses (same as L1 for unified bridge)
                 "l2_bridge_address": "fromjson | .polygonZkEVML2BridgeAddress",
                 "l2_ger_address": "fromjson | .LegacyAgglayerGERL2",
@@ -56,6 +58,7 @@ def get_contract_addresses(plan):
         "agglayer_gateway_address": result["extract.agglayer_gateway_address"],
         "pol_token_address": result["extract.pol_token_address"],
         "rollup_manager_block_number": result["extract.rollup_manager_block_number"],
+        "rollup_address": result["extract.rollup_address"],
         "l2_bridge_address": result["extract.l2_bridge_address"],
         "l2_ger_address": result["extract.l2_ger_address"],
     }
@@ -70,7 +73,7 @@ DEFAULT_DEPLOYMENT_STAGES = {
     "deploy_cdk_central_environment": False,
     "deploy_cdk_bridge_infra": False,  # We deploy our own bridge config
     "deploy_op_succinct": False,
-    "deploy_l2_contracts": True,  # Creates rollup in rollup manager (needed for aggkit)
+    "deploy_l2_contracts": True,  # Deploys sovereign L2 contracts (GER, bridge proxies)
     "deploy_aggkit_node": False,
 }
 
@@ -119,9 +122,16 @@ def run(plan, args={}):
     miden_args = MIDEN_DEFAULTS | args.get("miden", {})
 
     # Prepare kurtosis-cdk args
+    # Override sequencer_type: with "op-geth" (default), rollup creation is deferred
+    # to deploy_cdk_central_environment (which we skip). Setting to "cdk-erigon"
+    # makes 4_createRollup.ts run during deploy_agglayer_contracts_on_l1 instead.
+    miden_cdk_overrides = {
+        "sequencer_type": "cdk-erigon",
+    }
+    miden_cdk_overrides.update(args.get("args", {}))
     cdk_args = {
         "deployment_stages": deployment_stages,
-        "args": args.get("args", {}),
+        "args": miden_cdk_overrides,
     }
 
     plan.print("=== Miden-CDK Deployment ===")
