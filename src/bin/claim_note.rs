@@ -268,6 +268,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("✓ Synced to block {}", sync_result.block_num.as_u32());
             println!();
 
+            // Show all consumable notes for this account (like the working example does)
+            println!("Checking consumable notes for account...");
+            let all_consumable = client
+                .get_consumable_notes(Some(claimer_account_id))
+                .await
+                .map_err(|e| format!("Failed to get consumable notes: {}", e))?;
+
+            println!();
+            println!("═══ DEBUG: Consumable notes for {} ({}) ═══", claimer_hex, all_consumable.len());
+            for (note_record, relevance) in &all_consumable {
+                let note_id_hex = format!("0x{}", hex::encode(note_record.id().as_bytes()));
+                println!("  Note ID: {}", note_id_hex);
+                println!("    Relevance: {:?}", relevance);
+                if let Some(metadata) = note_record.metadata() {
+                    let sender_hex = format!("0x{}", hex::encode(<[u8; 15]>::from(metadata.sender())));
+                    println!("    Sender: {}", sender_hex);
+                    println!("    Tag: {:?}", metadata.tag());
+                }
+                // Print note details
+                let details = note_record.details();
+                println!("    Script Root: 0x{}", hex::encode(details.script().root().as_bytes()));
+                let inputs = details.inputs();
+                println!("    Inputs ({} values):", inputs.num_values());
+                for (i, value) in inputs.values().iter().enumerate() {
+                    println!("      [{}]: {}", i, value.as_int());
+                }
+                println!();
+            }
+            println!("═══════════════════════════════════════════════════════════════");
+            println!();
+
             // Check if note is already in local store
             println!("Looking for note...");
             let input_notes = client
@@ -331,31 +362,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  ✓ Note found in local store");
             }
 
-            // Get consumable notes for this account
-            println!();
-            println!("Checking if note is consumable by account...");
-            let consumable = client
-                .get_consumable_notes(Some(claimer_account_id))
-                .await
-                .map_err(|e| format!("Failed to get consumable notes: {}", e))?;
-
-            // Print all consumable notes for debugging
-            println!();
-            println!("═══ DEBUG: Consumable notes for account {} ({}) ═══", claimer_hex, consumable.len());
-            for (note_record, relevance) in &consumable {
-                let note_id_hex = format!("0x{}", hex::encode(note_record.id().as_bytes()));
-                println!("  Note ID: {}", note_id_hex);
-                println!("    Relevance: {:?}", relevance);
-                if let Some(metadata) = note_record.metadata() {
-                    let sender_hex = format!("0x{}", hex::encode(<[u8; 15]>::from(metadata.sender())));
-                    println!("    Sender: {}", sender_hex);
-                }
-                println!();
-            }
-            println!("═══════════════════════════════════════════════════════════════");
-            println!();
-
-            let note_record = consumable
+            // Find the target note in consumable notes (already fetched earlier)
+            let note_record = all_consumable
                 .into_iter()
                 .find(|(n, _)| n.id() == note_id)
                 .map(|(n, _)| n);
