@@ -1,81 +1,132 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Miden x AggLayer Bridge</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
-  <header>
-    <div class="header-inner">
-      <div class="logo">
-        <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
-          <rect width="32" height="32" rx="8" fill="#7C3AED"/>
-          <path d="M8 22V10l8 6 8-6v12" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <div class="layout-grid">
+    <!-- Visual Skeleton -->
+    <div class="grid-lines">
+      <div class="grid-line"></div>
+      <div class="grid-line"></div>
+      <div class="grid-line"></div>
+      <div class="grid-line"></div>
+      <div class="grid-line"></div>
+      <div class="grid-line"></div>
+      <div class="grid-line"></div>
+      <div class="grid-line"></div>
+      <div class="grid-line"></div>
+      <div class="grid-line"></div>
+      <div class="grid-line"></div>
+      <div class="grid-line"></div>
+    </div>
+
+    <!-- Header / Port -->
+    <header class="header">
+      <div class="logo-block">
+        <svg width="24" height="24" viewBox="0 0 32 32" fill="none">
+          <rect width="32" height="32" fill="#0F0F0F" />
+          <path d="M8 22V10l8 6 8-6v12" stroke="#F2EFE9" stroke-width="2.5" stroke-linecap="round"
+            stroke-linejoin="round" />
         </svg>
-        <span>Miden x AggLayer Bridge</span>
+        <span class="text-mono" style="font-size: 13px;">MIDEN_BRIDGE_V1</span>
       </div>
+
       <div class="header-actions">
-        <button id="addNetworkBtn" class="btn btn-secondary" style="display:none;">Add L1 to MetaMask</button>
-        <button id="connectBtn" class="btn btn-primary">Connect Wallet</button>
+        <button id="addNetworkBtn" class="btn-connect" style="display:none;">Add Network</button>
+        <button id="connectBtn" class="btn-connect">
+          <span class="status-led"></span>
+          <span id="connectText">CONNECT [ ]</span>
+        </button>
       </div>
-    </div>
-  </header>
+    </header>
 
-  <main>
-    <div id="chainWarning" class="chain-warning hidden">
-      Wrong network. Please switch to the Kurtosis L1 chain.
-    </div>
+    <!-- Main Stage -->
+    <main class="main-stage">
 
-    <div class="hero">
-      <h1>Bridge ETH to Miden</h1>
-      <p>Deposit native ETH from L1 into the Miden network via the AggLayer bridge.</p>
-    </div>
-
-    <div class="card deposit-card">
-      <div class="card-header">
-        <h2>Deposit</h2>
-        <span class="badge">L1 &rarr; Miden</span>
+      <!-- Notification/Warning Banner -->
+      <div id="chainWarning"
+        style="display:none; border: 1px solid var(--c-alert); color: var(--c-alert); padding: 12px; font-family: 'JetBrains Mono'; font-size: 12px; text-transform: uppercase;">
+        ⚠ WRONG_NETWORK // SWITCH_TO_SEPOLIA
       </div>
 
-      <div class="field">
-        <label for="recipient">Miden Recipient Address</label>
-        <input id="recipient" type="text" placeholder="0x112233445566778899aabbccddeeff" maxlength="32" spellcheck="false" autocomplete="off">
-        <span class="hint">15-byte hex Account ID (30 hex chars)</span>
+      <!-- Hero -->
+      <div class="hero-section">
+        <h1 class="text-display glitch-hover" id="heroTitle" data-text="DEPOSIT&nbsp;ETH">DEPOSIT<br>ETH</h1>
+        <p class="text-mono" style="margin-top: 16px; opacity: 0.6;">L1 [ETH] -> MIDEN [ZK]</p>
       </div>
 
-      <div class="field">
-        <label for="amount">Amount (ETH)</label>
-        <div class="input-group">
-          <input id="amount" type="text" placeholder="0.1" inputmode="decimal" autocomplete="off">
-          <span class="input-suffix">ETH</span>
+      <!-- Form Assembly -->
+      <div class="form-assembly">
+
+        <!-- Recipient Input -->
+        <div class="input-assembly" style="margin-bottom: 48px;">
+          <label for="recipient" class="assembly-label">01 // RECIPIENT_ID [HEX]</label>
+          <input id="recipient" type="text" class="text-mono"
+            style="width: 100%; padding: 12px 0; background: transparent; border: none; border-bottom: 1px solid var(--c-aluminum); outline: none; font-size: 16px; color: var(--c-ink);"
+            placeholder="0x..." spellcheck="false" autocomplete="off">
         </div>
-        <span class="hint" id="balanceHint"></span>
+
+        <!-- Amount Input (The Calculator) -->
+        <div class="input-assembly">
+          <label for="amount" class="assembly-label">02 // AMOUNT [ETH]</label>
+          <input id="amount" type="text" class="amount-display" placeholder="0.00" inputmode="decimal"
+            autocomplete="off">
+          <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+            <span class="text-mono" style="font-size: 10px; opacity: 0.5;">AVAIL: <span id="balanceDisplay">--</span>
+              ETH</span>
+            <span class="text-mono" style="font-size: 10px; color: var(--c-alert); display: none;"
+              id="amountError">INSUFFICIENT_FUNDS</span>
+          </div>
+        </div>
+
+        <!-- Action -->
+        <button id="depositBtn" class="trigger-btn" disabled>
+          <span>INITIATE_BRIDGE</span>
+          <span>&rarr;</span>
+        </button>
+
       </div>
 
-      <button id="depositBtn" class="btn btn-primary btn-lg" disabled>Deposit</button>
+      <!-- The Receipt (Status) -->
+      <div id="status" class="receipt-feed hidden" style="display: none;">
+        <!-- JS will populate this -->
+      </div>
 
-      <div id="status" class="status hidden"></div>
-    </div>
+    </main>
 
-    <div class="info-cards">
-      <div class="card info-card">
-        <h3>Bridge Contract</h3>
-        <code id="bridgeAddr">Not connected</code>
+    <!-- Tech Footer (Marquee) -->
+    <footer class="footer-tech text-mono marquee-container">
+      <div class="marquee-content">
+        <span class="footer-item"><strong>BRIDGE:</strong> <span id="bridgeAddr">--</span></span>
+        <span class="footer-item" style="margin-left: 48px;"><strong>ACCOUNT:</strong> <span
+            id="accountAddr">DISCONNECTED</span></span>
+        <span class="footer-item" style="margin-left: 48px;"><strong>NET:</strong> <span
+            id="networkInfo">--</span></span>
+        <span class="footer-item" style="margin-left: 48px;"><strong>SYSTEM:</strong> ONLINE</span>
+        <span class="footer-item" style="margin-left: 48px;"><strong>Ver:</strong> 1.0.4-beta</span>
+        <!-- Repeat for smooth loop effect if needed, but CSS handles one pass nicely -->
       </div>
-      <div class="card info-card">
-        <h3>Connected Account</h3>
-        <code id="accountAddr">Not connected</code>
-      </div>
-      <div class="card info-card">
-        <h3>Network</h3>
-        <code id="networkInfo">Not connected</code>
-      </div>
-    </div>
-  </main>
+    </footer>
+
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
+
 </html>
