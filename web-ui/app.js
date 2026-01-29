@@ -17,6 +17,9 @@
   const L1_CHAIN_ID = window.__MIDEN_L1_CHAIN_ID || 271828;
   const L1_CHAIN_ID_HEX = "0x" + L1_CHAIN_ID.toString(16);
 
+  // L1 RPC URL for MetaMask (injected at build time, port is dynamic per enclave)
+  const L1_RPC_URL = window.__MIDEN_L1_RPC_URL || "";
+
   // Destination network for Miden
   const DEST_NETWORK = 2;
 
@@ -133,6 +136,15 @@
     } catch (switchError) {
       // 4902 = chain not added to wallet
       if (switchError.code === 4902) {
+        if (!L1_RPC_URL) {
+          showStatus(
+            "Chain not found in MetaMask. Add it manually: Chain ID " +
+              L1_CHAIN_ID +
+              ", RPC URL: run 'kurtosis port print <enclave> el-1-geth-lighthouse rpc'",
+            "error"
+          );
+          return;
+        }
         try {
           await window.ethereum.request({
             method: "wallet_addEthereumChain",
@@ -145,7 +157,7 @@
                   symbol: "ETH",
                   decimals: 18,
                 },
-                rpcUrls: ["http://localhost:8545"],
+                rpcUrls: [L1_RPC_URL],
                 blockExplorerUrls: [],
               },
             ],
@@ -154,7 +166,7 @@
           showStatus(
             "Could not add network. Add it manually in MetaMask: Chain ID " +
               L1_CHAIN_ID +
-              ", RPC: use output of 'kurtosis port print <enclave> el-1-geth-lighthouse rpc'",
+              ", RPC: " + L1_RPC_URL,
             "error"
           );
         }

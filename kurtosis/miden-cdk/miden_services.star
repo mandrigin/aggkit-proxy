@@ -93,7 +93,8 @@ def deploy(plan, miden_args, contract_setup_addresses, cdk_args):
     web_ui = None
     if deploy_web_ui:
         l1_chain_id = cdk_args.get("l1_chain_id", 271828)
-        web_ui = _deploy_web_ui(plan, deployment_suffix, bridge_address, l1_chain_id)
+        l1_rpc_url = miden_args.get("l1_rpc_url_external", "")
+        web_ui = _deploy_web_ui(plan, deployment_suffix, bridge_address, l1_chain_id, l1_rpc_url)
 
     # Build context
     proxy_url = "http://miden-proxy{}:{}".format(deployment_suffix, MIDEN_PROXY_PORT)
@@ -239,7 +240,7 @@ stream {{
     )
 
 
-def _deploy_web_ui(plan, deployment_suffix, bridge_address, l1_chain_id):
+def _deploy_web_ui(plan, deployment_suffix, bridge_address, l1_chain_id, l1_rpc_url):
     """
     Deploy the Miden Bridge web UI.
 
@@ -247,6 +248,13 @@ def _deploy_web_ui(plan, deployment_suffix, bridge_address, l1_chain_id):
     (bridge ETH from L1 to Miden) via a browser wallet.
     """
     service_name = "miden-bridge-ui" + deployment_suffix
+
+    env = {
+        "BRIDGE_ADDRESS": bridge_address,
+        "L1_CHAIN_ID": str(l1_chain_id),
+    }
+    if l1_rpc_url:
+        env["L1_RPC_URL"] = l1_rpc_url
 
     return plan.add_service(
         name=service_name,
@@ -262,10 +270,7 @@ def _deploy_web_ui(plan, deployment_suffix, bridge_address, l1_chain_id):
                     application_protocol="http",
                 ),
             },
-            env_vars={
-                "BRIDGE_ADDRESS": bridge_address,
-                "L1_CHAIN_ID": str(l1_chain_id),
-            },
+            env_vars=env,
             labels={
                 DOCKER_PROJECT_LABEL: MIDEN_PROJECT_GROUP,
             },
