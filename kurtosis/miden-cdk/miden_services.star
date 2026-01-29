@@ -252,7 +252,7 @@ def _deploy_web_ui(plan, deployment_suffix, bridge_address):
         config=ServiceConfig(
             image=ImageBuildSpec(
                 image_name="miden-bridge-ui",
-                build_context_dir="../../web-ui",
+                build_context_dir="./web-ui",
             ),
             ports={
                 "http": PortSpec(

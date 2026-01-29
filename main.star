@@ -16,8 +16,8 @@ kurtosis_cdk_constants = import_module("github.com/0xPolygon/kurtosis-cdk/src/pa
 kurtosis_cdk_contracts = import_module("github.com/0xPolygon/kurtosis-cdk/src/contracts/util.star")
 
 # Local modules
-miden_services = import_module("./miden_services.star")
-bridge_service = import_module("./bridge_service.star")
+miden_services = import_module("./kurtosis/miden-cdk/miden_services.star")
+bridge_service = import_module("./kurtosis/miden-cdk/bridge_service.star")
 
 # Docker Desktop grouping label
 DOCKER_PROJECT_LABEL = "com.docker.compose.project"
