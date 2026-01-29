@@ -546,7 +546,7 @@ button {
       var(--c-ink),
       var(--c-ink) 10px,
       var(--c-alert) 10px,
-      var(--c-alert) 20px);
+      var(--c-alert) 20px) !important;
   background-size: 200% 200%;
   animation: hazardStripes 2s linear infinite;
   color: var(--c-paper);

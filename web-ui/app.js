@@ -91,16 +91,40 @@
 
   function setLoading(btn, loading) {
     if (loading) {
-      btn.classList.add("loading");
+      btn.classList.add("processing");
       btn.disabled = true;
       const originalText = btn.getAttribute('data-text') || btn.innerText;
       if (!btn.getAttribute('data-text')) btn.setAttribute('data-text', originalText);
-      // btn.innerText = "PROCESSING..."; // Don't change text for trigger-btn logic widely
+
+      // Cycle texts for effect
+      const steps = ["SIGNING_TX", "VERIFYING", "SATELLITE_LINK", "ENCRYPTING"];
+      let stepIdx = 0;
+      btn.innerText = steps[0];
+
+      btn.processInterval = setInterval(() => {
+        stepIdx = (stepIdx + 1) % steps.length;
+        btn.innerText = steps[stepIdx];
+      }, 500);
     } else {
-      btn.classList.remove("loading");
+      btn.classList.remove("processing");
       btn.disabled = false;
-      // if(btn.getAttribute('data-text')) btn.innerText = btn.getAttribute('data-text');
+      clearInterval(btn.processInterval);
+      // Restore text if not in success state (handled by logic elsewhere or reset)
+      if (!window.isSuccessState && btn.getAttribute('data-text')) {
+        btn.innerText = btn.getAttribute('data-text');
+      }
     }
+  }
+
+  function triggerSuccessState() {
+    document.body.classList.add('success-state');
+
+    // Change button to ACK
+    depositBtn.classList.remove("processing");
+    depositBtn.disabled = false;
+    depositBtn.innerText = "CONFIRMED [ACKNOWLEDGE]";
+
+    window.isSuccessState = true;
   }
 
   function truncateAddr(addr) {
