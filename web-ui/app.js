@@ -134,6 +134,11 @@
     depositBtn.innerText = "CONFIRMED [ACKNOWLEDGE]";
 
     window.isSuccessState = true;
+
+    // Ensure last message is visible
+    setTimeout(() => {
+      statusEl.scrollTop = statusEl.scrollHeight;
+    }, 100);
   }
 
   function truncateAddr(addr) {
