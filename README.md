@@ -463,10 +463,15 @@ docker exec $(docker ps --filter 'name=postgres' -q | head -1) \
 
 ### "Note not found" in verification
 
-**Possible causes**:
-- Note was consumed by faucet (normal for processed claims)
-- Transaction didn't complete
-- Wrong note ID format
+**This is expected behavior.** The proxy returns the CLAIM note ID, but the CLAIM
+note is consumed by the agglayer faucet during Phase 2. The faucet then mints a
+separate P2ID note to the recipient — that P2ID note has a different ID. So
+looking up the CLAIM note ID after a successful claim will return "not found"
+because the note has been consumed.
+
+**If claims are NOT completing** (note genuinely missing):
+- Transaction didn't complete (check proxy logs)
+- Miden-node didn't advance a block between Phase 1 and Phase 2
 
 **Debug**:
 ```bash
