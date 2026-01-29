@@ -12,7 +12,7 @@
 #   --fresh              Deploy fresh (destroys existing enclave)
 #   --enclave NAME       Enclave name (default: miden-cdk)
 #   --skip-deposit       Skip test deposit
-#   --params FILE        Custom params file (default: params.yaml)
+#   --params FILE        Custom params file (default: kurtosis/miden-cdk/params.yaml)
 #   --help               Show this help
 #
 # Prerequisites:
@@ -42,7 +42,7 @@ PARAMS_FILE=""
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-KURTOSIS_PKG_DIR="$PROJECT_DIR"
+KURTOSIS_PKG_DIR="$PROJECT_DIR/kurtosis/miden-cdk"
 
 # Funded accounts (from kurtosis-cdk defaults)
 KURTOSIS_PRIVATE_KEY="0x12d7de8621a77640c9241b2595ba78ce443d05e94090365ab3bb5e19df82c625"

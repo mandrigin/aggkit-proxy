@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miden Bridge</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="logo">
+        <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+          <rect width="32" height="32" rx="8" fill="#7C3AED"/>
+          <path d="M8 22V10l8 6 8-6v12" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>Miden Bridge</span>
+      </div>
+      <button id="connectBtn" class="btn btn-primary">Connect Wallet</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="hero">
+      <h1>Bridge ETH to Miden</h1>
+      <p>Deposit native ETH from L1 into the Miden network via the Agglayer bridge.</p>
+    </div>
+
+    <div class="card deposit-card">
+      <div class="card-header">
+        <h2>Deposit</h2>
+        <span class="badge">L1 &rarr; Miden</span>
+      </div>
+
+      <div class="field">
+        <label for="recipient">Miden Recipient Address</label>
+        <input id="recipient" type="text" placeholder="0x112233445566778899aabbccddeeff" maxlength="32" spellcheck="false" autocomplete="off">
+        <span class="hint">15-byte hex Account ID (30 hex chars)</span>
+      </div>
+
+      <div class="field">
+        <label for="amount">Amount (ETH)</label>
+        <div class="input-group">
+          <input id="amount" type="text" placeholder="0.1" inputmode="decimal" autocomplete="off">
+          <span class="input-suffix">ETH</span>
+        </div>
+        <span class="hint" id="balanceHint"></span>
+      </div>
+
+      <button id="depositBtn" class="btn btn-primary btn-lg" disabled>Deposit</button>
+
+      <div id="status" class="status hidden"></div>
+    </div>
+
+    <div class="info-cards">
+      <div class="card info-card">
+        <h3>Bridge Contract</h3>
+        <code id="bridgeAddr">Not connected</code>
+      </div>
+      <div class="card info-card">
+        <h3>Connected Account</h3>
+        <code id="accountAddr">Not connected</code>
+      </div>
+      <div class="card info-card">
+        <h3>Network</h3>
+        <code id="networkInfo">Not connected</code>
+      </div>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

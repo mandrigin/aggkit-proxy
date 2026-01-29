@@ -1,4 +1,4 @@
-name: github.com/mandrigin/aggkit-proxy
+name: github.com/mandrigin/aggkit-proxy/kurtosis/miden-cdk
 description: |
   Miden-CDK Kurtosis package for provisioning Miden bridge infrastructure.
 

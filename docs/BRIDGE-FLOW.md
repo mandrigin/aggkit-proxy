@@ -774,7 +774,7 @@ The division happens in `send_raw_transaction` before building the `ClaimSubmiss
 
 ## Kurtosis Deployment Architecture
 
-The Kurtosis package (repo root `kurtosis.yml`) deploys the full Miden bridge stack:
+The Kurtosis package (`kurtosis/miden-cdk/`) deploys the full Miden bridge stack:
 
 ```
 kurtosis-cdk (upstream)
