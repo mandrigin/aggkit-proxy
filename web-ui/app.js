@@ -1,4 +1,4 @@
-// Miden Bridge - Deposit dApp
+// Miden x AggLayer Bridge - Deposit dApp
 //
 // Sends bridgeAsset() calls to the Agglayer bridge contract,
 // mirroring scripts/send-deposit.sh from the browser.
@@ -13,6 +13,10 @@
     (window.__MIDEN_BRIDGE_ADDRESS || "").toLowerCase() ||
     "0xc8cbebf950b9df44d987c8619f092bea980ff038";
 
+  // Expected L1 chain ID (injected at build time, default: Kurtosis devnet)
+  const L1_CHAIN_ID = window.__MIDEN_L1_CHAIN_ID || 271828;
+  const L1_CHAIN_ID_HEX = "0x" + L1_CHAIN_ID.toString(16);
+
   // Destination network for Miden
   const DEST_NETWORK = 2;
 
@@ -25,6 +29,7 @@
 
   const connectBtn = document.getElementById("connectBtn");
   const depositBtn = document.getElementById("depositBtn");
+  const addNetworkBtn = document.getElementById("addNetworkBtn");
   const recipientInput = document.getElementById("recipient");
   const amountInput = document.getElementById("amount");
   const statusEl = document.getElementById("status");
@@ -32,12 +37,14 @@
   const bridgeAddrEl = document.getElementById("bridgeAddr");
   const accountAddrEl = document.getElementById("accountAddr");
   const networkInfoEl = document.getElementById("networkInfo");
+  const chainWarning = document.getElementById("chainWarning");
 
   // --- State -----------------------------------------------------------
 
   let provider = null;
   let signer = null;
   let userAddress = null;
+  let onCorrectChain = false;
 
   // --- Helpers ---------------------------------------------------------
 
@@ -97,7 +104,64 @@
 
     const amtOk = amt && !isNaN(parseFloat(amt)) && parseFloat(amt) > 0;
 
-    depositBtn.disabled = !signer || !addrOk || !amtOk;
+    depositBtn.disabled = !signer || !addrOk || !amtOk || !onCorrectChain;
+  }
+
+  // --- Chain management ------------------------------------------------
+
+  function updateChainWarning(currentChainId) {
+    onCorrectChain = BigInt(currentChainId) === BigInt(L1_CHAIN_ID);
+    if (onCorrectChain) {
+      chainWarning.classList.add("hidden");
+      addNetworkBtn.style.display = "none";
+    } else {
+      chainWarning.classList.remove("hidden");
+      addNetworkBtn.style.display = "";
+    }
+    validateInputs();
+  }
+
+  async function switchOrAddChain() {
+    if (!window.ethereum) return;
+
+    try {
+      // First try switching to the chain (works if already added)
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: L1_CHAIN_ID_HEX }],
+      });
+    } catch (switchError) {
+      // 4902 = chain not added to wallet
+      if (switchError.code === 4902) {
+        try {
+          await window.ethereum.request({
+            method: "wallet_addEthereumChain",
+            params: [
+              {
+                chainId: L1_CHAIN_ID_HEX,
+                chainName: "Kurtosis L1 (Miden)",
+                nativeCurrency: {
+                  name: "Ether",
+                  symbol: "ETH",
+                  decimals: 18,
+                },
+                rpcUrls: ["http://localhost:8545"],
+                blockExplorerUrls: [],
+              },
+            ],
+          });
+        } catch (addError) {
+          showStatus(
+            "Could not add network. Add it manually in MetaMask: Chain ID " +
+              L1_CHAIN_ID +
+              ", RPC: use output of 'kurtosis port print <enclave> el-1-geth-lighthouse rpc'",
+            "error"
+          );
+        }
+      } else {
+        showStatus("Failed to switch network: " + (switchError.message || switchError), "error");
+      }
+    }
   }
 
   // --- Wallet connection ------------------------------------------------
@@ -122,12 +186,14 @@
       accountAddrEl.textContent = userAddress;
       bridgeAddrEl.textContent = BRIDGE_ADDRESS;
 
-      // Show network info
+      // Check chain and show network info
       const network = await provider.getNetwork();
       networkInfoEl.textContent =
         (network.name !== "unknown" ? network.name + " / " : "") +
         "Chain " +
         network.chainId.toString();
+
+      updateChainWarning(network.chainId);
 
       // Show balance
       await updateBalance();
@@ -160,6 +226,11 @@
 
   async function sendDeposit() {
     hideStatus();
+
+    if (!onCorrectChain) {
+      showStatus("Switch to the Kurtosis L1 network before depositing.", "error");
+      return;
+    }
 
     const recipientRaw = recipientInput.value.trim();
     const amountRaw = amountInput.value.trim();
@@ -237,6 +308,7 @@
 
   connectBtn.addEventListener("click", connectWallet);
   depositBtn.addEventListener("click", sendDeposit);
+  addNetworkBtn.addEventListener("click", switchOrAddChain);
   recipientInput.addEventListener("input", validateInputs);
   amountInput.addEventListener("input", validateInputs);
 
@@ -245,8 +317,14 @@
     window.ethereum.on("accountsChanged", function () {
       window.location.reload();
     });
-    window.ethereum.on("chainChanged", function () {
-      window.location.reload();
+    window.ethereum.on("chainChanged", function (chainId) {
+      updateChainWarning(chainId);
+      // Re-init provider on chain change
+      if (userAddress) {
+        provider = new ethers.BrowserProvider(window.ethereum);
+        provider.getSigner().then(function (s) { signer = s; });
+        updateBalance();
+      }
     });
   }
 

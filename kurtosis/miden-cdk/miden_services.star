@@ -92,7 +92,8 @@ def deploy(plan, miden_args, contract_setup_addresses, cdk_args):
     deploy_web_ui = miden_args.get("deploy_web_ui", True)
     web_ui = None
     if deploy_web_ui:
-        web_ui = _deploy_web_ui(plan, deployment_suffix, bridge_address)
+        l1_chain_id = cdk_args.get("l1_chain_id", 271828)
+        web_ui = _deploy_web_ui(plan, deployment_suffix, bridge_address, l1_chain_id)
 
     # Build context
     proxy_url = "http://miden-proxy{}:{}".format(deployment_suffix, MIDEN_PROXY_PORT)
@@ -238,7 +239,7 @@ stream {{
     )
 
 
-def _deploy_web_ui(plan, deployment_suffix, bridge_address):
+def _deploy_web_ui(plan, deployment_suffix, bridge_address, l1_chain_id):
     """
     Deploy the Miden Bridge web UI.
 
@@ -263,6 +264,7 @@ def _deploy_web_ui(plan, deployment_suffix, bridge_address):
             },
             env_vars={
                 "BRIDGE_ADDRESS": bridge_address,
+                "L1_CHAIN_ID": str(l1_chain_id),
             },
             labels={
                 DOCKER_PROJECT_LABEL: MIDEN_PROJECT_GROUP,

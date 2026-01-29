@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Miden Bridge</title>
+  <title>Miden x AggLayer Bridge</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -14,16 +14,23 @@
           <rect width="32" height="32" rx="8" fill="#7C3AED"/>
           <path d="M8 22V10l8 6 8-6v12" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        <span>Miden Bridge</span>
+        <span>Miden x AggLayer Bridge</span>
       </div>
-      <button id="connectBtn" class="btn btn-primary">Connect Wallet</button>
+      <div class="header-actions">
+        <button id="addNetworkBtn" class="btn btn-secondary" style="display:none;">Add L1 to MetaMask</button>
+        <button id="connectBtn" class="btn btn-primary">Connect Wallet</button>
+      </div>
     </div>
   </header>
 
   <main>
+    <div id="chainWarning" class="chain-warning hidden">
+      Wrong network. Please switch to the Kurtosis L1 chain.
+    </div>
+
     <div class="hero">
       <h1>Bridge ETH to Miden</h1>
-      <p>Deposit native ETH from L1 into the Miden network via the Agglayer bridge.</p>
+      <p>Deposit native ETH from L1 into the Miden network via the AggLayer bridge.</p>
     </div>
 
     <div class="card deposit-card">

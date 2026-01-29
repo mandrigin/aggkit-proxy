@@ -68,6 +68,42 @@ header {
   color: var(--gray-900);
 }
 
+/* Header actions */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-secondary {
+  background: var(--yellow-100);
+  color: #854d0e;
+  font-size: 13px;
+  padding: 6px 14px;
+  border: 1px solid #fde68a;
+}
+
+.btn-secondary:hover {
+  background: #fef3c7;
+}
+
+/* Chain warning banner */
+.chain-warning {
+  background: var(--red-100);
+  color: #991b1b;
+  border: 1px solid #fecaca;
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 24px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.chain-warning.hidden {
+  display: none;
+}
+
 /* Main */
 main {
   max-width: 720px;
