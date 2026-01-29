@@ -93,24 +93,33 @@
     if (loading) {
       btn.classList.add("processing");
       btn.disabled = true;
-      const originalText = btn.getAttribute('data-text') || btn.innerText;
-      if (!btn.getAttribute('data-text')) btn.setAttribute('data-text', originalText);
 
-      // Cycle texts for effect
-      const steps = ["SIGNING_TX", "VERIFYING", "SATELLITE_LINK", "ENCRYPTING"];
-      let stepIdx = 0;
-      btn.innerText = steps[0];
+      // Only cycle text/animate for the main transaction button
+      if (btn.id === 'depositBtn') {
+        const originalText = btn.getAttribute('data-text') || btn.innerText;
+        if (!btn.getAttribute('data-text')) btn.setAttribute('data-text', originalText);
 
-      btn.processInterval = setInterval(() => {
-        stepIdx = (stepIdx + 1) % steps.length;
-        btn.innerText = steps[stepIdx];
-      }, 500);
+        // Cycle texts for effect
+        const steps = ["SIGNING_TX", "VERIFYING", "SATELLITE_LINK", "ENCRYPTING"];
+        let stepIdx = 0;
+        btn.innerText = steps[0];
+
+        btn.processInterval = setInterval(() => {
+          stepIdx = (stepIdx + 1) % steps.length;
+          btn.innerText = steps[stepIdx];
+        }, 500);
+      }
     } else {
       btn.classList.remove("processing");
       btn.disabled = false;
-      clearInterval(btn.processInterval);
-      // Restore text if not in success state (handled by logic elsewhere or reset)
-      if (!window.isSuccessState && btn.getAttribute('data-text')) {
+      if (btn.processInterval) {
+        clearInterval(btn.processInterval);
+        btn.processInterval = null;
+      }
+
+      // Restore text only if it was modified (i.e. for depositBtn)
+      // and if not in success state
+      if (btn.id === 'depositBtn' && !window.isSuccessState && btn.getAttribute('data-text')) {
         btn.innerText = btn.getAttribute('data-text');
       }
     }
