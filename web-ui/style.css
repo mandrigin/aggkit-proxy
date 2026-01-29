@@ -537,3 +537,90 @@ button {
   animation: blink 1s step-end infinite;
   margin-left: 2px;
 }
+
+/* 5. Transaction Lifecycle */
+
+/* Mechanical Progress */
+.trigger-btn.processing {
+  background: repeating-linear-gradient(45deg,
+      var(--c-ink),
+      var(--c-ink) 10px,
+      var(--c-alert) 10px,
+      var(--c-alert) 20px);
+  background-size: 200% 200%;
+  animation: hazardStripes 2s linear infinite;
+  color: var(--c-paper);
+  pointer-events: none;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+@keyframes hazardStripes {
+  0% {
+    background-position: 100% 100%;
+  }
+
+  100% {
+    background-position: 0% 0%;
+  }
+}
+
+/* System Success Flash */
+@keyframes systemFlash {
+  0% {
+    background-color: var(--c-paper);
+    filter: invert(0);
+  }
+
+  10% {
+    background-color: var(--c-signal);
+    filter: invert(1);
+  }
+
+  20% {
+    background-color: var(--c-paper);
+    filter: invert(0);
+  }
+
+  30% {
+    background-color: var(--c-signal);
+    filter: invert(1);
+  }
+
+  100% {
+    background-color: var(--c-ink);
+    filter: invert(1);
+  }
+
+  /* End state: Inverted (Dark Mode-ish but raw) */
+}
+
+body.success-state {
+  animation: systemFlash 0.5s steps(4) forwards;
+}
+
+/* Elements in Success State */
+body.success-state .trigger-btn {
+  background: var(--c-signal);
+  color: var(--c-ink);
+  border-color: var(--c-signal);
+  font-family: 'JetBrains Mono';
+  animation: none;
+  /* Stop hazard stripes */
+}
+
+body.success-state .trigger-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 20px var(--c-signal);
+}
+
+body.success-state .grid-lines {
+  border-color: rgba(0, 255, 136, 0.2);
+}
+
+/* Success Receipt Highlight */
+.receipt-item.success {
+  color: var(--c-signal);
+  font-weight: bold;
+  background: var(--c-ink);
+  padding: 4px;
+}

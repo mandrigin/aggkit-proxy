@@ -252,12 +252,23 @@
   // --- Deposit ----------------------------------------------------------
 
   async function sendDeposit() {
+    // Intercept for Reset Flow
+    if (window.isSuccessState) {
+      document.body.classList.remove('success-state');
+      depositBtn.innerText = "INITIATE_BRIDGE";
+      window.isSuccessState = false;
+      amountInput.value = ""; // Clear input on reset
+      validateInputs();
+      return;
+    }
+
     // Don't clear status, we want to see the sequence
     if (!onCorrectChain) {
       showStatus("WRONG NETWORK. Switch to L1.", "error");
       return;
     }
 
+    // ... (rest of validation) ...
     const recipientRaw = recipientInput.value.trim();
     const amountRaw = amountInput.value.trim();
 
@@ -299,18 +310,25 @@
 
       if (receipt.status === 1) {
         showStatusHTML(`DEPOSIT CONFIRMED (BLOCK ${receipt.blockNumber})`, "success");
+        triggerSuccessState();
+        // Skip default finally block enabling
+        return;
       } else {
         showStatus(`TX REVERTED: ${tx.hash}`, "error");
       }
 
       await updateBalance();
-      // Clear inputs on success? Maybe not for UX, let user decide.
-      amountInput.value = "";
     } catch (err) {
       const msg = err.reason || err.message || String(err);
       showStatus("DEPOSIT FAILED: " + msg, "error");
     } finally {
-      setLoading(depositBtn, false);
+      // Only reset loading if we didn't trigger success
+      if (!window.isSuccessState) {
+        setLoading(depositBtn, false);
+      } else {
+        // Stop the interval mostly
+        clearInterval(depositBtn.processInterval);
+      }
       validateInputs();
     }
   }
