@@ -30,6 +30,10 @@ SELECT
   CASE WHEN consumed_at IS NOT NULL THEN 'YES' ELSE 'NO' END as consumed,
   coalesce(consumed_at, '') as consumed_at,
   hex(sender) as sender,
+  CASE WHEN length(inputs) = 18
+    THEN hex(substr(inputs, 3, 16))
+    ELSE '(see inputs)'
+  END as recipient,
   tag,
   CASE note_type
     WHEN 1 THEN 'Public'
