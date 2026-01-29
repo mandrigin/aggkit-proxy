@@ -186,7 +186,7 @@ TOML-based configuration with serde:
 ```rust
 #[derive(Deserialize)]
 pub struct ProxyConfig {
-    pub listen_port: u16,        // default: 8545
+    pub listen_port: u16,        // default: 8546
     pub miden_rpc_url: String,   // Miden node endpoint
     pub chain_id: u64,           // EIP-155 chain ID
     pub bridge_account_id: String, // Bridge faucet account
@@ -207,6 +207,52 @@ Structured errors with JSON-RPC error code mapping:
 | AccountResolution | -32003 | Server error |
 | ReceiptNotFound | -32004 | Server error |
 | Config/Internal | -32603 | Internal error |
+
+### 8. Claim Tracker (`claim_tracker.rs`)
+
+Prevents double-processing of claims using a lock-free `DashSet`:
+
+```rust
+impl ClaimTracker {
+    pub fn try_claim(&self, global_index: U256) -> Result<(), AlreadyClaimed>;
+    pub fn unclaim(&self, global_index: &U256);
+}
+```
+
+- **Atomic check-and-insert**: `try_claim` returns `Err(AlreadyClaimed)` if the global index has already been claimed
+- **Rollback**: `unclaim` removes the index on submission failure, allowing retry
+- **Concurrent safe**: Uses `DashSet` for lock-free multi-threaded access
+- **Persistence**: Optional file-based persistence (`claimed_indices.json`)
+
+### 9. Asset Mapping (`asset_mapping.rs`)
+
+Maps origin network/token pairs to Miden faucet assets:
+
+```rust
+impl AssetMapping {
+    pub fn resolve(&self, origin_network: u32, origin_token: Address) -> Option<FungibleAsset>;
+}
+```
+
+Determines which Miden faucet handles a given bridged token based on its L1 origin.
+
+### 10. Log Synthesis (`log_synthesis.rs`)
+
+Generates synthetic EVM logs for bridge-service compatibility:
+
+- **UpdateHashChainValue** events on GER injection
+- **ClaimEvent** events on successful claims
+- Supports full `eth_getLogs` filter specification (block range, address, topics)
+- Maximum 1000 logs per query per Ethereum JSON-RPC spec
+
+### 11. Block State (`block_state.rs`)
+
+Maintains synthetic EVM blocks that map to Miden block numbers:
+
+- Deterministic hashes: `keccak256("miden-synthetic-block-v1" || blockNumber || parentHash || timestamp || stateRoot)`
+- Deterministic timestamps: `GENESIS_TIMESTAMP + blockNumber * 12`
+- Lazy chain building: missing blocks from genesis to N created on demand
+- Prevents false "reorg" detection by bridge-service on proxy restart
 
 ## Data Flow
 

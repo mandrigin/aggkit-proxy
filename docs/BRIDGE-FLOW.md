@@ -850,3 +850,17 @@ The deposit UI (`web-ui/`) is a single-page vanilla JS application served by ngi
 | `LISTEN_PORT` | `8546` | HTTP server port |
 | `MIDEN_STORE_PATH` | `/app/data/miden-client` | SQLite store directory |
 | `RUST_LOG` | (none) | Logging level (e.g., `info,miden_rpc_proxy=debug`) |
+
+---
+
+## Debugging Tools
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/list-notes.sh` | List all notes tracked by the proxy |
+| `scripts/list-unclaimed-notes.sh` | List notes that have not been claimed yet |
+| `scripts/health-check.sh` | Check proxy and miden-node health status |
+| `scripts/verify-claim-notes.sh` | Verify all CLAIM notes from proxy logs |
+
+Use `list-notes.sh` and `list-unclaimed-notes.sh` to inspect note state during
+claim flow debugging. These scripts query the proxy's internal note tracking.

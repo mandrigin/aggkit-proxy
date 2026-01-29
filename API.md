@@ -5,7 +5,7 @@ miden-rpc-proxy implements a subset of the Ethereum JSON-RPC API for bridge oper
 ## Endpoint
 
 ```
-POST http://localhost:8545
+POST http://localhost:8546
 Content-Type: application/json
 ```
 
@@ -21,14 +21,14 @@ Returns the chain ID used for EIP-155 signing.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
 ```
 
 **Response:**
 ```json
-{"jsonrpc":"2.0","result":"0x4d494445","id":1}
+{"jsonrpc":"2.0","result":"0x2","id":1}
 ```
 
 ---
@@ -43,7 +43,7 @@ Returns the current gas price. Always returns `0x0` as Miden has no gas fees.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_gasPrice","params":[],"id":1}'
 ```
@@ -70,7 +70,7 @@ Estimates gas for a transaction. Returns fixed estimate of 21000.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc":"2.0",
@@ -99,7 +99,7 @@ Returns the transaction count (nonce) for an address.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc":"2.0",
@@ -127,7 +127,7 @@ Submits a signed transaction for processing. The transaction must be a `claimAss
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc":"2.0",
@@ -186,7 +186,7 @@ Returns the receipt of a transaction by hash.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc":"2.0",
@@ -240,7 +240,7 @@ Executes a call without creating a transaction (read-only).
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc":"2.0",
@@ -267,7 +267,7 @@ Returns the current block number (Miden block height).
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 ```
@@ -275,6 +275,197 @@ curl -X POST http://localhost:8545 \
 **Response:**
 ```json
 {"jsonrpc":"2.0","result":"0x10","id":1}
+```
+
+---
+
+### eth_getLogs
+
+Returns logs matching a filter object.
+
+**Parameters:**
+1. `object` - Filter object
+   - `fromBlock`: `string` (optional) - Block number or tag
+   - `toBlock`: `string` (optional) - Block number or tag
+   - `address`: `string | string[]` (optional) - Contract address(es)
+   - `topics`: `array` (optional) - Topic filters (up to 4 positions)
+
+**Returns:** `array` - Array of log objects
+
+**Example:**
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "method":"eth_getLogs",
+    "params":[{"fromBlock":"0x0","toBlock":"latest"}],
+    "id":1
+  }'
+```
+
+**Response:**
+```json
+{"jsonrpc":"2.0","result":[],"id":1}
+```
+
+---
+
+### eth_getBlockByNumber
+
+Returns block information by number.
+
+**Parameters:**
+1. `string` - Block number (hex) or tag (`"latest"`, `"pending"`, `"earliest"`)
+2. `boolean` - If `true`, returns full transaction objects; if `false`, only hashes
+
+**Returns:** `object | null` - Block object or null
+
+**Example:**
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest",false],"id":1}'
+```
+
+---
+
+### eth_getBlockByHash
+
+Returns block information by hash.
+
+**Parameters:**
+1. `string` - Block hash (32 bytes, hex)
+2. `boolean` - If `true`, returns full transaction objects; if `false`, only hashes
+
+**Returns:** `object | null` - Block object or null
+
+**Example:**
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_getBlockByHash","params":["0x...",false],"id":1}'
+```
+
+---
+
+### eth_getTransactionByHash
+
+Returns transaction information by hash.
+
+**Parameters:**
+1. `string` - Transaction hash
+
+**Returns:** `object | null` - Transaction object or null
+
+**Example:**
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_getTransactionByHash","params":["0x..."],"id":1}'
+```
+
+---
+
+### net_version
+
+Returns the current network ID (decimal string).
+
+**Parameters:** None
+
+**Returns:** `string` - Network ID (e.g., `"2"`)
+
+**Example:**
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"net_version","params":[],"id":1}'
+```
+
+**Response:**
+```json
+{"jsonrpc":"2.0","result":"2","id":1}
+```
+
+---
+
+### eth_getBalance
+
+Returns the balance of an address. Always returns `0x0` (Miden has no ETH balances).
+
+**Parameters:**
+1. `string` - Address
+2. `string` (optional) - Block number or tag
+
+**Returns:** `string` - `"0x0"`
+
+**Example:**
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_getBalance","params":["0x...","latest"],"id":1}'
+```
+
+---
+
+### eth_getCode
+
+Returns code at an address. Returns `0x00` (STOP opcode) to signal a contract exists.
+
+**Parameters:**
+1. `string` - Address
+2. `string` (optional) - Block number or tag
+
+**Returns:** `string` - `"0x00"`
+
+**Example:**
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_getCode","params":["0x...","latest"],"id":1}'
+```
+
+---
+
+### eth_getStorageAt
+
+Returns the value of a storage slot. Always returns zero (no EVM storage on Miden).
+
+**Parameters:**
+1. `string` - Address
+2. `string` - Storage position (hex)
+3. `string` (optional) - Block number or tag
+
+**Returns:** `string` - 32 zero bytes
+
+**Example:**
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_getStorageAt","params":["0x...","0x0","latest"],"id":1}'
+```
+
+---
+
+### eth_getBlockTransactionCountByNumber
+
+Returns the number of transactions in a block by number.
+
+**Parameters:**
+1. `string` - Block number (hex) or tag
+
+**Returns:** `string` - Transaction count (hex)
+
+**Example:**
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_getBlockTransactionCountByNumber","params":["latest"],"id":1}'
+```
+
+**Response:**
+```json
+{"jsonrpc":"2.0","result":"0x0","id":1}
 ```
 
 ---
@@ -316,7 +507,7 @@ function claimAsset(
 ) external;
 ```
 
-**Function selector:** `0x2cffd02e`
+**Function selector:** `0xccaa2d11`
 
 **globalIndex encoding:**
 ```
@@ -336,8 +527,8 @@ Add network with these settings:
 | Setting | Value |
 |---------|-------|
 | Network Name | Miden Bridge |
-| RPC URL | http://localhost:8545 |
-| Chain ID | 1296123973 (0x4D494445) |
+| RPC URL | http://localhost:8546 |
+| Chain ID | 2 (0x2) |
 | Currency Symbol | MIDEN |
 
 ### ethers.js Example
@@ -345,7 +536,7 @@ Add network with these settings:
 ```javascript
 const { ethers } = require('ethers');
 
-const provider = new ethers.JsonRpcProvider('http://localhost:8545');
+const provider = new ethers.JsonRpcProvider('http://localhost:8546');
 
 // Check chain ID
 const chainId = await provider.send('eth_chainId', []);

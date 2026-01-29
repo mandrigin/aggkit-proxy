@@ -1,5 +1,9 @@
 # Kurtosis-CDK Integration Plan for Miden Aggkit Proxy
 
+> **Status: COMPLETED** — This is a historical planning document. All 9 methods
+> described below have been implemented. The proxy now supports all 17 RPC methods
+> required for full kurtosis-cdk bridge-service integration.
+
 ## Executive Summary
 
 This plan adds **9 supplementary RPC methods** required for kurtosis-cdk/zkevm-bridge-service integration while **preserving the existing working claim flow**.
@@ -18,7 +22,7 @@ This plan adds **9 supplementary RPC methods** required for kurtosis-cdk/zkevm-b
 | `eth_call` | Working | Contract read calls |
 | `eth_blockNumber` | Working | Current Miden block |
 
-### Missing Methods (9) - TO ADD
+### Previously Missing Methods (9) - NOW IMPLEMENTED
 | Method | Priority | Bridge Service Usage |
 |--------|----------|---------------------|
 | `eth_getLogs` | **CRITICAL** | BridgeEvent detection (polled every 10s) |

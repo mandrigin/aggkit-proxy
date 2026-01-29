@@ -50,6 +50,8 @@ JSON-RPC proxy server bridging Ethereum-style RPC to Miden network. Enables AggL
 | `src/client.rs` | Miden client wrapper |
 | `src/block_state.rs` | Synthetic EVM block state for kurtosis-cdk |
 | `src/log_synthesis.rs` | Synthetic EVM logs for bridge-service |
+| `src/claim_tracker.rs` | Replay prevention via global index tracking |
+| `src/asset_mapping.rs` | Origin network/token to Miden faucet asset lookup |
 
 ## Account Initialization
 
@@ -131,13 +133,13 @@ make release    # release
 **BRIDGE_FAUCET_ID** - Get from miden-node genesis:
 ```bash
 # From kurtosis deployment
-kurtosis service exec cdk-miden miden-node-001 \
+kurtosis service exec miden-cdk miden-node-001 \
   "cat /opt/miden-node/config/genesis.toml" | grep -A2 'faucet'
 ```
 
 **BRIDGE_ADDRESS** - Get from kurtosis-cdk contracts:
 ```bash
-kurtosis service exec cdk-miden contracts-001 \
+kurtosis service exec miden-cdk contracts-001 \
   "cat /opt/zkevm/combined.json" | jq -r '.polygonZkEVMBridgeAddress'
 ```
 
@@ -203,12 +205,15 @@ l2_rpc_url = "http://miden-proxy:8546"
 
 2. **Check Bridge DB**:
    ```bash
-   ./scripts/list-deposits.sh
+   # Query deposits for Miden (dest_net=2)
+   docker exec $(docker ps --filter 'name=postgres' -q | head -1) \
+     psql -U bridge_user -d bridge_db \
+     -c "SELECT deposit_cnt, amount, ready_for_claim FROM sync.deposit WHERE dest_net = 2 ORDER BY deposit_cnt DESC LIMIT 10;"
    ```
 
-3. **Wait for ready_for_claim**:
+3. **List CLAIM notes on the proxy**:
    ```bash
-   ./scripts/wait-deposit.sh <deposit_num>
+   ./scripts/list-notes.sh
    ```
 
 4. **Verify CLAIM Notes**:
@@ -403,6 +408,17 @@ curl -X POST http://localhost:8546 \
 | `scripts/verify-notes.sh --note-id <id>` | Verify a note exists on miden-node |
 | `scripts/verify-claim-notes.sh [container]` | Verify all CLAIM notes from proxy logs |
 | `scripts/e2e-test.sh` | Run full end-to-end test (deposits, claims, verification) |
+| `scripts/e2e-kurtosis.sh` | End-to-end test against kurtosis-cdk deployment |
+| `scripts/claim-note.sh` | Manually claim a specific note |
+| `scripts/list-notes.sh` | List all notes tracked by the proxy |
+| `scripts/list-unclaimed-notes.sh` | List notes that have not been claimed yet |
+| `scripts/health-check.sh` | Check proxy and miden-node health status |
+| `scripts/start-all.sh` | Start all services (miden-node + proxy) |
+| `scripts/start-miden-node.sh` | Start miden-node only |
+| `scripts/start-proxy.sh` | Build and start the proxy locally |
+| `scripts/stop-kurtosis.sh` | Stop kurtosis-cdk deployment |
+| `scripts/test-lumia-claims.sh` | Send Lumia claimAsset test transactions |
+| `scripts/test-rlp-claims.sh` | Test RLP-encoded claim transactions |
 
 ### Checking Bridge DB Deposits
 
@@ -437,7 +453,9 @@ checks for "already being tracked" and treats it as success.
 docker logs miden-proxy-kurtosis
 
 # Check bridge DB status
-./scripts/list-deposits.sh
+docker exec $(docker ps --filter 'name=postgres' -q | head -1) \
+  psql -U bridge_user -d bridge_db \
+  -c "SELECT deposit_cnt, amount, ready_for_claim FROM sync.deposit WHERE dest_net = 2 ORDER BY deposit_cnt DESC LIMIT 20;"
 
 # Verify notes exist
 ./scripts/verify-claim-notes.sh
@@ -466,23 +484,43 @@ src/
 ├── main.rs              # RPC server, claim processing, account init
 ├── lib.rs               # Library root, re-exports
 ├── agglayer_faucet.rs   # Bridge/faucet account creation
+├── asset_mapping.rs     # Origin network/token to Miden faucet asset lookup
+├── address_mapper.rs    # Ethereum <-> Miden address mapping
+├── block_state.rs       # Synthetic EVM blocks
+├── claim_tracker.rs     # Replay prevention via global index tracking
 ├── client.rs            # Miden client wrapper
 ├── config.rs            # TOML configuration (legacy)
 ├── decode.rs            # RLP and claimAsset decoding
-├── receipt.rs           # Ethereum receipt generation
-├── types.rs             # Core types (ClaimAssetParams)
 ├── error.rs             # Error types with JSON-RPC codes
-├── address_mapper.rs    # Ethereum <-> Miden address mapping
+├── log_synthesis.rs     # Synthetic EVM logs
+├── receipt.rs           # Ethereum receipt generation
 ├── storage.rs           # SQLite persistence
-├── block_state.rs       # Synthetic EVM blocks
-└── log_synthesis.rs     # Synthetic EVM logs
+├── types.rs             # Core types (ClaimAssetParams)
+├── bin/
+│   ├── claim_note.rs    # CLI tool: manually claim a note
+│   └── verify_notes.rs  # CLI tool: verify notes on miden-node
+└── tests/
+    ├── common/mod.rs    # Shared test utilities
+    ├── phase1.rs        # Unit tests
+    ├── phase2.rs        # Integration tests
+    └── phase3.rs        # End-to-end tests
 
 scripts/
+├── claim-note.sh            # Manually claim a specific note
+├── e2e-kurtosis.sh          # E2E test against kurtosis-cdk
+├── e2e-test.sh              # Full end-to-end test
+├── health-check.sh          # Proxy and miden-node health check
+├── list-notes.sh            # List all notes tracked by the proxy
+├── list-unclaimed-notes.sh  # List unclaimed notes
 ├── send-deposit.sh          # Send L1 deposit
-├── list-deposits.sh         # List bridge DB deposits
-├── wait-deposit.sh          # Wait for ready_for_claim
-├── verify-notes.sh          # Verify single note
-└── verify-claim-notes.sh    # Verify all CLAIM notes
+├── start-all.sh             # Start all services
+├── start-miden-node.sh      # Start miden-node only
+├── start-proxy.sh           # Build and start proxy locally
+├── stop-kurtosis.sh         # Stop kurtosis-cdk deployment
+├── test-lumia-claims.sh     # Lumia claimAsset test transactions
+├── test-rlp-claims.sh       # RLP-encoded claim tests
+├── verify-claim-notes.sh    # Verify all CLAIM notes
+└── verify-notes.sh          # Verify single note on miden-node
 ```
 
 ## License

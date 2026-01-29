@@ -75,6 +75,25 @@ Genesis configuration with:
 | miden-node | 57291 | gRPC endpoint |
 | proxy | 8546 | Ethereum JSON-RPC endpoint |
 
+## Debugging Tools
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/list-notes.sh` | List all notes tracked by the proxy |
+| `scripts/list-unclaimed-notes.sh` | List notes that have not been claimed yet |
+| `scripts/health-check.sh` | Check proxy and miden-node health status |
+
+```bash
+# List all tracked notes
+./scripts/list-notes.sh
+
+# Show only unclaimed notes (useful for debugging stuck claims)
+./scripts/list-unclaimed-notes.sh
+
+# Verify services are healthy before running tests
+./scripts/health-check.sh
+```
+
 ## Stopping Services
 
 ```bash
