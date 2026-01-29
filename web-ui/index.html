@@ -37,13 +37,31 @@
 
     <!-- Header / Port -->
     <header class="header">
-      <div class="logo-block">
-        <svg width="24" height="24" viewBox="0 0 32 32" fill="none">
-          <rect width="32" height="32" fill="#0F0F0F" />
-          <path d="M8 22V10l8 6 8-6v12" stroke="#F2EFE9" stroke-width="2.5" stroke-linecap="round"
-            stroke-linejoin="round" />
-        </svg>
-        <span class="text-mono" style="font-size: 13px;">MIDEN_BRIDGE_V1</span>
+      <div class="logo-block" style="display: flex; align-items: center; gap: 24px;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <svg width="24" height="24" viewBox="0 0 32 32" fill="none">
+            <rect width="32" height="32" fill="#0F0F0F" />
+            <path d="M8 22V10l8 6 8-6v12" stroke="#F2EFE9" stroke-width="2.5" stroke-linecap="round"
+              stroke-linejoin="round" />
+          </svg>
+          <span class="text-mono" style="font-size: 13px;">MIDEN x AGGLAYER</span>
+        </div>
+
+        <!-- Gateway.fm Badge (Header Version) -->
+        <div class="gateway-badge"
+          style="margin-left: 0; padding-left: 24px; border-left: 1px solid var(--c-aluminum); height: 24px; display: flex; align-items: center; gap: 12px;">
+          <div class="iso-cube-container" style="width: 24px; height: 24px;">
+            <div class="iso-cube">
+              <div class="cube-face front"></div>
+              <div class="cube-face back"></div>
+              <div class="cube-face right"></div>
+              <div class="cube-face left"></div>
+              <div class="cube-face top"></div>
+              <div class="cube-face bottom"></div>
+            </div>
+          </div>
+          <span class="gateway-text" style="font-size: 12px; line-height: 1;">POWERED_BY_GATEWAY.FM</span>
+        </div>
       </div>
 
       <div class="header-actions">
@@ -110,18 +128,8 @@
     </main>
 
     <!-- Tech Footer (Marquee) -->
-    <footer class="footer-tech text-mono marquee-container">
-      <div class="marquee-content">
-        <span class="footer-item"><strong>BRIDGE:</strong> <span id="bridgeAddr">--</span></span>
-        <span class="footer-item" style="margin-left: 48px;"><strong>ACCOUNT:</strong> <span
-            id="accountAddr">DISCONNECTED</span></span>
-        <span class="footer-item" style="margin-left: 48px;"><strong>NET:</strong> <span
-            id="networkInfo">--</span></span>
-        <span class="footer-item" style="margin-left: 48px;"><strong>SYSTEM:</strong> ONLINE</span>
-        <span class="footer-item" style="margin-left: 48px;"><strong>Ver:</strong> 1.0.4-beta</span>
-        <!-- Repeat for smooth loop effect if needed, but CSS handles one pass nicely -->
-      </div>
-    </footer>
+    <!-- Footer Removed -->
+    <!-- <footer class="footer-tech text-mono marquee-container"> ... </footer> -->
 
   </div>
 

@@ -649,3 +649,86 @@ body.success-state .receipt-item.success {
   text-align: center;
   border: 1px dashed var(--c-ink);
 }
+
+/* 6. Co-Branding (Gateway.fm) */
+:root {
+  --c-gateway: #8950FA;
+}
+
+.gateway-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: 48px;
+  cursor: help;
+}
+
+.iso-cube-container {
+  width: 24px;
+  height: 24px;
+  perspective: 400px;
+}
+
+.iso-cube {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  transform-style: preserve-3d;
+  transform: rotateX(-30deg) rotateY(45deg);
+  transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.gateway-badge:hover .iso-cube {
+  transform: rotateX(-20deg) rotateY(225deg) scale(1.2);
+}
+
+.cube-face {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--c-gateway);
+  background: rgba(137, 80, 250, 0.2);
+}
+
+.cube-face.front {
+  transform: rotateY(0deg) translateZ(12px);
+}
+
+.cube-face.right {
+  transform: rotateY(90deg) translateZ(12px);
+}
+
+.cube-face.back {
+  transform: rotateY(180deg) translateZ(12px);
+}
+
+.cube-face.left {
+  transform: rotateY(-90deg) translateZ(12px);
+}
+
+.cube-face.top {
+  transform: rotateX(90deg) translateZ(12px);
+}
+
+.cube-face.bottom {
+  transform: rotateX(-90deg) translateZ(12px);
+}
+
+.gateway-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-gateway);
+  opacity: 1;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+body.success-state .gateway-text {
+  color: var(--c-signal);
+}
+
+body.success-state .cube-face {
+  border-color: var(--c-signal);
+  background: rgba(0, 255, 136, 0.2);
+}

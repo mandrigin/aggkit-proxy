@@ -38,9 +38,7 @@
   const amountInput = document.getElementById("amount");
   const statusEl = document.getElementById("status");
   const balanceDisplay = document.getElementById("balanceDisplay"); // Updated ref
-  const bridgeAddrEl = document.getElementById("bridgeAddr");
-  const accountAddrEl = document.getElementById("accountAddr");
-  const networkInfoEl = document.getElementById("networkInfo");
+  // Footer elements removed
   const chainWarning = document.getElementById("chainWarning");
   const amountError = document.getElementById("amountError"); // New ref
 
@@ -255,11 +253,10 @@
       connectBtn.classList.add('connected');
       if (connectText) connectText.textContent = truncateAddr(userAddress);
 
-      accountAddrEl.textContent = userAddress;
-      bridgeAddrEl.textContent = BRIDGE_ADDRESS;
+      // Footer info removed
 
       const network = await provider.getNetwork();
-      networkInfoEl.textContent = `${network.chainId} (${network.name})`;
+      // networkInfo removed
 
       updateChainWarning(network.chainId);
       await updateBalance();
@@ -391,7 +388,7 @@
     });
   }
 
-  bridgeAddrEl.textContent = BRIDGE_ADDRESS;
+  // bridgeAddrEl removed
 
   // --- Scramble & Animation Effects ------------------------------------
 
