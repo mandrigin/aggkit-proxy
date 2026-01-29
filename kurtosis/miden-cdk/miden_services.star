@@ -9,6 +9,7 @@ These services replace the OP-Geth L2 in the standard kurtosis-cdk deployment.
 MIDEN_NODE_PORT = 57291
 MIDEN_PROXY_PORT = 8546
 FORWARDER_PORT = 8545  # Bridge expects L2 on 8545
+WEB_UI_PORT = 80
 
 # Default images
 DEFAULT_MIDEN_NODE_IMAGE = "miden-infra/miden-node:agglayer-v0.1"
@@ -87,12 +88,18 @@ def deploy(plan, miden_args, contract_setup_addresses, cdk_args):
     # This routes traffic from port 8545 (where bridge expects L2) to proxy on 8546
     forwarder = _deploy_l2_forwarder(plan, deployment_suffix)
 
+    # 4. Deploy web UI for deposits
+    deploy_web_ui = miden_args.get("deploy_web_ui", True)
+    web_ui = None
+    if deploy_web_ui:
+        web_ui = _deploy_web_ui(plan, deployment_suffix, bridge_address)
+
     # Build context
     proxy_url = "http://miden-proxy{}:{}".format(deployment_suffix, MIDEN_PROXY_PORT)
     forwarder_url = "http://miden-l2-forwarder{}:{}".format(deployment_suffix, FORWARDER_PORT)
     node_url = "http://miden-node{}:{}".format(deployment_suffix, MIDEN_NODE_PORT)
 
-    return {
+    ctx = {
         "node_service": miden_node,
         "proxy_service": miden_proxy,
         "forwarder_service": forwarder,
@@ -103,6 +110,10 @@ def deploy(plan, miden_args, contract_setup_addresses, cdk_args):
         "network_id": miden_network_id,
         "chain_id": miden_network_id,
     }
+    if web_ui:
+        ctx["web_ui_service"] = web_ui
+        ctx["web_ui_url"] = "http://miden-bridge-ui{}:{}".format(deployment_suffix, WEB_UI_PORT)
+    return ctx
 
 
 def _deploy_miden_node(plan, deployment_suffix, image):
@@ -220,6 +231,39 @@ stream {{
                 "/etc/nginx": config_artifact,
             },
             # Docker Desktop grouping label
+            labels={
+                DOCKER_PROJECT_LABEL: MIDEN_PROJECT_GROUP,
+            },
+        ),
+    )
+
+
+def _deploy_web_ui(plan, deployment_suffix, bridge_address):
+    """
+    Deploy the Miden Bridge web UI.
+
+    A simple single-page dApp that lets users send agglayer deposits
+    (bridge ETH from L1 to Miden) via a browser wallet.
+    """
+    service_name = "miden-bridge-ui" + deployment_suffix
+
+    return plan.add_service(
+        name=service_name,
+        config=ServiceConfig(
+            image=ImageBuildSpec(
+                image_name="miden-bridge-ui",
+                build_context_dir="../../web-ui",
+            ),
+            ports={
+                "http": PortSpec(
+                    number=WEB_UI_PORT,
+                    transport_protocol="TCP",
+                    application_protocol="http",
+                ),
+            },
+            env_vars={
+                "BRIDGE_ADDRESS": bridge_address,
+            },
             labels={
                 DOCKER_PROJECT_LABEL: MIDEN_PROJECT_GROUP,
             },

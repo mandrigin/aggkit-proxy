@@ -50,6 +50,9 @@ miden:
   # This account ID is used by the proxy to mint tokens for claims
   bridge_faucet_id: "0x000000000000000000000000000001"
 
+  # Deploy web UI for sending deposits (bridge ETH from L1 to Miden)
+  deploy_web_ui: true
+
   # Deploy pgweb for browsing bridge database
   deploy_pgweb: true
   pgweb_port: 8082

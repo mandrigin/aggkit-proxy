@@ -100,6 +100,9 @@ MIDEN_DEFAULTS = {
     # This is required for deposits to become claimable
     "deploy_aggkit": True,
 
+    # Web UI for sending deposits (bridge ETH from L1 to Miden)
+    "deploy_web_ui": True,
+
     # pgweb for DB browsing (optional)
     "deploy_pgweb": True,
     "pgweb_port": 8082,
@@ -255,6 +258,8 @@ def _print_summary(plan, l1_context, miden_context, bridge_context, miden_args):
     plan.print("  Miden Node: " + str(miden_context.get("node_url", "N/A")))
     plan.print("  Miden Proxy: " + str(miden_context.get("proxy_url", "N/A")))
     plan.print("  Bridge Service: " + str(bridge_context.get("rpc_url", "N/A")))
+    if miden_context.get("web_ui_url"):
+        plan.print("  Bridge Web UI: " + str(miden_context.get("web_ui_url")))
     if miden_args.get("deploy_pgweb", False):
         plan.print("  pgweb (DB): http://localhost:" + str(miden_args.get("pgweb_port", 8082)))
     plan.print("")

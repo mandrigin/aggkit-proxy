@@ -105,6 +105,20 @@ services:
       timeout: 5s
       retries: 5
 
+  # Bridge Web UI (deposit ETH from L1 to Miden)
+  bridge-ui:
+    image: miden-infra/bridge-ui
+    build:
+      context: ./web-ui
+      dockerfile: Dockerfile
+    environment:
+      BRIDGE_ADDRESS: ${BRIDGE_ADDRESS:-0xc8cbebf950b9df44d987c8619f092bea980ff038}
+    ports:
+      - "3000:80"
+    depends_on:
+      l1-anvil:
+        condition: service_healthy
+
   # Test runner container
   test-runner:
     image: miden-infra/miden-test-runner
