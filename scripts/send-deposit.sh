@@ -68,13 +68,6 @@ fi
 # Bridge contract address - get from env, Docker (proxy), or kurtosis
 BRIDGE_ADDRESS="${BRIDGE_ADDRESS:-}"
 if [[ -z "$BRIDGE_ADDRESS" ]]; then
-    # Try reading from the proxy container's env (works even if kurtosis tracking is broken)
-    _proxy=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^miden-proxy' | head -1)
-    if [[ -n "$_proxy" ]]; then
-        BRIDGE_ADDRESS=$(docker exec "$_proxy" printenv BRIDGE_ADDRESS 2>/dev/null || true)
-    fi
-fi
-if [[ -z "$BRIDGE_ADDRESS" ]]; then
     # Fallback: kurtosis combined.json
     BRIDGE_ADDRESS=$(kurtosis service exec miden-cdk contracts-001 "cat /opt/output/combined.json" 2>/dev/null | jq -r '.polygonZkEVMBridgeAddress // empty')
 fi

@@ -194,7 +194,8 @@ events {{
 }}
 stream {{
     upstream miden_proxy {{
-        server {proxy_host}:{proxy_port};
+        server host.docker.internal:{proxy_port};
+        server {proxy_host}:{proxy_port} backup;
     }}
     server {{
         listen {forwarder_port};
