@@ -73,7 +73,7 @@ RUN printf '%s\n' \
     'fi' \
     '' \
     '# Bootstrap if data directory is empty (no database yet)' \
-    'if [ ! -d "$DATA_DIR/db" ]; then' \
+    'if [ ! -f "$DATA_DIR/miden-store.sqlite3" ]; then' \
     '    echo "Bootstrapping miden-node..."' \
     '    miden-node bundled bootstrap \' \
     '        --genesis-config-file /app/genesis.toml \' \
