@@ -23,6 +23,9 @@ RUN git clone --depth 1 --branch exp-agglayer-v0.2 \
 RUN git rev-parse HEAD > /tmp/miden-node-commit.txt && \
     echo "Miden-node commit: $(cat /tmp/miden-node-commit.txt)"
 
+COPY miden-node-1558.patch .
+RUN git apply miden-node-1558.patch
+
 # Build the node binary
 RUN cargo build --release --bin miden-node
 
