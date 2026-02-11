@@ -42,7 +42,7 @@ miden:
   miden_node_port: 57291
 
   # Miden RPC proxy image
-  # Build with: docker build -t miden-infra/miden-proxy:latest .
+  # Build with: docker build https://github.com/gateway-fm/miden-agglayer.git#master -t miden-infra/miden-proxy:latest
   miden_proxy_image: "miden-infra/miden-proxy:latest"
   miden_proxy_port: 8546
 

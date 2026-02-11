@@ -65,8 +65,6 @@ def deploy(plan, miden_args, contract_setup_addresses, cdk_args):
         deployment_suffix,
         miden_proxy_image,
         miden_network_id,
-        bridge_address,
-        bridge_faucet_id,
     )
 
     # Wait for proxy to be ready
@@ -144,7 +142,7 @@ def _deploy_miden_node(plan, deployment_suffix, image):
     )
 
 
-def _deploy_miden_proxy(plan, deployment_suffix, image, network_id, bridge_address, faucet_id):
+def _deploy_miden_proxy(plan, deployment_suffix, image, network_id):
     """Deploy Miden RPC proxy service."""
     service_name = "miden-proxy" + deployment_suffix
     miden_node_url = "http://miden-node{}:{}".format(deployment_suffix, MIDEN_NODE_PORT)
@@ -160,13 +158,13 @@ def _deploy_miden_proxy(plan, deployment_suffix, image, network_id, bridge_addre
                     application_protocol="http",
                 ),
             },
+            cmd=[
+                "--chain-id={}".format(network_id),
+                "--miden-node={}".format(miden_node_url),
+                "--miden-store-dir=/var/lib/miden-agglayer-service",
+                "--port={}".format(MIDEN_PROXY_PORT),
+            ],
             env_vars={
-                "CHAIN_ID": str(network_id),
-                "MIDEN_RPC_URL": miden_node_url,
-                "MIDEN_STORE_PATH": "/app/data/miden-client",
-                "BRIDGE_FAUCET_ID": faucet_id,
-                "BRIDGE_ADDRESS": bridge_address,
-                "LISTEN_PORT": str(MIDEN_PROXY_PORT),
                 "RUST_LOG": "info",
             },
             # Docker Desktop grouping label
