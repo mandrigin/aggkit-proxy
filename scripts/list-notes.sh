@@ -8,7 +8,7 @@ set -euo pipefail
 
 ENCLAVE="${1:-miden-cdk}"
 SERVICE="${2:-miden-node-001}"
-DB_PATH="/data/miden-store.sqlite3"
+DB_PATH="/app/data/miden-store.sqlite3"
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -30,10 +30,7 @@ SELECT
   CASE WHEN consumed_at IS NOT NULL THEN 'YES' ELSE 'NO' END as consumed,
   coalesce(consumed_at, '') as consumed_at,
   hex(sender) as sender,
-  CASE WHEN length(inputs) = 18
-    THEN hex(substr(inputs, 3, 16))
-    ELSE '(see inputs)'
-  END as recipient,
+  coalesce(hex(target_account_id), '(none)') as target,
   tag,
   CASE note_type
     WHEN 1 THEN 'Public'

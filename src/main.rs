@@ -32,9 +32,7 @@ use alloy_primitives::{Address, Bytes};
 use miden_protocol::account::{AccountId, AccountIdV0};
 
 // Miden agglayer function for AccountId -> 20-byte destination conversion
-use miden_agglayer::EthAddressFormat;
-
-// Miden standards for P2ID recipient building (needed for expected_output_recipients)
+use miden_agglayer::{EthAddressFormat, EthAmount, ExitRoot, UpdateGerNote};
 
 /// Get chain ID from environment variable, defaults to 2 (agglayer Miden network ID)
 fn get_chain_id() -> u64 {
@@ -507,8 +505,8 @@ struct ClaimSubmissionData {
     destination_network: u32,
     /// Destination address (20 bytes)
     destination_address: [u8; 20],
-    /// Amount in Miden raw units (8 decimals, scaled from 18-decimal wei)
-    amount: u64,
+    /// Amount as raw 32-byte big-endian uint256 (wei, 18 decimals)
+    amount_wei: [u8; 32],
     /// Metadata bytes
     metadata: Vec<u8>,
 
@@ -546,7 +544,7 @@ async fn submit_claim_to_miden(
 
     info!(
         recipient = hex::encode(&claim_data.recipient_account_bytes),
-        amount = claim_data.amount,
+        amount_wei = hex::encode(&claim_data.amount_wei),
         rpc_endpoint = %config.rpc_endpoint,
         "Starting Miden claim submission (CLAIM note approach)"
     );
@@ -731,14 +729,13 @@ async fn submit_claim_to_miden(
 
             info!("    - Destination network: {}", claim_data.destination_network);
             info!("    - Destination address: {}", hex::encode(&claim_data.destination_address));
-            info!("    - Amount (Miden units): {}", claim_data.amount);
+            info!("    - Amount (wei bytes): {}", hex::encode(&claim_data.amount_wei));
             info!("    - Creator account: {}", submitter_account_id);
             info!("    - Faucet account: {}", agglayer_faucet_id);
             info!("    - Recipient account: {}", recipient_account_id);
 
-            // Convert amount to 32-byte big-endian uint256
-            let mut amount_bytes = [0u8; 32];
-            amount_bytes[24..32].copy_from_slice(&claim_data.amount.to_be_bytes());
+            // Use raw wei bytes directly for leaf data (needed for merkle proof verification)
+            let amount_bytes = claim_data.amount_wei;
 
             // Metadata hash (keccak256 of metadata)
             let metadata_hash: [u8; 32] = {
@@ -749,8 +746,20 @@ async fn submit_claim_to_miden(
                 out
             };
 
-            // Miden claim amount (scaled down)
-            let miden_claim_amount = Felt::new(claim_data.amount);
+            // Scale wei amount to Miden token units (÷ 10^scale)
+            // The faucet was created with scale=10, so: miden_amount = wei_amount / 10^10
+            // e.g. 100000000000000000 wei (0.1 ETH) -> 10000000 Miden units
+            let eth_amount = miden_agglayer::EthAmount::new(amount_bytes);
+            let miden_claim_amount = eth_amount
+                .scale_to_token_amount(10)
+                .map_err(|e| {
+                    ClientError::NoteCreationError(format!(
+                        "Failed to scale amount to Miden tokens: {}",
+                        e
+                    ))
+                })?;
+            info!("    - Amount (wei): {}", hex::encode(&claim_data.amount_wei));
+            info!("    - Amount (Miden scaled): {:?}", miden_claim_amount);
 
             // Generate RNG for note creation
             let seed = generate_rng_seed();
@@ -830,7 +839,7 @@ async fn submit_claim_to_miden(
             info!("║    TX ID:      {}", miden_tx_id);
             info!("║    Executor:   {} (submitter)", submitter_account_id);
             info!("║    Recipient:  {}", recipient_account_id);
-            info!("║    Amount:     {} Miden units", claim_data.amount);
+            info!("║    Amount:     {:?} Miden units (scaled from wei)", miden_claim_amount);
             info!("║    Block:      {}", block_num);
             info!("║    Time:       {:.2}s", elapsed.as_secs_f64());
             info!("║  Faucet will auto-consume and mint P2ID to recipient.            ║");
@@ -841,6 +850,139 @@ async fn submit_claim_to_miden(
     })
     .await
     .map_err(|e| ClientError::TransactionError(format!("Task join error: {}", e)))?;
+
+    result
+}
+
+/// Submit an UPDATE_GER note to the Miden node so the bridge account stores the GER.
+///
+/// This is the critical missing piece: when aggoracle sends `insertGlobalExitRoot`,
+/// we must inject the GER into the bridge's on-chain storage map. Otherwise, the
+/// faucet's CLAIM note script calls `verify_leaf_bridge` → looks up GER → finds
+/// nothing → "all notes failed to be executed".
+///
+/// Flow: create UpdateGerNote → submit from GER manager (ephemeral account) →
+/// bridge NTX auto-consumes → GER stored in bridge storage map.
+async fn submit_ger_to_miden(
+    config: MidenSubmissionConfig,
+    global_exit_root: [u8; 32],
+) -> Result<u64, ClientError> {
+    use miden_client::transaction::{OutputNote, TransactionRequestBuilder};
+    use miden_protocol::crypto::rand::RpoRandomCoin;
+    use miden_protocol::Felt;
+
+    let ger_hex = hex::encode(&global_exit_root);
+    info!(ger = %ger_hex, "Starting GER submission to Miden node");
+
+    // Get required account IDs
+    let ger_manager_id = config.ephemeral_account_id.ok_or_else(|| {
+        ClientError::AccountNotFound(
+            "GER manager (ephemeral) account not initialized".to_string(),
+        )
+    })?;
+    let bridge_id = config.bridge_account_id.ok_or_else(|| {
+        ClientError::AccountNotFound("Bridge account not initialized".to_string())
+    })?;
+
+    info!(
+        ger_manager = %ger_manager_id,
+        bridge = %bridge_id,
+        "GER injection accounts resolved"
+    );
+
+    let runtime_handle = tokio::runtime::Handle::current();
+
+    let result = tokio::task::spawn_blocking(move || {
+        runtime_handle.block_on(async {
+            // Parse configured faucet ID (needed for client config seed)
+            let configured_faucet_id =
+                parse_account_id_from_hex(&config.bridge_faucet_id_hex).map_err(|e| {
+                    ClientError::InitializationError(format!(
+                        "Invalid configured faucet ID: {}",
+                        e
+                    ))
+                })?;
+
+            // Initialize miden client
+            let client_config = MidenClientConfig {
+                rpc_endpoint: config.rpc_endpoint.clone(),
+                store_path: config.store_path.clone(),
+                bridge_faucet_id: configured_faucet_id,
+            };
+            let keystore_path = config
+                .store_path
+                .parent()
+                .map(|p| p.join("keystore"))
+                .unwrap_or_else(|| PathBuf::from("/app/data/keystore"));
+            std::fs::create_dir_all(&keystore_path).map_err(|e| {
+                ClientError::InitializationError(format!(
+                    "Failed to create keystore dir: {}",
+                    e
+                ))
+            })?;
+            let keystore = miden_client::keystore::FilesystemKeyStore::new(keystore_path)
+                .map_err(|e| {
+                    ClientError::InitializationError(format!(
+                        "Failed to create keystore: {}",
+                        e
+                    ))
+                })?;
+            let keystore = Arc::new(keystore);
+
+            let mut client = init_client(&client_config, keystore).await?;
+
+            // Sync state
+            let sync_result = client.sync_state().await.map_err(|e| {
+                ClientError::SyncError(format!("GER sync failed: {}: {:?}", e, e))
+            })?;
+            let block_num = sync_result.block_num.as_u32();
+            info!(block_num, "GER: state synced");
+
+            // Create UpdateGerNote
+            let ger = ExitRoot::new(global_exit_root);
+            let seed = generate_rng_seed();
+            let mut rng = RpoRandomCoin::new(seed.map(Felt::new).into());
+
+            let update_ger_note =
+                UpdateGerNote::create(ger, ger_manager_id, bridge_id, &mut rng).map_err(
+                    |e| {
+                        ClientError::NoteCreationError(format!(
+                            "Failed to create UpdateGerNote: {}",
+                            e
+                        ))
+                    },
+                )?;
+            info!(
+                note_id = %update_ger_note.id(),
+                "UpdateGerNote created"
+            );
+
+            // Submit as output note from GER manager
+            let tx_request = TransactionRequestBuilder::new()
+                .own_output_notes(vec![OutputNote::Full(update_ger_note)])
+                .build()
+                .map_err(|e| {
+                    ClientError::TransactionError(format!(
+                        "Failed to build GER update request: {}",
+                        e
+                    ))
+                })?;
+
+            let tx_id =
+                submit_transaction(&mut client, ger_manager_id, tx_request).await?;
+
+            info!(
+                tx_id = %tx_id,
+                ger = %ger_hex,
+                block_num,
+                "UpdateGerNote submitted to Miden node"
+            );
+
+            Ok::<u64, ClientError>(block_num as u64)
+        })
+    })
+    .await
+    .map_err(|e| ClientError::TransactionError(format!("GER task join error: {}", e)))?;
 
     result
 }
@@ -1159,6 +1301,35 @@ impl EthApiServer for EthApiImpl {
                                         ger = %hex::encode(&global_exit_root),
                                         "GER injection processed, UpdateHashChainValue event emitted"
                                     );
+
+                                    // Submit UpdateGerNote to Miden node so bridge stores GER on-chain.
+                                    if let Some(config) = &self.miden_config {
+                                        let config_clone = config.clone();
+                                        let ger_bytes = global_exit_root;
+                                        match submit_ger_to_miden(config_clone, ger_bytes).await {
+                                            Ok(miden_block) => {
+                                                info!(
+                                                    ger = %hex::encode(&global_exit_root),
+                                                    miden_block,
+                                                    "UpdateGerNote submitted to Miden node successfully"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                error!(
+                                                    ger = %hex::encode(&global_exit_root),
+                                                    error = %e,
+                                                    "Failed to submit UpdateGerNote to Miden node - \
+                                                     synthetic events stored but CLAIM notes will fail \
+                                                     until GER is injected on-chain"
+                                                );
+                                            }
+                                        }
+                                    } else {
+                                        warn!(
+                                            ger = %hex::encode(&global_exit_root),
+                                            "No Miden config available - skipping UpdateGerNote submission"
+                                        );
+                                    }
                                 } else {
                                     debug!(
                                         ger = %hex::encode(&global_exit_root),
@@ -1227,6 +1398,36 @@ impl EthApiServer for EthApiImpl {
                                         ger = %hex::encode(&global_exit_root),
                                         "GER injection processed, UpdateHashChainValue event emitted"
                                     );
+
+                                    // Submit UpdateGerNote to Miden node so bridge stores GER on-chain.
+                                    // Without this, the faucet's CLAIM note script fails verify_leaf_bridge.
+                                    if let Some(config) = &self.miden_config {
+                                        let config_clone = config.clone();
+                                        let ger_bytes = global_exit_root;
+                                        match submit_ger_to_miden(config_clone, ger_bytes).await {
+                                            Ok(miden_block) => {
+                                                info!(
+                                                    ger = %hex::encode(&global_exit_root),
+                                                    miden_block,
+                                                    "UpdateGerNote submitted to Miden node successfully"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                error!(
+                                                    ger = %hex::encode(&global_exit_root),
+                                                    error = %e,
+                                                    "Failed to submit UpdateGerNote to Miden node - \
+                                                     synthetic events stored but CLAIM notes will fail \
+                                                     until GER is injected on-chain"
+                                                );
+                                            }
+                                        }
+                                    } else {
+                                        warn!(
+                                            ger = %hex::encode(&global_exit_root),
+                                            "No Miden config available - skipping UpdateGerNote submission"
+                                        );
+                                    }
                                 } else {
                                     debug!(
                                         ger = %hex::encode(&global_exit_root),
@@ -1435,25 +1636,9 @@ impl EthApiServer for EthApiImpl {
 
         // Step 10: Submit to Miden network (blocking - errors propagate to RPC client)
         if let Some(ref config) = self.miden_config {
-            // Scale from 18 decimals (ETH/ERC20 wei) to 8 decimals (Miden faucet).
-            // Divide by 10^10 to drop the 10 least-significant decimal places.
-            // Example: 0.1 ETH = 10^17 wei / 10^10 = 10_000_000 raw = 0.10000000 Miden
-            const DECIMAL_SCALE: u128 = 10_000_000_000; // 10^10 (18 - 8 = 10)
-
-            let scaled_amount = claim_params.amount / alloy_primitives::U256::from(DECIMAL_SCALE);
-            let amount_u64: u64 = scaled_amount.try_into().unwrap_or_else(|_| {
-                warn!(
-                    original_amount = %claim_params.amount,
-                    scaled_amount = %scaled_amount,
-                    "Scaled amount exceeds u64::MAX, capping"
-                );
-                u64::MAX
-            });
-            info!(
-                wei = %claim_params.amount,
-                miden_raw = amount_u64,
-                "Converted amount: 18 decimals → 8 decimals (÷ 10^10)"
-            );
+            // Pass raw wei amount as 32-byte big-endian uint256.
+            // Scaling to Miden token units happens inside submit_claim_to_miden().
+            let amount_wei_bytes: [u8; 32] = claim_params.amount.to_be_bytes::<32>();
 
             // Build full CLAIM note submission data from claimAsset calldata
             let claim_data = ClaimSubmissionData {
@@ -1471,7 +1656,7 @@ impl EthApiServer for EthApiImpl {
                 origin_token_address: claim_params.origin_token_address.0 .0,
                 destination_network: claim_params.destination_network,
                 destination_address: claim_params.destination_address.0 .0,
-                amount: amount_u64,
+                amount_wei: amount_wei_bytes,
                 metadata: claim_params.metadata.to_vec(),
                 // Miden-specific
                 recipient_account_bytes: miden_account_id.to_bytes(),
@@ -1482,7 +1667,7 @@ impl EthApiServer for EthApiImpl {
             let log_origin_network = claim_data.origin_network;
             let log_origin_token_address = claim_data.origin_token_address;
             let log_destination_address = claim_data.destination_address;
-            let log_amount = claim_data.amount;
+            let log_amount_wei = claim_data.amount_wei;
 
             info!(
                 tx_hash = %tx_hash,
@@ -1517,6 +1702,11 @@ impl EthApiServer for EthApiImpl {
                         .get_block_hash(block_num)
                         .unwrap_or([0u8; 32]);
 
+                    // Extract u64 from wei bytes for log synthesis
+                    // Take last 8 bytes (big-endian) - sufficient for amounts < u64::MAX
+                    let log_amount = u64::from_be_bytes(
+                        log_amount_wei[24..32].try_into().unwrap_or([0u8; 8])
+                    );
                     self.state.log_store.add_claim_event(
                         get_bridge_address(),
                         block_num,
