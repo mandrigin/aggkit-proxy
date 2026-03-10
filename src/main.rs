@@ -35,7 +35,6 @@ use miden_protocol::account::{AccountId, AccountIdV0};
 use miden_agglayer::EthAddressFormat;
 
 // Miden standards for P2ID recipient building (needed for expected_output_recipients)
-use miden_standards::note::P2idNoteStorage;
 
 /// Get chain ID from environment variable, defaults to 2 (agglayer Miden network ID)
 fn get_chain_id() -> u64 {
@@ -540,15 +539,10 @@ async fn submit_claim_to_miden(
     config: MidenSubmissionConfig,
     claim_data: ClaimSubmissionData,
 ) -> Result<u64, ClientError> {
-    use miden_client::crypto::FeltRng;
-    use miden_client::note::NoteType;
-    use miden_client::rpc::domain::account::AccountStorageRequirements;
-    use miden_client::transaction::{ForeignAccount, TransactionRequestBuilder};
+    use miden_client::transaction::TransactionRequestBuilder;
     use miden_protocol::crypto::rand::RpoRandomCoin;
-    use miden_protocol::note::NoteTag;
-    use miden_protocol::{Felt, FieldElement, Word};
+    use miden_protocol::Felt;
     use miden_rpc_proxy::{create_bridge_claim_note, BridgeClaimParams};
-    use miden_standards::note::P2idNote;
 
     info!(
         recipient = hex::encode(&claim_data.recipient_account_bytes),
@@ -762,15 +756,6 @@ async fn submit_claim_to_miden(
             let seed = generate_rng_seed();
             let mut rng = RpoRandomCoin::new(seed.map(Felt::new).into());
 
-            // Generate P2ID serial number for Phase 2
-            let p2id_serial_number: Word = [
-                rng.draw_element(),
-                rng.draw_element(),
-                rng.draw_element(),
-                rng.draw_element(),
-            ].into();
-            info!("  P2ID serial number: {:?}", p2id_serial_number);
-
             let bridge_claim_params = BridgeClaimParams {
                 smt_proof_local_exit_root: claim_data.smt_proof_local_exit_root.clone(),
                 smt_proof_rollup_exit_root: claim_data.smt_proof_rollup_exit_root.clone(),
@@ -788,10 +773,6 @@ async fn submit_claim_to_miden(
                 agglayer_faucet_account_id: agglayer_faucet_id,
             };
             info!("  ✓ BridgeClaimParams built successfully");
-
-            // Save the P2ID serial number before bridge_claim_params is moved
-            // This will be used to build the expected P2ID recipient for Phase 2
-            let saved_p2id_serial_number = p2id_serial_number;
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
             info!("║  STEP 5: Creating CLAIM note                                     ║");
@@ -815,261 +796,44 @@ async fn submit_claim_to_miden(
                 .join(""));
 
             // ============================================================================
-            // TWO-PHASE CLAIM NOTE FLOW
+            // CLAIM NOTE SUBMISSION
             // ============================================================================
-            // Phase 1: Submitter creates CLAIM note as OUTPUT (commits to network)
-            // Phase 2: Faucet consumes CLAIM note as INPUT (mints P2ID to recipient)
-            // This matches the bridge_in.rs unit test flow.
+            // Submit the CLAIM note to the network. The faucet auto-consumes CLAIM
+            // notes and mints P2ID to the recipient — no Phase 2 needed.
             // ============================================================================
 
             info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!("║  STEP 6: Phase 1 - Submit CLAIM note to network                   ║");
+            info!("║  STEP 6: Submit CLAIM note to network                            ║");
             info!("╚══════════════════════════════════════════════════════════════════╝");
-            info!("  The CLAIM note must be committed to the network before the faucet");
-            info!("  can consume it. Submitting from ephemeral account...");
+            info!("  Submitting CLAIM note from ephemeral account...");
             info!("    - Executor: submitter ({})", submitter_account_id);
-            info!("    - Output: CLAIM note (to be consumed by faucet later)");
+            info!("    - Output: CLAIM note (faucet will auto-consume)");
 
             // Build transaction request with CLAIM note as output
             use miden_client::transaction::OutputNote;
             let claim_output_note = OutputNote::Full(claim_note.clone());
-            let phase1_tx_request = TransactionRequestBuilder::new()
+            let tx_request = TransactionRequestBuilder::new()
                 .own_output_notes(vec![claim_output_note])
                 .build()
                 .map_err(|e| ClientError::TransactionError(format!(
-                    "Failed to build phase 1 request: {}", e
+                    "Failed to build claim request: {}", e
                 )))?;
 
-            info!("  Submitting CLAIM note creation transaction...");
             let start_time = std::time::Instant::now();
-            let phase1_tx_id = submit_transaction(&mut client, submitter_account_id, phase1_tx_request).await?;
-            let phase1_elapsed = start_time.elapsed();
-            info!("  ✓ Phase 1 complete - CLAIM note submitted to network");
-            info!("    TX ID: {}", phase1_tx_id);
-            info!("    Time: {:.2}s", phase1_elapsed.as_secs_f64());
-
-            // Wait for the CLAIM note to be committed to a block
-            // The note must be in a proven block before it can be consumed.
-            // We poll sync_state until the block number increases.
-            info!("  Waiting for CLAIM note to be included in a proven block...");
-
-            // First sync to get current block height
-            let initial_sync = client.sync_state().await
-                .map_err(|e| ClientError::SyncError(format!("Initial sync failed: {}", e)))?;
-            let initial_block = initial_sync.block_num.as_u32();
-            info!("    Initial block: {}", initial_block);
-
-            // Poll until block advances (note is committed) or timeout
-            let max_wait_secs = 60; // Maximum wait time
-            let poll_interval = std::time::Duration::from_secs(2);
-            let start_wait = std::time::Instant::now();
-            let mut current_block = initial_block;
-
-            loop {
-                if start_wait.elapsed().as_secs() > max_wait_secs {
-                    warn!("    ⚠ Timeout waiting for block to advance. Attempting Phase 2 anyway...");
-                    break;
-                }
-
-                // Wait before polling
-                tokio::time::sleep(poll_interval).await;
-
-                // Sync and check block height
-                match client.sync_state().await {
-                    Ok(sync_result) => {
-                        current_block = sync_result.block_num.as_u32();
-                        info!("    Polled block: {} (waiting for > {})", current_block, initial_block);
-
-                        if current_block > initial_block {
-                            info!("  ✓ Block advanced! CLAIM note should be committed.");
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        warn!("    Sync error during poll: {}. Retrying...", e);
-                    }
-                }
-            }
-
-            info!("  ✓ Synced to block {}", current_block);
-
-            // ============================================================================
-            // REGISTER P2ID SCRIPT (ONCE ONLY)
-            // ============================================================================
-            // The CLAIM note, when consumed, creates a P2ID note as output.
-            // The executor needs the P2ID script to be registered in the store.
-            // We only need to do this ONCE per proxy lifetime (not per claim).
-            // Use a static flag to track registration state.
-            // ============================================================================
-            use std::sync::atomic::{AtomicBool, Ordering};
-            static P2ID_SCRIPT_REGISTERED: AtomicBool = AtomicBool::new(false);
-
-            if !P2ID_SCRIPT_REGISTERED.load(Ordering::Acquire) {
-                info!("╔══════════════════════════════════════════════════════════════════╗");
-                info!("║  STEP 6b: Register P2ID script (ONE-TIME)                         ║");
-                info!("╚══════════════════════════════════════════════════════════════════╝");
-                info!("  The CLAIM note creates a P2ID note output.");
-                info!("  Registering P2ID script in the store (only once at first claim)...");
-
-                // Use a null/burn address (0x0) as recipient for the dummy P2ID note
-                // This avoids sending to a real recipient
-                let null_account_id = submitter_account_id; // Send to self (will be ignored anyway)
-
-                // Create a dummy P2ID note (with no assets) to register the script
-                let p2id_note = P2idNote::create(
-                    submitter_account_id,    // sender
-                    null_account_id,         // target: send to self (dummy registration)
-                    vec![],                  // no assets needed - just registering script
-                    NoteType::Public,        // MUST be public to register on network
-                    Default::default(),      // no attachment
-                    &mut rng,
-                ).map_err(|e| ClientError::NoteCreationError(format!(
-                    "Failed to create P2ID note for script registration: {}", e
-                )))?;
-                info!("  ✓ P2ID note created for script registration");
-                info!("    Note ID: {}", p2id_note.id());
-
-                // Submit the P2ID note to register the script
-                let p2id_output_note = OutputNote::Full(p2id_note);
-                let p2id_tx_request = TransactionRequestBuilder::new()
-                    .own_output_notes(vec![p2id_output_note])
-                    .build()
-                    .map_err(|e| ClientError::TransactionError(format!(
-                        "Failed to build P2ID script registration request: {}", e
-                    )))?;
-
-                info!("  Submitting P2ID note to register script...");
-                let p2id_tx_id = submit_transaction(&mut client, submitter_account_id, p2id_tx_request).await?;
-                info!("  ✓ P2ID script registered");
-                info!("    TX ID: {}", p2id_tx_id);
-
-                // Sync to ensure P2ID script is in store
-                client.sync_state().await
-                    .map_err(|e| ClientError::SyncError(format!("Sync after P2ID registration failed: {}", e)))?;
-                info!("  ✓ Synced after P2ID script registration");
-
-                // Mark as registered so we don't do this again
-                P2ID_SCRIPT_REGISTERED.store(true, Ordering::Release);
-                info!("  ✓ P2ID script registration complete (will not repeat)");
-            } else {
-                info!("  ✓ P2ID script already registered (skipping)");
-            }
-
-            info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!("║  STEP 7: Phase 2 - Faucet consumes CLAIM note                     ║");
-            info!("╚══════════════════════════════════════════════════════════════════╝");
-            info!("  Now the faucet will consume the CLAIM note and mint P2ID...");
-            info!("    - Executor: faucet ({})", agglayer_faucet_id);
-            info!("    - Input: CLAIM note (now on network)");
-            info!("    - Output: P2ID note to recipient");
-
-            // Get bridge account ID for FPI (Foreign Procedure Invocation)
-            // The CLAIM note script does FPI to the bridge account to verify exit roots
-            let bridge_account_id = config.bridge_account_id.ok_or_else(|| {
-                ClientError::AccountNotFound("Bridge account ID not configured".to_string())
-            })?;
-            info!("    - Foreign account (FPI): bridge ({})", bridge_account_id);
-
-            // Create foreign account reference for the bridge account
-            // The bridge account is public, and we don't need specific storage slots
-            let foreign_account = ForeignAccount::public(
-                bridge_account_id,
-                AccountStorageRequirements::default(),
-            ).map_err(|e| ClientError::TransactionError(format!(
-                "Failed to create foreign account: {}", e
-            )))?;
-
-            // Build the expected P2ID recipient - this tells the client what output note to expect
-            // from the faucet transaction. Uses the same serial number we passed to BridgeClaimParams.
-            info!("  Building expected P2ID recipient for output note tracking...");
-            let expected_p2id_recipient = P2idNoteStorage::new(recipient_account_id)
-                .into_recipient(saved_p2id_serial_number);
-            info!("  ✓ Expected P2ID recipient built (serial: {:?})", saved_p2id_serial_number);
-
-            // Build transaction request with:
-            // - Input: CLAIM note (to be consumed by faucet)
-            // - Foreign accounts: bridge account (for FPI during CLAIM processing)
-            // - Expected output recipients: P2ID note that faucet will mint to recipient
-            let phase2_tx_request = TransactionRequestBuilder::new()
-                .input_notes(vec![(claim_note, None)])
-                .foreign_accounts([foreign_account])
-                .expected_output_recipients(vec![expected_p2id_recipient])
-                .build()
-                .map_err(|e| ClientError::TransactionError(format!(
-                    "Failed to build phase 2 request: {}", e
-                )))?;
-            info!("  ✓ TransactionRequest built successfully (with bridge as foreign account, expected P2ID output)");
-
-            info!("  Submitting faucet transaction to consume CLAIM and mint P2ID...");
-            info!("  (This may take several seconds for proving)");
-
-            // Submit the transaction from the faucet account
-            // The faucet consumes the CLAIM note and mints a P2ID note to the recipient
-            let start_time = std::time::Instant::now();
-            let miden_tx_id = submit_transaction(&mut client, agglayer_faucet_id, phase2_tx_request).await?;
+            let miden_tx_id = submit_transaction(&mut client, submitter_account_id, tx_request).await?;
             let elapsed = start_time.elapsed();
 
-            info!("  ✓ Transaction submitted successfully!");
-            info!("  → Miden TX ID: {}", miden_tx_id);
-            info!("  → Proving time: {:.2}s", elapsed.as_secs_f64());
-            info!("  → Current block: {}", block_num);
-
-            // Sync to find the output P2ID note created for the recipient
-            info!("  Syncing to find output P2ID note...");
-            let mut output_note_id: Option<String> = None;
-            let mut output_note_recipient: Option<String> = None;
-            if let Ok(sync_result) = client.sync_state().await {
-                info!("    Synced to block {}", sync_result.block_num.as_u32());
-                info!("    New public notes: {}", sync_result.new_public_notes.len());
-
-                // List new note IDs (these are NoteIds, not full records)
-                for note_id in &sync_result.new_public_notes {
-                    let note_id_hex = format!("0x{}", hex::encode(note_id.as_bytes()));
-                    info!("    → New note: {}", note_id_hex);
-                    // Save the last one as the likely P2ID output note
-                    output_note_id = Some(note_id_hex.clone());
-                }
-
-                // Try to get full note details from the store
-                use miden_client::store::NoteFilter;
-                if let Ok(input_notes) = client.get_input_notes(NoteFilter::All).await {
-                    for note_record in &input_notes {
-                        if let Some(metadata) = note_record.metadata() {
-                            let sender = metadata.sender();
-                            if sender == agglayer_faucet_id {
-                                let note_id_hex = format!("0x{}", hex::encode(note_record.id().as_bytes()));
-                                output_note_id = Some(note_id_hex.clone());
-
-                                // Extract recipient from note inputs (first input is target account ID in P2ID)
-                                let details = note_record.details();
-                                let storage = details.storage();
-                                if storage.num_items() > 0 {
-                                    let target_felt = storage.items()[0].as_int();
-                                    output_note_recipient = Some(format!("0x{:x}", target_felt));
-                                    info!("    ✓ P2ID note {} → recipient: 0x{:x}", note_id_hex, target_felt);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
             info!("╔══════════════════════════════════════════════════════════════════╗");
-            info!("║  CLAIM PROCESSING COMPLETE                                        ║");
+            info!("║  CLAIM NOTE SUBMITTED                                            ║");
             info!("╠══════════════════════════════════════════════════════════════════╣");
             info!("║  Summary:                                                        ║");
             info!("║    TX ID:      {}", miden_tx_id);
-            info!("║    Executor:   {} (faucet)", agglayer_faucet_id);
+            info!("║    Executor:   {} (submitter)", submitter_account_id);
             info!("║    Recipient:  {}", recipient_account_id);
             info!("║    Amount:     {} Miden units", claim_data.amount);
             info!("║    Block:      {}", block_num);
             info!("║    Time:       {:.2}s", elapsed.as_secs_f64());
-            if let Some(ref p2id_note) = output_note_id {
-                info!("║    P2ID Note:  {}", p2id_note);
-            }
-            if let Some(ref p2id_recipient) = output_note_recipient {
-                info!("║    P2ID To:    {}", p2id_recipient);
-            }
+            info!("║  Faucet will auto-consume and mint P2ID to recipient.            ║");
             info!("╚══════════════════════════════════════════════════════════════════╝");
 
             Ok::<u64, ClientError>(block_num as u64)

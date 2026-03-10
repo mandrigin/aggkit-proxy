@@ -25,9 +25,9 @@ TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
 # Copy SQLite DB with WAL (required for fresh data)
-docker cp "$NODE_CONTAINER:/data/miden-store.sqlite3" "$TMPDIR/miden-store.sqlite3" 2>/dev/null
-docker cp "$NODE_CONTAINER:/data/miden-store.sqlite3-wal" "$TMPDIR/miden-store.sqlite3-wal" 2>/dev/null || true
-docker cp "$NODE_CONTAINER:/data/miden-store.sqlite3-shm" "$TMPDIR/miden-store.sqlite3-shm" 2>/dev/null || true
+docker cp "$NODE_CONTAINER:/app/data/miden-store.sqlite3" "$TMPDIR/miden-store.sqlite3" 2>/dev/null
+docker cp "$NODE_CONTAINER:/app/data/miden-store.sqlite3-wal" "$TMPDIR/miden-store.sqlite3-wal" 2>/dev/null || true
+docker cp "$NODE_CONTAINER:/app/data/miden-store.sqlite3-shm" "$TMPDIR/miden-store.sqlite3-shm" 2>/dev/null || true
 
 DB="$TMPDIR/miden-store.sqlite3"
 
