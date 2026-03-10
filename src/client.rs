@@ -10,13 +10,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use miden_agglayer::{create_claim_note, ClaimNoteParams};
+use miden_agglayer::{
+    create_claim_note, ClaimNoteStorage, EthAddressFormat, EthAmount, ExitRoot, GlobalIndex,
+    LeafData, MetadataHash, ProofData, SmtNode,
+};
 use miden_client::Client;
 use miden_protocol::{
     account::AccountId,
     crypto::rand::FeltRng,
-    note::{Note, NoteTag},
-    Felt, Word,
+    note::Note,
+    Felt,
 };
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
@@ -104,17 +107,16 @@ impl<C> MidenClientWrapper<C> {
 
 /// Parameters for creating a bridge CLAIM note.
 ///
-/// These parameters are extracted from the claimAsset calldata and used to
-/// create a CLAIM note via miden-agglayer's create_claim_note().
+/// Uses the typed representations from miden-agglayer 0.14.
 #[derive(Debug, Clone)]
 pub struct BridgeClaimParams {
     // === SMT Proof Data ===
-    /// SMT proof for local exit root (32 siblings * 8 felts each = 256 felts)
-    pub smt_proof_local_exit_root: Vec<Felt>,
-    /// SMT proof for rollup exit root (32 siblings * 8 felts each = 256 felts)
-    pub smt_proof_rollup_exit_root: Vec<Felt>,
-    /// Global index (uint256 as 8 u32 felts)
-    pub global_index: [Felt; 8],
+    /// SMT proof for local exit root (32 siblings, each 32 bytes)
+    pub smt_proof_local_exit_root: Vec<[u8; 32]>,
+    /// SMT proof for rollup exit root (32 siblings, each 32 bytes)
+    pub smt_proof_rollup_exit_root: Vec<[u8; 32]>,
+    /// Global index (uint256 as 32 bytes)
+    pub global_index: [u8; 32],
     /// Mainnet exit root hash (32 bytes)
     pub mainnet_exit_root: [u8; 32],
     /// Rollup exit root hash (32 bytes)
@@ -122,47 +124,34 @@ pub struct BridgeClaimParams {
 
     // === Leaf Data ===
     /// Origin network identifier (uint32)
-    pub origin_network: Felt,
+    pub origin_network: u32,
     /// Origin token address (20 bytes)
     pub origin_token_address: [u8; 20],
     /// Destination network identifier (uint32)
-    pub destination_network: Felt,
+    pub destination_network: u32,
     /// Destination address (20 bytes)
     pub destination_address: [u8; 20],
-    /// Amount of tokens (uint256 as 8 u32 felts)
-    pub amount: [Felt; 8],
-    /// ABI encoded metadata (8 felts)
-    pub metadata: [Felt; 8],
+    /// Amount as 32-byte big-endian uint256
+    pub amount: [u8; 32],
+    /// Metadata hash (32 bytes, keccak256 of metadata)
+    pub metadata_hash: [u8; 32],
 
     // === CLAIM Note Parameters ===
+    /// Miden claim amount (scaled-down token amount as Felt)
+    pub miden_claim_amount: Felt,
     /// Account ID that creates the CLAIM note
     pub claim_note_creator_account_id: AccountId,
-    /// Agglayer faucet AccountId
+    /// Agglayer faucet AccountId (target for the CLAIM note)
     pub agglayer_faucet_account_id: AccountId,
-    /// Output P2ID note tag
-    pub output_note_tag: NoteTag,
-    /// P2ID note serial number (4 felts as Word)
-    pub p2id_serial_number: Word,
-    /// Destination Miden account ID
-    pub destination_account_id: AccountId,
 }
 
 /// Create a CLAIM note for bridge claims.
 ///
-/// This function creates a CLAIM note using miden-agglayer's create_claim_note(),
-/// which validates the SMT proofs and creates a note that instructs the agglayer
-/// faucet to mint assets to the destination account.
-///
-/// # Arguments
-/// * `params` - Bridge claim parameters including SMT proofs and claim data
-/// * `rng` - Random number generator for note creation
-///
-/// # Returns
-/// The created Note, or an error
+/// Converts BridgeClaimParams into the typed ClaimNoteStorage and calls
+/// miden-agglayer's create_claim_note().
 #[instrument(skip(params, rng), fields(
     creator = %params.claim_note_creator_account_id,
     faucet = %params.agglayer_faucet_account_id,
-    destination = %params.destination_account_id,
 ))]
 pub fn create_bridge_claim_note<R>(
     params: BridgeClaimParams,
@@ -174,33 +163,67 @@ where
     info!(
         creator = %params.claim_note_creator_account_id,
         faucet = %params.agglayer_faucet_account_id,
-        destination = %params.destination_account_id,
         "Creating bridge CLAIM note using miden-agglayer"
     );
 
-    // Construct ClaimNoteParams from our BridgeClaimParams
-    let claim_note_params = ClaimNoteParams {
-        smt_proof_local_exit_root: params.smt_proof_local_exit_root,
-        smt_proof_rollup_exit_root: params.smt_proof_rollup_exit_root,
-        global_index: params.global_index,
-        mainnet_exit_root: &params.mainnet_exit_root,
-        rollup_exit_root: &params.rollup_exit_root,
+    // Convert SMT proofs to [SmtNode; 32] arrays
+    let smt_local: [SmtNode; 32] = params
+        .smt_proof_local_exit_root
+        .iter()
+        .map(|bytes| SmtNode::new(*bytes))
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|v: Vec<_>| {
+            ClientError::NoteCreationError(format!(
+                "Expected 32 SMT nodes for local exit root, got {}",
+                v.len()
+            ))
+        })?;
+
+    let smt_rollup: [SmtNode; 32] = params
+        .smt_proof_rollup_exit_root
+        .iter()
+        .map(|bytes| SmtNode::new(*bytes))
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|v: Vec<_>| {
+            ClientError::NoteCreationError(format!(
+                "Expected 32 SMT nodes for rollup exit root, got {}",
+                v.len()
+            ))
+        })?;
+
+    let proof_data = ProofData {
+        smt_proof_local_exit_root: smt_local,
+        smt_proof_rollup_exit_root: smt_rollup,
+        global_index: GlobalIndex::new(params.global_index),
+        mainnet_exit_root: ExitRoot::new(params.mainnet_exit_root),
+        rollup_exit_root: ExitRoot::new(params.rollup_exit_root),
+    };
+
+    let leaf_data = LeafData {
         origin_network: params.origin_network,
-        origin_token_address: &params.origin_token_address,
+        origin_token_address: EthAddressFormat::new(params.origin_token_address),
         destination_network: params.destination_network,
-        destination_address: &params.destination_address,
-        amount: params.amount,
-        metadata: params.metadata,
-        claim_note_creator_account_id: params.claim_note_creator_account_id,
-        agglayer_faucet_account_id: params.agglayer_faucet_account_id,
-        output_note_tag: params.output_note_tag,
-        p2id_serial_number: params.p2id_serial_number,
-        destination_account_id: params.destination_account_id,
-        rng,
+        destination_address: EthAddressFormat::new(params.destination_address),
+        amount: EthAmount::new(params.amount),
+        metadata_hash: MetadataHash::new(params.metadata_hash),
+    };
+
+    let storage = ClaimNoteStorage {
+        proof_data,
+        leaf_data,
+        miden_claim_amount: params.miden_claim_amount,
     };
 
     debug!("Calling miden-agglayer create_claim_note...");
-    let note = create_claim_note(claim_note_params).map_err(|e| {
+    let note = create_claim_note(
+        storage,
+        params.agglayer_faucet_account_id,
+        params.claim_note_creator_account_id,
+        rng,
+    )
+    .map_err(|e| {
         warn!(error = %e, "Failed to create CLAIM note");
         ClientError::NoteCreationError(e.to_string())
     })?;
@@ -212,17 +235,6 @@ where
 }
 
 /// Build a transaction request for sending a P2ID note
-///
-/// Uses TransactionRequestBuilder to construct a transaction that:
-/// 1. Creates output notes (P2ID for the recipient)
-/// 2. Specifies the sender account
-///
-/// # Arguments
-/// * `sender_account_id` - Account ID of the sender (bridge faucet)
-/// * `output_notes` - Notes to include as outputs
-///
-/// # Returns
-/// A TransactionRequest ready for submission
 pub fn build_claim_transaction_request(
     _sender_account_id: AccountId,
     output_notes: Vec<Note>,
@@ -251,13 +263,6 @@ pub fn build_claim_transaction_request(
 }
 
 /// Initialize a Miden client with the given configuration and keystore
-///
-/// # Arguments
-/// * `config` - Client configuration including RPC endpoint and store path
-/// * `keystore` - Arc<FilesystemKeyStore> for key management (shared so caller can add keys)
-///
-/// # Returns
-/// Initialized client or error
 pub async fn init_client(
     config: &MidenClientConfig,
     keystore: Arc<miden_client::keystore::FilesystemKeyStore>,
@@ -322,8 +327,6 @@ where
 }
 
 /// Submit a transaction using the client
-///
-/// This function executes, proves, and submits a transaction in one operation.
 pub async fn submit_transaction<AUTH>(
     client: &mut Client<AUTH>,
     account_id: AccountId,
@@ -332,7 +335,6 @@ pub async fn submit_transaction<AUTH>(
 where
     AUTH: miden_client::auth::TransactionAuthenticator + Sync + 'static,
 {
-    // Log detailed transaction parameters
     let account_bytes: [u8; 15] = account_id.into();
     let account_hex = format!("0x{}", hex::encode(account_bytes));
 
@@ -345,13 +347,11 @@ where
     }
     info!("═════════════════════════════");
 
-    // Execute, prove, and submit the transaction in one operation
     info!("Calling client.submit_new_transaction()...");
     let tx_id = client
         .submit_new_transaction(account_id, tx_request)
         .await
         .map_err(|e| {
-            // Log detailed error information
             error!(
                 error = %e,
                 error_debug = ?e,

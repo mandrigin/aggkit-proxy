@@ -92,18 +92,17 @@ fn print_note_details(note: &InputNoteRecord, indent: &str) {
     }
 
     // Print note inputs (important for agglayer notes)
-    let recipient = details.recipient();
-    let inputs = recipient.inputs();
-    let input_values = inputs.values();
-    if !input_values.is_empty() {
-        println!("{}Inputs:  {} value(s)", indent, input_values.len());
-        for (i, value) in input_values.iter().enumerate() {
-            // Format each Felt as hex
+    let storage = details.storage();
+    let storage_items = storage.items();
+    if !storage_items.is_empty() {
+        println!("{}Storage: {} item(s)", indent, storage_items.len());
+        for (i, value) in storage_items.iter().enumerate() {
             println!("{}  [{}]: 0x{:016x}", indent, i, value.as_int());
         }
     }
 
     // Print script root (hash)
+    let recipient = details.recipient();
     let script = recipient.script();
     let root = script.root();
     println!("{}Script:  0x{:016x}{:016x}{:016x}{:016x}", indent,

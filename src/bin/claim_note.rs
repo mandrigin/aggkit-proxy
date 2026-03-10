@@ -15,10 +15,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use miden_client::account::component::{AccountComponent, BasicWallet};
-use miden_standards::account::auth::AuthFalcon512Rpo;
 use miden_client::account::{AccountBuilder, AccountType};
 use miden_client::builder::ClientBuilder;
-use miden_client::keystore::FilesystemKeyStore;
+use miden_client::keystore::{FilesystemKeyStore, Keystore};
+use miden_protocol::account::auth::AuthScheme;
+use miden_standards::account::auth::AuthSingleSig;
 use miden_client::notes::NoteFile;
 use miden_client::rpc::Endpoint;
 use miden_client::store::NoteFilter;
@@ -76,7 +77,7 @@ async fn get_or_create_account(
 
     // Create auth component from the public key
     let auth_component: AccountComponent =
-        AuthFalcon512Rpo::new(key_pair.public_key().to_commitment()).into();
+        AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Rpo).into();
 
     // Build account
     let account = AccountBuilder::new(init_seed)
@@ -95,7 +96,7 @@ async fn get_or_create_account(
     }
 
     // Add key to keystore (ignore error if already exists)
-    let _ = keystore.add_key(&key_pair);
+    let _ = keystore.add_key(&key_pair, account_id).await;
 
     // Add account to client
     client.add_account(&account, false).await?;
@@ -147,7 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let init_seed = derive_init_seed(&seed);
 
             let auth_component: AccountComponent =
-                AuthFalcon512Rpo::new(key_pair.public_key().to_commitment()).into();
+                AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Rpo).into();
 
             let account = AccountBuilder::new(init_seed)
                 .account_type(AccountType::RegularAccountUpdatableCode)
@@ -289,9 +290,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Print note details
                 let details = note_record.details();
                 println!("    Script Root: 0x{}", hex::encode(details.script().root().as_bytes()));
-                let inputs = details.inputs();
-                println!("    Inputs ({} values):", inputs.num_values());
-                for (i, value) in inputs.values().iter().enumerate() {
+                let storage = details.storage();
+                println!("    Storage ({} items):", storage.num_items());
+                for (i, value) in storage.items().iter().enumerate() {
                     println!("      [{}]: {}", i, value.as_int());
                 }
                 println!();
@@ -322,10 +323,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Print note details (inputs, script)
                 let details = note_record.details();
                 println!("    Script Root: 0x{}", hex::encode(details.script().root().as_bytes()));
-                let inputs = details.inputs();
-                println!("    Inputs ({} values):", inputs.num_values());
-                for (i, value) in inputs.values().iter().enumerate() {
-                    // Try to interpret first input as account ID (P2ID pattern)
+                let storage = details.storage();
+                println!("    Storage ({} items):", storage.num_items());
+                for (i, value) in storage.items().iter().enumerate() {
+                    // Try to interpret first item as account ID (P2ID pattern)
                     if i == 0 {
                         let bytes: [u8; 8] = value.as_int().to_le_bytes();
                         println!("      [{}]: {} (raw: 0x{})", i, value.as_int(), hex::encode(bytes));
@@ -416,8 +417,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!();
             println!("  Script root: 0x{}", hex::encode(note.script().root().as_bytes()));
-            println!("  Note inputs ({}):", note.inputs().num_values());
-            for (i, val) in note.inputs().values().iter().enumerate() {
+            println!("  Note storage ({}):", note.storage().num_items());
+            for (i, val) in note.storage().items().iter().enumerate() {
                 println!("    [{}]: {}", i, val.as_int());
             }
             println!("═══════════════════════════════════════════════════════════════");

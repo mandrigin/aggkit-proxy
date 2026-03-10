@@ -23,21 +23,21 @@ alloy-rlp = "0.3"
 alloy-rpc-types = "0.8"
 alloy-consensus = { version = "0.8", features = ["k256"] }
 
-# Miden crates (exp-agglayer-v0.2 tag)
-miden-client = { git = "https://github.com/0xMiden/miden-client", tag = "exp-agglayer-v0.2", features = ["testing", "tonic"] }
-miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client", tag = "exp-agglayer-v0.2", package = "miden-client-sqlite-store" }
+# Miden crates (agglayer-integration-tests branch, PR #1882)
+miden-client = { git = "https://github.com/0xMiden/miden-client", branch = "agglayer-integration-tests", features = ["testing", "tonic"] }
+miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client", branch = "agglayer-integration-tests", package = "miden-client-sqlite-store" }
 
-# Miden base crates (0.13 release)
-miden-protocol = { version = "0.13", features = ["std"] }
-miden-standards = { version = "0.13" }
-miden-agglayer = { version = "0.13" }
-miden-tx = { version = "0.13" }
+# Miden base crates (0.14-alpha, matching miden-client agglayer-integration-tests branch)
+miden-protocol = { version = "0.14.0-alpha", features = ["std"] }
+miden-standards = { version = "0.14.0-alpha" }
+miden-agglayer = { version = "0.14.0-alpha" }
+miden-tx = { version = "0.14.0-alpha" }
 miden-assembly = "0.20"
 
 # Additional dependencies
 sha3 = "0.10"
 dashmap = "6"
-rusqlite = { version = "0.36", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 alloy-sol-types = "0.8"
 
 # Serialization
@@ -69,7 +69,7 @@ tempfile = "3"
 rand = "0.9"
 k256 = "0.13"
 # Enable testing feature for miden-protocol in tests (for AccountId::dummy)
-miden-protocol = { version = "0.13", features = ["std", "testing"] }
+miden-protocol = { version = "0.14.0-alpha", features = ["std", "testing"] }
 
 [[bin]]
 name = "verify-notes"
