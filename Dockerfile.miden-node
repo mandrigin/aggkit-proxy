@@ -1,5 +1,5 @@
-# Build stage for miden-node
-FROM rust:1.82-slim-bookworm AS builder
+# Build stage for testing-node-builder (from miden-client workspace)
+FROM rust:1.91-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -14,23 +14,27 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
-# Clone miden-node from exp-agglayer-v0.2 branch
-# Source: https://github.com/0xMiden/miden-node
-RUN git clone --depth 1 --branch exp-agglayer-v0.2 \
-    https://github.com/0xMiden/miden-node.git .
+# Clone miden-client from agglayer-integration-tests branch (PR #1882)
+# Source: https://github.com/0xMiden/miden-client
+RUN git clone --depth 1 --branch agglayer-integration-tests \
+    https://github.com/0xMiden/miden-client.git .
 
-# Save the miden-node commit SHA for labeling
-RUN git rev-parse HEAD > /tmp/miden-node-commit.txt && \
-    echo "Miden-node commit: $(cat /tmp/miden-node-commit.txt)"
+# Save the commit SHA for labeling
+RUN git rev-parse HEAD > /tmp/miden-client-commit.txt && \
+    echo "Miden-client commit: $(cat /tmp/miden-client-commit.txt)"
 
-# Build the node binary
-RUN cargo build --release --bin miden-node
+# Patch: bind RPC to 0.0.0.0 instead of 127.0.0.1 for Docker port forwarding
+RUN sed -i 's|format!("127.0.0.1:{}", self.rpc_port)|format!("0.0.0.0:{}", self.rpc_port)|' \
+    crates/testing/node-builder/src/lib.rs
+
+# Build the testing-node-builder binary
+RUN cargo build --release --package node-builder
 
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Copy the miden-node commit SHA from builder
-COPY --from=builder /tmp/miden-node-commit.txt /app/miden-node-commit.txt
+# Copy the commit SHA from builder
+COPY --from=builder /tmp/miden-client-commit.txt /app/miden-client-commit.txt
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
@@ -42,56 +46,38 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY --from=builder /build/target/release/miden-node /usr/local/bin/
+COPY --from=builder /build/target/release/testing-node-builder /usr/local/bin/
 
-# Copy genesis config
-COPY config/genesis.toml /app/genesis.toml
-
-# Add label with miden-node source info
-LABEL org.opencontainers.image.source="https://github.com/0xMiden/miden-node" \
-      org.opencontainers.image.ref.name="exp-agglayer-v0.2"
+# Add label with source info
+LABEL org.opencontainers.image.source="https://github.com/0xMiden/miden-client" \
+      org.opencontainers.image.ref.name="agglayer-integration-tests"
 
 # gRPC port
 EXPOSE 57291
 
-# Create data and accounts directories
-RUN mkdir -p /data /accounts
+# Create data directory
+RUN mkdir -p /app/data
 
 # Create entrypoint script
+# testing-node-builder uses ./data as its data dir and AGGLAYER_GENESIS=1
+# to enable agglayer genesis accounts (bridge_admin, ger_manager, bridge, faucet).
+# The .mac files are written to ./data/ alongside the node database.
 RUN printf '%s\n' \
     '#!/bin/bash' \
     'set -e' \
     '' \
-    'DATA_DIR="${MIDEN_NODE_DATA_DIRECTORY:-/data}"' \
-    'ACCOUNTS_DIR="${MIDEN_NODE_ACCOUNTS_DIRECTORY:-/accounts}"' \
-    'RPC_URL="${MIDEN_NODE_RPC_URL:-http://0.0.0.0:57291}"' \
-    '' \
-    '# Log miden-node version info' \
-    'echo "=== Miden Node Startup ==="' \
-    'if [ -f /app/miden-node-commit.txt ]; then' \
-    '    echo "Miden-node commit: $(cat /app/miden-node-commit.txt)"' \
+    '# Log version info' \
+    'echo "=== Miden Testing Node Startup ==="' \
+    'if [ -f /app/miden-client-commit.txt ]; then' \
+    '    echo "Miden-client commit: $(cat /app/miden-client-commit.txt)"' \
     'fi' \
     '' \
-    '# Bootstrap if data directory is empty (no database yet)' \
-    'if [ ! -d "$DATA_DIR/db" ]; then' \
-    '    echo "Bootstrapping miden-node..."' \
-    '    miden-node bundled bootstrap \' \
-    '        --genesis-config-file /app/genesis.toml \' \
-    '        --data-directory "$DATA_DIR" \' \
-    '        --accounts-directory "$ACCOUNTS_DIR"' \
-    '    echo "Bootstrap complete."' \
-    '    echo ""' \
-    '    echo "=== Accounts Created at Bootstrap ==="' \
-    '    ls -la "$ACCOUNTS_DIR"' \
-    '    echo "=== End Accounts List ==="' \
-    '    echo ""' \
-    'fi' \
+    '# Enable agglayer genesis accounts by default' \
+    'export AGGLAYER_GENESIS="${AGGLAYER_GENESIS:-1}"' \
+    'echo "AGGLAYER_GENESIS=$AGGLAYER_GENESIS"' \
     '' \
-    'echo "Starting miden-node on $RPC_URL..."' \
-    'exec miden-node bundled start \' \
-    '    --rpc.url "$RPC_URL" \' \
-    '    --data-directory "$DATA_DIR" \' \
-    '    "$@"' \
+    'echo "Starting testing-node-builder..."' \
+    'exec testing-node-builder "$@"' \
     > /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/entrypoint.sh
 
