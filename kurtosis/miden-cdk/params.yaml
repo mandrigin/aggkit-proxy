@@ -60,7 +60,7 @@ miden:
 # kurtosis-cdk configuration (passed through)
 args:
   # L1 configuration
-  l1_engine: "geth"
+  l1_engine: "ethereum-package"
   l1_chain_id: 271828
   l1_preset: "minimal"
   l1_seconds_per_slot: 2
