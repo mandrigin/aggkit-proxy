@@ -136,6 +136,9 @@ def _deploy_miden_node(plan, deployment_suffix, image):
             env_vars={
                 "RUST_LOG": "info",
             },
+            # Node needs substantial memory for proving + concurrent syncs
+            min_memory=4096,
+            min_cpu=1000,
             # Docker Desktop grouping label
             labels={
                 DOCKER_PROJECT_LABEL: MIDEN_PROJECT_GROUP,
@@ -169,6 +172,10 @@ def _deploy_miden_proxy(plan, deployment_suffix, image, network_id, bridge_addre
                 "LISTEN_PORT": str(MIDEN_PROXY_PORT),
                 "RUST_LOG": "info",
             },
+            # Proxy runs miden-client syncs — needs memory for stress tests
+            min_memory=1024,
+            max_memory=2048,
+            min_cpu=500,
             # Docker Desktop grouping label
             labels={
                 DOCKER_PROJECT_LABEL: MIDEN_PROJECT_GROUP,

@@ -1,10 +1,34 @@
 //! Block State - Synthetic EVM block tracking for kurtosis-cdk integration.
 //!
-//! Maps Miden batches to synthetic EVM blocks for bridge service compatibility.
+//! # Why this exists
 //!
-//! Block hashes are deterministic: given a block number, the hash is always the same.
-//! This prevents reorg detection issues when the proxy restarts or blocks are re-queried.
+//! The zkevm-bridge-service has a reorg detection mechanism: it stores block
+//! hashes from `eth_getLogs` responses, then later calls `HeaderByNumber` to
+//! verify them. The Go ethclient's `HeaderByNumber` returns a `types.Header`
+//! and the bridge calls `header.Hash()` which computes `keccak256(rlp(header))`
+//! from the header's fields — it does NOT use the `hash` field from the JSON
+//! response.
+//!
+//! This means we cannot use an arbitrary hash (like `keccak256("miden_block_<N>")`).
+//! Our block hash must be the actual RLP hash of the header fields we return in
+//! the JSON-RPC response. Otherwise the bridge detects a "reorg" on every sync
+//! cycle and keeps walking backwards trying to find a matching block, eventually
+//! hitting genesis and resetting.
+//!
+//! # How it works
+//!
+//! We build a real `alloy_consensus::Header` with deterministic fields derived
+//! purely from the block number, then compute `hash_slow()` to get the canonical
+//! `keccak256(rlp(header))` hash. This is the same computation Go's ethclient
+//! performs, so the hashes always match.
+//!
+//! All header fields are pure functions of block number alone — no state, no
+//! caching needed. Parent hash uses a simple deterministic scheme (not recursive
+//! RLP computation) since the bridge only checks per-block hash consistency,
+//! not parent-child hash chains.
 
+use alloy_consensus::Header;
+use alloy_primitives::{Bloom, B256, B64, U256};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
@@ -16,14 +40,28 @@ const GENESIS_TIMESTAMP: u64 = 1704067200;
 /// Block time in seconds (12s like Ethereum mainnet)
 const BLOCK_TIME: u64 = 12;
 
+/// Empty uncles hash (keccak256 of RLP-encoded empty list)
+const EMPTY_OMMERS_HASH: [u8; 32] = [
+    0x1d, 0xcc, 0x4d, 0xe8, 0xde, 0xc7, 0x5d, 0x7a, 0xab, 0x85, 0xb5, 0x67,
+    0xb6, 0xcc, 0xd4, 0x1a, 0xd3, 0x12, 0x45, 0x1b, 0x94, 0x8a, 0x74, 0x13,
+    0xf0, 0xa1, 0x42, 0xfd, 0x40, 0xd4, 0x93, 0x47,
+];
+
+/// Empty trie root (keccak256 of RLP-encoded empty string)
+const EMPTY_ROOT_HASH: [u8; 32] = [
+    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6,
+    0x92, 0xc0, 0xf8, 0x6e, 0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0,
+    0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
+];
+
 /// Synthetic EVM block generated from Miden batch
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyntheticBlock {
     /// Block number (= Miden batch number)
     pub number: u64,
-    /// Block hash (deterministic from number + state)
+    /// Block hash — keccak256(rlp(header)), matches Go ethclient computation
     pub hash: [u8; 32],
-    /// Parent block hash
+    /// Parent block hash (deterministic, not recursive RLP)
     pub parent_hash: [u8; 32],
     /// Block timestamp (Unix seconds)
     pub timestamp: u64,
@@ -35,14 +73,10 @@ pub struct SyntheticBlock {
 
 impl SyntheticBlock {
     /// Create a new synthetic block.
-    /// Hash and parent hash are derived purely from block numbers.
+    /// Hash is the real RLP-based EVM hash. Parent hash is deterministic.
     pub fn new(number: u64, timestamp: u64) -> Self {
+        let parent_hash = Self::deterministic_parent_hash(number);
         let hash = Self::compute_hash_for_number(number);
-        let parent_hash = if number == 0 {
-            [0u8; 32]
-        } else {
-            Self::compute_hash_for_number(number - 1)
-        };
         Self {
             number,
             hash,
@@ -53,23 +87,64 @@ impl SyntheticBlock {
         }
     }
 
-    /// Compute deterministic block hash from block number alone.
-    ///
-    /// Hash = keccak256("miden_block_evm_<number>")
-    ///
-    /// This is a pure function of the block number — no parent hash, timestamp, or
-    /// state root dependency. This guarantees identical hashes regardless of creation
-    /// order, proxy restarts, or concurrent access patterns.
-    pub fn compute_hash_for_number(number: u64) -> [u8; 32] {
-        let mut hasher = Keccak256::new();
-        hasher.update(format!("miden_block_evm_{}", number).as_bytes());
-        hasher.finalize().into()
+    /// Deterministic parent hash for block N.
+    /// For genesis: all zeros. Otherwise: keccak256("miden_parent_<N-1>").
+    /// This is NOT the RLP hash of the parent block — that would require
+    /// recursive computation. The bridge doesn't verify parent-child hash
+    /// chains, it only checks each block's hash individually.
+    fn deterministic_parent_hash(number: u64) -> [u8; 32] {
+        if number == 0 {
+            [0u8; 32]
+        } else {
+            let mut hasher = Keccak256::new();
+            hasher.update(format!("miden_parent_{}", number - 1).as_bytes());
+            hasher.finalize().into()
+        }
     }
 
-    /// Format as JSON-RPC response
+    /// Build the canonical alloy Header for this block number.
+    /// Pure function of block number — all fields derived deterministically.
+    fn build_header(number: u64) -> Header {
+        let parent_hash = Self::deterministic_parent_hash(number);
+        let timestamp = GENESIS_TIMESTAMP + number * BLOCK_TIME;
+
+        Header {
+            parent_hash: B256::from(parent_hash),
+            ommers_hash: B256::from(EMPTY_OMMERS_HASH),
+            beneficiary: Default::default(),
+            state_root: B256::ZERO,
+            transactions_root: B256::from(EMPTY_ROOT_HASH),
+            receipts_root: B256::from(EMPTY_ROOT_HASH),
+            logs_bloom: Bloom::ZERO,
+            difficulty: U256::ZERO,
+            number,
+            gas_limit: 30_000_000,
+            gas_used: 0,
+            timestamp,
+            extra_data: Default::default(),
+            mix_hash: B256::ZERO,
+            nonce: B64::ZERO,
+            base_fee_per_gas: Some(0),
+            ..Default::default()
+        }
+    }
+
+    /// Compute deterministic block hash from block number alone.
+    ///
+    /// Builds a real EVM header and computes keccak256(rlp(header)).
+    /// This matches what Go's ethclient HeaderByNumber + header.Hash() does.
+    ///
+    /// Pure function of block number — safe to call from any context without
+    /// caching, locking, or ordering concerns.
+    pub fn compute_hash_for_number(number: u64) -> [u8; 32] {
+        let header = Self::build_header(number);
+        header.hash_slow().0
+    }
+
+    /// Format as JSON-RPC response.
+    /// All fields match the header used for hash computation.
     pub fn to_json(&self, full_transactions: bool) -> serde_json::Value {
         let txs = if full_transactions {
-            // Full transaction objects not supported yet, return hashes
             serde_json::json!(self.transactions)
         } else {
             serde_json::json!(self.transactions)
@@ -81,8 +156,8 @@ impl SyntheticBlock {
             "parentHash": format!("0x{}", hex::encode(self.parent_hash)),
             "timestamp": format!("0x{:x}", self.timestamp),
             "stateRoot": format!("0x{}", hex::encode(self.state_root)),
-            "transactionsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
-            "receiptsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+            "transactionsRoot": format!("0x{}", hex::encode(EMPTY_ROOT_HASH)),
+            "receiptsRoot": format!("0x{}", hex::encode(EMPTY_ROOT_HASH)),
             "logsBloom": format!("0x{}", "00".repeat(256)),
             "difficulty": "0x0",
             "totalDifficulty": "0x0",
@@ -92,7 +167,7 @@ impl SyntheticBlock {
             "extraData": "0x",
             "nonce": "0x0000000000000000",
             "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+            "sha3Uncles": format!("0x{}", hex::encode(EMPTY_OMMERS_HASH)),
             "uncles": [],
             "size": "0x200",
             "transactions": txs,
@@ -193,7 +268,6 @@ mod tests {
 
     #[test]
     fn test_hash_is_pure_function_of_block_number() {
-        // Hash = keccak256("miden_block_evm_<number>")
         let h1 = SyntheticBlock::compute_hash_for_number(42);
         let h2 = SyntheticBlock::compute_hash_for_number(42);
         assert_eq!(h1, h2, "Same block number must produce same hash");
@@ -204,11 +278,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parent_hash_is_previous_block_hash() {
-        let state = BlockState::new();
-        let b10 = state.get_block_by_number(10).unwrap();
-        let b9 = state.get_block_by_number(9).unwrap();
-        assert_eq!(b10.parent_hash, b9.hash, "Parent hash must equal previous block's hash");
+    fn test_hash_is_real_rlp_hash() {
+        // Verify our hash matches the alloy header's own hash computation
+        let header = SyntheticBlock::build_header(42);
+        let expected = header.hash_slow().0;
+        let actual = SyntheticBlock::compute_hash_for_number(42);
+        assert_eq!(actual, expected, "Hash must be keccak256(rlp(header))");
     }
 
     #[test]
@@ -224,7 +299,6 @@ mod tests {
         let state1 = BlockState::new();
         let state2 = BlockState::new();
 
-        // Query in different order
         let _ = state1.get_block_by_number(100);
         let _ = state2.get_block_by_number(50);
         let _ = state2.get_block_by_number(100);
@@ -246,7 +320,6 @@ mod tests {
     #[test]
     fn test_get_block_hash_without_cache() {
         let state = BlockState::new();
-        // get_block_hash should work even for uncached blocks
         let h = state.get_block_hash(999).unwrap();
         assert_eq!(h, SyntheticBlock::compute_hash_for_number(999));
     }

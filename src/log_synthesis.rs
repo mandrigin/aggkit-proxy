@@ -11,8 +11,13 @@ pub const BRIDGE_EVENT_TOPIC: &str =
     "0x501781209a1f8899323b96b4ef08b168df93e0a90c673d1e4cce39366cb62f9b";
 
 /// ClaimEvent topic hash: keccak256("ClaimEvent(uint256,uint32,address,address,uint256)")
+///
+/// IMPORTANT: This is the v2 (post-LxLy) ClaimEvent with globalIndex as uint256.
+/// The old signature ClaimEvent(uint32,uint32,...) has a DIFFERENT topic hash
+/// (0x25308c93...). Using the wrong topic causes the bridge to decode globalIndex
+/// as uint32, failing with "abi: improperly encoded uint32 value".
 pub const CLAIM_EVENT_TOPIC: &str =
-    "0x25308c93ceeed162da955b3f7ce3e3f93606579e40fb92029faa9efe27545983";
+    "0x1df3f2a973a00d6635911755c260704e95e8a5876997546798770f76396fda4d";
 
 /// UpdateGlobalExitRoot topic hash: keccak256("UpdateGlobalExitRoot(bytes32,bytes32)")
 /// Emitted by L1 GlobalExitRootManager (NOT used on sovereign L2 chains)
@@ -281,27 +286,35 @@ impl LogStore {
     ///
     /// Previous bug: We were emitting globalIndex as a second topic, causing
     /// "topic/field count mismatch" error in bridge-service.
+    ///
+    /// Second bug fixed: The first data field must be globalIndex (uint256),
+    /// NOT leafType. The v2 ClaimEvent signature is:
+    ///   ClaimEvent(uint256 globalIndex, uint32 originNetwork, address originAddress,
+    ///              address destinationAddress, uint256 amount)
+    /// The bridge decodes globalIndex from data[0:32] and uses it as the
+    /// primary key for the claim table. Using 0 for all claims caused
+    /// duplicate key violations (claim_pkey).
     pub fn add_claim_event(
         &self,
         bridge_address: &str,
         block_number: u64,
         block_hash: [u8; 32],
         tx_hash: &str,
-        _global_index: &[u8; 32], // Not used in topics for v2 ClaimEvent
+        global_index: &[u8; 32],
         origin_network: u32,
         origin_address: &[u8; 20],
         destination_address: &[u8; 20],
         amount: u64,
     ) {
-        // ClaimEvent(uint32 leafType, uint32 originNetwork, address originAddress, address destinationAddress, uint256 amount)
+        // ClaimEvent(uint256 globalIndex, uint32 originNetwork, address originAddress,
+        //            address destinationAddress, uint256 amount)
         // NO indexed params - only 1 topic (event signature)
         let log = SyntheticLog {
             address: bridge_address.to_string(),
             topics: vec![
                 CLAIM_EVENT_TOPIC.to_string(),
-                // No second topic - globalIndex is NOT indexed in v2 ClaimEvent
             ],
-            data: encode_claim_event_data(origin_network, origin_address, destination_address, amount),
+            data: encode_claim_event_data(global_index, origin_network, origin_address, destination_address, amount),
             block_number,
             block_hash,
             transaction_hash: tx_hash.to_string(),
@@ -438,18 +451,17 @@ impl Default for LogStore {
 
 /// Encode ClaimEvent data field
 ///
-/// The ClaimEvent in zkEVM bridge v2 has 5 non-indexed fields (160 bytes total):
-/// 1. leafType (uint32) - 0 for asset transfers, 1 for message transfers
+/// The v2 ClaimEvent has 5 non-indexed fields (160 bytes total):
+/// 1. globalIndex (uint256) - Unique claim identifier. The bridge decodes this
+///    into (mainnetFlag, rollupIndex, localExitRootIndex) and uses it as the
+///    primary key in the claim table. MUST be unique per claim to avoid
+///    duplicate key violations (claim_pkey).
 /// 2. originNetwork (uint32) - Network ID where the asset originated
 /// 3. originAddress (address) - Token contract address on origin network
 /// 4. destinationAddress (address) - Recipient address on destination network
 /// 5. amount (uint256) - Amount of tokens transferred
-///
-/// IMPORTANT: The bridge-service ABI decoder expects exactly 160 bytes.
-/// Previously we only emitted 128 bytes (missing leafType), causing:
-/// "abi: cannot marshal in to go type: length insufficient 128 require 160"
-/// This blocked L2 sync, preventing new deposits from becoming ready_for_claim.
 fn encode_claim_event_data(
+    global_index: &[u8; 32],
     origin_network: u32,
     origin_address: &[u8; 20],
     destination_address: &[u8; 20],
@@ -457,8 +469,8 @@ fn encode_claim_event_data(
 ) -> String {
     let mut data = Vec::with_capacity(160);
 
-    // leafType (uint32 padded to 32 bytes) - 0 for asset transfers
-    data.extend_from_slice(&[0u8; 32]);
+    // globalIndex (uint256) - unique per claim, bridge DB primary key
+    data.extend_from_slice(global_index);
 
     // originNetwork (uint32 padded to 32 bytes)
     data.extend_from_slice(&[0u8; 28]);
