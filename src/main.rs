@@ -52,12 +52,86 @@ fn get_chain_id() -> u64 {
 /// Fixed gas estimate for bridge operations
 const FIXED_GAS_ESTIMATE: u64 = 21000;
 
-/// Transaction status in the Miden bridge
+/// Maximum number of blocks to wait for CLAIM note consumption before reverting.
+/// If the faucet hasn't consumed the CLAIM note after this many blocks past submission,
+/// we consider it failed (e.g., GER not registered, faucet issue, etc.)
+const CLAIM_CONSUMPTION_TIMEOUT_BLOCKS: u64 = 50;
+
+/// Transaction status in the Miden bridge.
+///
+/// # Why `AwaitingConsumption` exists
+///
+/// In Miden, a `claimAsset` transaction creates a CLAIM note and submits it to the network.
+/// This submission transaction always "succeeds" (it's a valid Miden transaction) regardless
+/// of whether the agglayer faucet actually **consumes** the CLAIM note.
+///
+/// The faucet consumes the CLAIM note only if:
+/// 1. The Global Exit Root (GER) is registered in the bridge's on-chain storage
+/// 2. The SMT proof verifies against the registered GER
+/// 3. The faucet is online and processing notes
+///
+/// If any of these conditions aren't met, the CLAIM note sits unconsumed forever.
+/// From the faucet's perspective, it simply never sees a valid note to process.
+///
+/// **The problem**: The zkevm-bridge-service polls `eth_getTransactionReceipt` to check
+/// if the claim transaction was mined. If we return `status: 0x1` (success) immediately
+/// after submission, the bridge marks the deposit as "claimed" in its database. But if
+/// the CLAIM note is never consumed, no P2ID note is minted to the recipient — the
+/// deposited funds are effectively **lost forever** with no error signal.
+///
+/// **The fix**: We defer the success receipt until we confirm the CLAIM note has been
+/// consumed by syncing with the Miden node and checking the note's state. If consumption
+/// doesn't happen within `CLAIM_CONSUMPTION_TIMEOUT_BLOCKS`, we return a reverted receipt
+/// (`status: 0x0`), allowing the bridge to detect the failure and potentially retry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TxStatus {
     Pending,
+    /// CLAIM note submitted to Miden but awaiting faucet consumption.
+    /// Receipt returns null (pending) until consumption confirmed or timeout.
+    AwaitingConsumption {
+        block_number: u64,
+        /// The CLAIM note ID (hex string) — checked via sync to see if consumed
+        claim_note_id: String,
+    },
     Confirmed { block_number: u64 },
     Failed { reason: String },
+}
+
+/// Data needed to finalize a claim (synthesize ClaimEvent) after note consumption is confirmed.
+#[derive(Debug, Clone)]
+pub struct PendingClaimData {
+    pub global_index: [u8; 32],
+    pub origin_network: u32,
+    pub origin_token_address: [u8; 20],
+    pub destination_address: [u8; 20],
+    pub amount_wei: [u8; 32],
+    pub tx_hash: String,
+}
+
+/// Store for pending claims awaiting note consumption.
+/// Keyed by tx_hash — when consumption is confirmed, the ClaimEvent is synthesized.
+pub struct PendingClaimStore {
+    claims: RwLock<HashMap<String, PendingClaimData>>,
+}
+
+impl PendingClaimStore {
+    pub fn new() -> Self {
+        Self {
+            claims: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn insert(&self, tx_hash: String, data: PendingClaimData) {
+        self.claims.write().insert(tx_hash, data);
+    }
+
+    pub fn remove(&self, tx_hash: &str) -> Option<PendingClaimData> {
+        self.claims.write().remove(tx_hash)
+    }
+
+    pub fn get(&self, tx_hash: &str) -> Option<PendingClaimData> {
+        self.claims.read().get(tx_hash).cloned()
+    }
 }
 
 /// Transaction receipt mapped from Miden format to Ethereum format
@@ -172,6 +246,8 @@ pub struct BridgeState {
     log_store: LogStore,
     /// GER store for tracking injected Global Exit Roots
     ger_store: GerStore,
+    /// Pending claims awaiting CLAIM note consumption
+    pending_claims: PendingClaimStore,
 }
 
 impl BridgeState {
@@ -194,6 +270,9 @@ impl BridgeState {
         let ger_store = GerStore::new();
         info!("GerStore initialized (Global Exit Root tracking)");
 
+        let pending_claims = PendingClaimStore::new();
+        info!("PendingClaimStore initialized");
+
         Self {
             nonces: RwLock::new(HashMap::new()),
             transactions: RwLock::new(HashMap::new()),
@@ -203,6 +282,7 @@ impl BridgeState {
             block_state,
             log_store,
             ger_store,
+            pending_claims,
         }
     }
 
@@ -479,6 +559,140 @@ impl EthApiImpl {
             miden_store_path: store_path,
         }
     }
+
+    /// Check if a CLAIM note has been consumed by syncing with the Miden node.
+    ///
+    /// This is the critical safety check: the bridge must NOT mark a deposit as "claimed"
+    /// until the faucet has actually consumed the CLAIM note and minted a P2ID to the recipient.
+    /// A CLAIM note transaction always "succeeds" (valid tx), but the note may not be consumed
+    /// if e.g. the GER isn't registered yet. Without this check, deposits could be silently lost.
+    ///
+    /// Flow:
+    /// 1. Initialize a Miden client (reuses the same SQLite store on disk)
+    /// 2. Sync state to get latest block info from the node
+    /// 3. Check output notes — if the CLAIM note's state is "consumed", return true
+    async fn check_claim_note_consumed(
+        &self,
+        claim_note_id: &str,
+        _submit_block: u64,
+    ) -> bool {
+        let config = match &self.miden_config {
+            Some(c) => c.clone(),
+            None => {
+                warn!("No miden config — cannot check note consumption");
+                return false;
+            }
+        };
+
+        let claim_note_id_owned = claim_note_id.to_string();
+        let runtime_handle = tokio::runtime::Handle::current();
+
+        let result = tokio::task::spawn_blocking(move || {
+            runtime_handle.block_on(async {
+                // Initialize client with same store (shares SQLite state)
+                let keystore_path = config.store_path.parent()
+                    .map(|p| p.join("keystore"))
+                    .unwrap_or_else(|| PathBuf::from("/app/data/keystore"));
+                std::fs::create_dir_all(&keystore_path).ok();
+
+                let keystore = match miden_client::keystore::FilesystemKeyStore::new(keystore_path) {
+                    Ok(ks) => Arc::new(ks),
+                    Err(e) => {
+                        warn!(error = %e, "Failed to create keystore for consumption check");
+                        return false;
+                    }
+                };
+
+                let client_config = MidenClientConfig {
+                    rpc_endpoint: config.rpc_endpoint.clone(),
+                    store_path: config.store_path.clone(),
+                    bridge_faucet_id: config.agglayer_faucet_id.unwrap_or_else(|| {
+                        // Fallback — shouldn't happen in practice
+                        parse_account_id_from_hex(&config.bridge_faucet_id_hex)
+                            .unwrap_or_else(|_| panic!("Invalid faucet ID"))
+                    }),
+                };
+
+                let mut client = match init_client(&client_config, keystore).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(error = %e, "Failed to init client for consumption check");
+                        return false;
+                    }
+                };
+
+                // Sync to get latest state (this pulls new notes/consumptions from node)
+                match client.sync_state().await {
+                    Ok(sync) => {
+                        debug!(
+                            block_num = sync.block_num.as_u32(),
+                            consumed = sync.consumed_notes.len(),
+                            "Synced state for consumption check"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to sync for consumption check");
+                        return false;
+                    }
+                }
+
+                // Check output notes for the CLAIM note
+                use miden_client::store::NoteFilter;
+                let output_notes = match client.get_output_notes(NoteFilter::All).await {
+                    Ok(notes) => notes,
+                    Err(e) => {
+                        warn!(error = %e, "Failed to get output notes");
+                        return false;
+                    }
+                };
+
+                for note in &output_notes {
+                    let note_id_str = format!("{}", note.id());
+                    if note_id_str == claim_note_id_owned {
+                        let state = format!("{:?}", note.state());
+                        let state_name = state.split('(').next().unwrap_or(&state);
+                        info!(
+                            claim_note_id = %claim_note_id_owned,
+                            state = %state_name,
+                            "Found CLAIM note — checking consumption status"
+                        );
+                        // The state is "Consumed" when the faucet has consumed the note
+                        if state_name.contains("Consumed") || state_name.contains("consumed") {
+                            info!(
+                                claim_note_id = %claim_note_id_owned,
+                                "CLAIM note confirmed CONSUMED by faucet"
+                            );
+                            return true;
+                        } else {
+                            debug!(
+                                claim_note_id = %claim_note_id_owned,
+                                state = %state_name,
+                                "CLAIM note not yet consumed"
+                            );
+                            return false;
+                        }
+                    }
+                }
+
+                // Note not found in output notes — might not be tracked yet
+                debug!(
+                    claim_note_id = %claim_note_id_owned,
+                    total_output_notes = output_notes.len(),
+                    "CLAIM note not found in output notes"
+                );
+                false
+            })
+        })
+        .await;
+
+        match result {
+            Ok(consumed) => consumed,
+            Err(e) => {
+                warn!(error = %e, "Consumption check task panicked");
+                false
+            }
+        }
+    }
 }
 
 /// Data needed for Miden CLAIM note submission (must be Send + 'static for spawn_blocking)
@@ -533,10 +747,17 @@ struct ClaimSubmissionData {
 /// CLAIM notes require an agglayer-enabled faucet with `agglayer_faucet_component`
 /// procedures. The standard `NetworkFungibleFaucet` from genesis.toml will NOT work.
 /// If testing with a native faucet, CLAIM note submission will fail.
+/// Result of a successful Miden claim submission.
+/// Contains the block number and the CLAIM note ID for consumption tracking.
+struct ClaimSubmissionResult {
+    block_number: u64,
+    claim_note_id: String,
+}
+
 async fn submit_claim_to_miden(
     config: MidenSubmissionConfig,
     claim_data: ClaimSubmissionData,
-) -> Result<u64, ClientError> {
+) -> Result<ClaimSubmissionResult, ClientError> {
     use miden_client::transaction::TransactionRequestBuilder;
     use miden_protocol::crypto::rand::RpoRandomCoin;
     use miden_protocol::Felt;
@@ -790,8 +1011,9 @@ async fn submit_claim_to_miden(
 
             // Step 8: Create the CLAIM note using miden-agglayer
             let claim_note = create_bridge_claim_note(bridge_claim_params, &mut rng)?;
+            let claim_note_id_str = format!("{}", claim_note.id());
             info!("  ✓ CLAIM note created");
-            info!("  → CLAIM note ID: {}", claim_note.id());
+            info!("  → CLAIM note ID: {}", claim_note_id_str);
             info!("  → Note assets: {:?}", claim_note.assets());
             info!("  → Note tag: {:?}", claim_note.metadata().tag());
 
@@ -845,7 +1067,10 @@ async fn submit_claim_to_miden(
             info!("║  Faucet will auto-consume and mint P2ID to recipient.            ║");
             info!("╚══════════════════════════════════════════════════════════════════╝");
 
-            Ok::<u64, ClientError>(block_num as u64)
+            Ok::<ClaimSubmissionResult, ClientError>(ClaimSubmissionResult {
+                block_number: block_num as u64,
+                claim_note_id: claim_note_id_str,
+            })
         })
     })
     .await
@@ -1676,46 +1901,53 @@ impl EthApiServer for EthApiImpl {
 
             // Blocking submission - errors propagate back to RPC client
             match submit_claim_to_miden(config.clone(), claim_data).await {
-                Ok(block_num) => {
+                Ok(result) => {
+                    let block_num = result.block_number;
+                    let claim_note_id = result.claim_note_id;
                     info!(
                         tx_hash = %tx_hash,
                         block_num = block_num,
-                        "Miden submission SUCCEEDED"
+                        claim_note_id = %claim_note_id,
+                        "Miden CLAIM note submitted — awaiting faucet consumption"
                     );
+
+                    // DO NOT mark as Confirmed yet. The CLAIM note has been submitted,
+                    // but the faucet may not have consumed it yet (e.g., GER not registered).
+                    // The receipt will return null until consumption is confirmed.
                     self.state.record_tx(
                         tx_hash.clone(),
-                        TxStatus::Confirmed { block_number: block_num },
+                        TxStatus::AwaitingConsumption {
+                            block_number: block_num,
+                            claim_note_id: claim_note_id.clone(),
+                        },
                     );
 
-                    // Synthesize ClaimEvent log for eth_getLogs queries
-                    // Update block state and emit log
+                    // Store pending claim data for deferred ClaimEvent synthesis.
+                    // The ClaimEvent and receipt are only emitted after we confirm the
+                    // faucet consumed the CLAIM note (by syncing and checking note status).
+                    let log_amount_wei_clone = log_amount_wei;
+                    self.state.pending_claims.insert(
+                        tx_hash.clone(),
+                        PendingClaimData {
+                            global_index: log_global_index,
+                            origin_network: log_origin_network,
+                            origin_token_address: log_origin_token_address,
+                            destination_address: log_destination_address,
+                            amount_wei: log_amount_wei_clone,
+                            tx_hash: tx_hash.clone(),
+                        },
+                    );
+
+                    // Update block state (block number advances regardless)
                     self.state.block_state.set_current_block(block_num);
-                    let block_hash = self
-                        .state
-                        .block_state
-                        .get_block_hash(block_num)
-                        .unwrap_or([0u8; 32]);
 
-                    // Extract u64 from wei bytes for log synthesis
-                    // Take last 8 bytes (big-endian) - sufficient for amounts < u64::MAX
-                    let log_amount = u64::from_be_bytes(
-                        log_amount_wei[24..32].try_into().unwrap_or([0u8; 8])
-                    );
-                    self.state.log_store.add_claim_event(
-                        get_bridge_address(),
-                        block_num,
-                        block_hash,
-                        &tx_hash,
-                        &log_global_index,
-                        log_origin_network,
-                        &log_origin_token_address,
-                        &log_destination_address,
-                        log_amount,
-                    );
                     info!(
                         tx_hash = %tx_hash,
                         block_num = block_num,
-                        "ClaimEvent log synthesized for eth_getLogs"
+                        claim_note_id = %claim_note_id,
+                        timeout_blocks = CLAIM_CONSUMPTION_TIMEOUT_BLOCKS,
+                        "Receipt will be pending until CLAIM note consumed (or timeout after {} blocks)",
+                        CLAIM_CONSUMPTION_TIMEOUT_BLOCKS,
                     );
                 }
                 Err(e) => {
@@ -1770,6 +2002,129 @@ impl EthApiServer for EthApiImpl {
                 info!(tx_hash = %hash, "Transaction still PENDING - returning null (no receipt yet)");
                 return Ok(None);
             }
+            TxStatus::AwaitingConsumption { block_number, ref claim_note_id } => {
+                // CLAIM note was submitted but we haven't confirmed the faucet consumed it.
+                // Check current block height — if too many blocks have passed, the claim timed out.
+                let current_height = self.state.block_state.current_block_number();
+                if current_height > block_number + CLAIM_CONSUMPTION_TIMEOUT_BLOCKS {
+                    warn!(
+                        tx_hash = %hash,
+                        submit_block = block_number,
+                        current_block = current_height,
+                        claim_note_id = %claim_note_id,
+                        timeout_blocks = CLAIM_CONSUMPTION_TIMEOUT_BLOCKS,
+                        "CLAIM note consumption TIMED OUT — returning reverted receipt"
+                    );
+                    // Transition to Failed
+                    let reason = format!(
+                        "CLAIM note {} not consumed within {} blocks (submitted at block {}, current block {})",
+                        claim_note_id, CLAIM_CONSUMPTION_TIMEOUT_BLOCKS, block_number, current_height
+                    );
+                    self.state.record_tx(
+                        hash.clone(),
+                        TxStatus::Failed { reason: reason.clone() },
+                    );
+                    // Remove pending claim data
+                    self.state.pending_claims.remove(&hash);
+
+                    // Return reverted receipt (status=0x0)
+                    TransactionReceipt {
+                        transaction_hash: hash,
+                        block_number: format!("{:#x}", block_number),
+                        block_hash: format!("0x{}", hex::encode(
+                            self.state.block_state.get_block_hash(block_number).unwrap_or([0u8; 32])
+                        )),
+                        transaction_index: "0x0".to_string(),
+                        from: "0x0000000000000000000000000000000000000000".to_string(),
+                        to: None,
+                        gas_used: format!("{:#x}", FIXED_GAS_ESTIMATE),
+                        cumulative_gas_used: format!("{:#x}", FIXED_GAS_ESTIMATE),
+                        status: "0x0".to_string(),
+                        logs: vec![],
+                        logs_bloom: format!("0x{:0512}", 0),
+                        tx_type: "0x0".to_string(),
+                        effective_gas_price: "0x0".to_string(),
+                    }
+                } else {
+                    // Try to check consumption by syncing with Miden node
+                    let consumed = self.check_claim_note_consumed(
+                        claim_note_id,
+                        block_number,
+                    ).await;
+
+                    if consumed {
+                        info!(
+                            tx_hash = %hash,
+                            claim_note_id = %claim_note_id,
+                            block_number = block_number,
+                            "CLAIM note CONSUMED — finalizing claim"
+                        );
+
+                        // Transition to Confirmed
+                        self.state.record_tx(
+                            hash.clone(),
+                            TxStatus::Confirmed { block_number },
+                        );
+
+                        // Synthesize ClaimEvent log now that consumption is confirmed
+                        if let Some(pending) = self.state.pending_claims.remove(&hash) {
+                            let block_hash = self
+                                .state
+                                .block_state
+                                .get_block_hash(block_number)
+                                .unwrap_or([0u8; 32]);
+                            let log_amount = u64::from_be_bytes(
+                                pending.amount_wei[24..32].try_into().unwrap_or([0u8; 8])
+                            );
+                            self.state.log_store.add_claim_event(
+                                get_bridge_address(),
+                                block_number,
+                                block_hash,
+                                &hash,
+                                &pending.global_index,
+                                pending.origin_network,
+                                &pending.origin_token_address,
+                                &pending.destination_address,
+                                log_amount,
+                            );
+                            info!(
+                                tx_hash = %hash,
+                                block_number = block_number,
+                                "ClaimEvent log synthesized after confirmed consumption"
+                            );
+                        }
+
+                        // Return success receipt
+                        TransactionReceipt {
+                            transaction_hash: hash,
+                            block_number: format!("{:#x}", block_number),
+                            block_hash: format!("0x{}", hex::encode(
+                                self.state.block_state.get_block_hash(block_number).unwrap_or([0u8; 32])
+                            )),
+                            transaction_index: "0x0".to_string(),
+                            from: "0x0000000000000000000000000000000000000000".to_string(),
+                            to: None,
+                            gas_used: format!("{:#x}", FIXED_GAS_ESTIMATE),
+                            cumulative_gas_used: format!("{:#x}", FIXED_GAS_ESTIMATE),
+                            status: "0x1".to_string(),
+                            logs: vec![],
+                            logs_bloom: format!("0x{:0512}", 0),
+                            tx_type: "0x0".to_string(),
+                            effective_gas_price: "0x0".to_string(),
+                        }
+                    } else {
+                        info!(
+                            tx_hash = %hash,
+                            claim_note_id = %claim_note_id,
+                            submit_block = block_number,
+                            current_block = current_height,
+                            blocks_remaining = (block_number + CLAIM_CONSUMPTION_TIMEOUT_BLOCKS).saturating_sub(current_height),
+                            "CLAIM note not yet consumed — returning null (pending)"
+                        );
+                        return Ok(None);
+                    }
+                }
+            }
             TxStatus::Confirmed { block_number } => {
                 info!(
                     tx_hash = %hash,
@@ -1779,7 +2134,9 @@ impl EthApiServer for EthApiImpl {
                 TransactionReceipt {
                     transaction_hash: hash,
                     block_number: format!("{:#x}", block_number),
-                    block_hash: format!("0x{:064x}", block_number),
+                    block_hash: format!("0x{}", hex::encode(
+                        self.state.block_state.get_block_hash(block_number).unwrap_or([0u8; 32])
+                    )),
                     transaction_index: "0x0".to_string(),
                     from: "0x0000000000000000000000000000000000000000".to_string(),
                     to: None,
@@ -2011,6 +2368,7 @@ impl EthApiServer for EthApiImpl {
         if let Some(status) = self.state.get_tx_status(&tx_hash) {
             let block_num = match &status {
                 TxStatus::Confirmed { block_number } => *block_number,
+                TxStatus::AwaitingConsumption { block_number, .. } => *block_number,
                 _ => 0,
             };
 
