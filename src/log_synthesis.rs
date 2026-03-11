@@ -111,7 +111,7 @@ pub enum TopicFilter {
 }
 
 impl LogFilter {
-    /// Parse block number from string
+    /// Parse block number from string (hex "0x..." or decimal)
     pub fn parse_block_number(&self, s: &str, current_block: u64) -> u64 {
         match s.to_lowercase().as_str() {
             "earliest" => 0,
@@ -119,7 +119,7 @@ impl LogFilter {
             hex if hex.starts_with("0x") => {
                 u64::from_str_radix(&hex[2..], 16).unwrap_or(current_block)
             }
-            _ => current_block,
+            decimal => decimal.parse::<u64>().unwrap_or(current_block),
         }
     }
 
@@ -208,6 +208,11 @@ pub struct LogStore {
     seen_gers: RwLock<HashMap<[u8; 32], u64>>,
     /// Hash chain value for UpdateHashChainValue event (cumulative)
     hash_chain_value: RwLock<[u8; 32]>,
+    /// Pending events that haven't been delivered to any eth_getLogs caller yet.
+    /// This handles the race condition where a GER event is stored at a block
+    /// that the bridge has already scanned past. On the next get_logs call,
+    /// pending events are re-tagged to the queried block and delivered.
+    pending_events: RwLock<Vec<SyntheticLog>>,
 }
 
 impl LogStore {
@@ -219,6 +224,7 @@ impl LogStore {
             log_counter: RwLock::new(0),
             seen_gers: RwLock::new(HashMap::new()),
             hash_chain_value: RwLock::new([0u8; 32]),
+            pending_events: RwLock::new(Vec::new()),
         }
     }
 
@@ -257,7 +263,11 @@ impl LogStore {
             .write()
             .entry(tx_hash)
             .or_default()
-            .push(log);
+            .push(log.clone());
+
+        // Also add to pending queue so it gets delivered even if the bridge
+        // already scanned past this block number.
+        self.pending_events.write().push(log);
     }
 
     /// Create a ClaimEvent log for a confirmed claim
@@ -350,15 +360,50 @@ impl LogStore {
         true
     }
 
-    /// Query logs matching filter
-    pub fn get_logs(&self, filter: &LogFilter, current_block: u64) -> Vec<SyntheticLog> {
+    /// Query logs matching filter.
+    ///
+    /// In addition to the normal block-range scan, this drains any pending events
+    /// whose original block is BEFORE the queried range (i.e., events the caller
+    /// already missed). These are re-tagged to `from` block so the bridge sees them.
+    pub fn get_logs(
+        &self,
+        filter: &LogFilter,
+        current_block: u64,
+    ) -> Vec<SyntheticLog> {
+        use crate::block_state::SyntheticBlock;
+
         let mut result = Vec::new();
-        let logs_by_block = self.logs_by_block.read();
 
         // Determine block range
         let from = filter.from_block_number(current_block);
         let to = filter.to_block_number(current_block);
 
+        // First, drain any pending events that were stored at blocks before `from`.
+        // Re-tag them to the `from` block so the bridge picks them up now.
+        {
+            let mut pending = self.pending_events.write();
+            let mut remaining = Vec::new();
+            for mut evt in pending.drain(..) {
+                if evt.block_number < from {
+                    // This event was stored at an already-scanned block — deliver it now.
+                    evt.block_number = from;
+                    evt.block_hash = SyntheticBlock::compute_hash_for_number(from);
+                    if filter.matches(&evt, current_block) {
+                        result.push(evt);
+                    }
+                } else if evt.block_number >= from && evt.block_number <= to {
+                    // In range — will be found by the normal scan below.
+                    // Remove from pending (it's being delivered).
+                } else {
+                    // Future block — keep pending.
+                    remaining.push(evt);
+                }
+            }
+            *pending = remaining;
+        }
+
+        // Normal block-range scan
+        let logs_by_block = self.logs_by_block.read();
         for block_num in from..=to {
             if let Some(logs) = logs_by_block.get(&block_num) {
                 for log in logs {
@@ -367,7 +412,6 @@ impl LogStore {
                     }
                 }
             }
-            // Limit to 1000 logs per spec
             if result.len() >= 1000 {
                 break;
             }

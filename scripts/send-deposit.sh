@@ -30,13 +30,17 @@ miden_to_eth() {
     local miden_addr="$1"
     # Remove 0x prefix if present
     miden_addr="${miden_addr#0x}"
-    # Validate length (should be 30 hex chars)
+    # Validate length (should be 30 hex chars = 15 bytes)
     if [[ ${#miden_addr} -ne 30 ]]; then
         echo "ERROR: Miden address must be 30 hex chars (15 bytes), got ${#miden_addr}" >&2
         return 1
     fi
-    # Miden is 30 hex chars, Eth is 40 hex chars, so pad with 10 zeros
-    echo "0x0000000000${miden_addr}"
+    # Miden AccountId is 2 Felts: prefix (8 bytes) + suffix (7 bytes, last byte always 0).
+    # The bridge contract splits a 20-byte Eth address as:
+    #   [4 zero bytes] [8 bytes prefix] [8 bytes suffix]
+    # So we pad with 4 leading zero bytes (8 hex chars) and append "00" for the
+    # suffix's always-zero last byte, giving 8 + 30 + 2 = 40 hex chars.
+    echo "0x00000000${miden_addr}00"
 }
 
 # ============================================================================

@@ -101,6 +101,19 @@ async fn get_or_create_account(
     // Add account to client
     client.add_account(&account, false).await?;
 
+    // Sync state first (required for transaction execution)
+    client.sync_state().await?;
+
+    // Deploy account on-chain by submitting an empty transaction.
+    // This is required for the P2ID note script to verify the account exists.
+    println!("  Deploying account on-chain...");
+    let deploy_tx = TransactionRequestBuilder::new().build()?;
+    let tx_id = client.submit_new_transaction(account_id, deploy_tx).await?;
+    println!("  ✓ Account deployed (tx: {})", tx_id);
+
+    // Sync to ensure the deployment is visible
+    client.sync_state().await?;
+
     Ok(account_id)
 }
 
@@ -160,9 +173,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let account_id = account.id();
             let miden_hex = format!("0x{}", hex::encode(<[u8; 15]>::from(account_id)));
 
-            // Also compute the Eth-padded version
+            // Compute Eth-padded version: [4 zero bytes][prefix 8 bytes][suffix 8 bytes]
+            // The bridge splits the 20-byte Eth address at offset 4 as prefix(8)+suffix(8).
+            // AccountId is prefix(8 bytes) + suffix(7 bytes), but suffix Felt is 8 bytes
+            // with the last byte always zero.
+            let id_15 = <[u8; 15]>::from(account_id);
             let mut eth_bytes = [0u8; 20];
-            eth_bytes[5..].copy_from_slice(&<[u8; 15]>::from(account_id));
+            eth_bytes[4..12].copy_from_slice(&id_15[..8]);    // prefix
+            eth_bytes[12..19].copy_from_slice(&id_15[8..]);   // suffix (7 bytes)
+            eth_bytes[19] = 0;                                 // suffix last byte (always 0)
             let eth_hex = format!("0x{}", hex::encode(eth_bytes));
 
             println!("Derived Claimer Account");
@@ -363,16 +382,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  ✓ Note found in local store");
             }
 
-            // Re-fetch consumable notes after potential import
-            let consumable_notes = client
-                .get_consumable_notes(Some(claimer_account_id))
+            // Get the note directly from the store (bypass consumability check
+            // which may fail for notes without target_account_id metadata)
+            let input_notes_after = client
+                .get_input_notes(NoteFilter::All)
                 .await
-                .map_err(|e| format!("Failed to get consumable notes: {}", e))?;
+                .map_err(|e| format!("Failed to get input notes: {}", e))?;
 
-            let note_record = consumable_notes
+            let note_record = input_notes_after
                 .into_iter()
-                .find(|(n, _)| n.id() == note_id)
-                .map(|(n, _)| n);
+                .find(|n| n.id() == note_id);
 
             let note: miden_protocol::note::Note = match note_record {
                 Some(record) => record
@@ -380,8 +399,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(|e| format!("Failed to convert note: {:?}", e))?,
                 None => {
                     eprintln!(
-                        "✗ Note {} is not consumable by account {}",
-                        note_id_hex, claimer_hex
+                        "✗ Note {} not found in store after import",
+                        note_id_hex
                     );
                     eprintln!();
                     eprintln!("Possible reasons:");
@@ -436,7 +455,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let tx_id = client
                 .submit_new_transaction(claimer_account_id, tx_request)
                 .await
-                .map_err(|e| format!("Failed to submit transaction: {}", e))?;
+                .map_err(|e| format!("Failed to submit transaction: {:?}", e))?;
 
             println!();
             println!("═══════════════════════════════════════════════════════════════════");

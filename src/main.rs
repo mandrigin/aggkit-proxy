@@ -1270,7 +1270,7 @@ impl EthApiServer for EthApiImpl {
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap_or_default()
                                     .as_secs();
-                                self.state.block_state.set_current_block(block_number, timestamp);
+                                self.state.block_state.set_current_block(block_number);
 
                                 // Store GER (for internal tracking)
                                 let _synthetic_hash = self.state.ger_store.inject_ger(
@@ -1366,7 +1366,7 @@ impl EthApiServer for EthApiImpl {
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap_or_default()
                                     .as_secs();
-                                self.state.block_state.set_current_block(block_number, timestamp);
+                                self.state.block_state.set_current_block(block_number);
 
                                 // Store GER (for internal tracking)
                                 let _synthetic_hash = self.state.ger_store.inject_ger(
@@ -1689,13 +1689,7 @@ impl EthApiServer for EthApiImpl {
 
                     // Synthesize ClaimEvent log for eth_getLogs queries
                     // Update block state and emit log
-                    self.state.block_state.set_current_block(
-                        block_num,
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                    );
+                    self.state.block_state.set_current_block(block_num);
                     let block_hash = self
                         .state
                         .block_state
@@ -1939,7 +1933,12 @@ impl EthApiServer for EthApiImpl {
                 let fallback = self.state.block_state.current_block_number();
                 u64::from_str_radix(&hex[2..], 16).unwrap_or(fallback)
             }
-            _ => self.state.block_state.current_block_number(),
+            decimal => {
+                // Bridge sends decimal block numbers (e.g. "12" instead of "0xc")
+                decimal.parse::<u64>().unwrap_or_else(|_| {
+                    self.state.block_state.current_block_number()
+                })
+            }
         };
 
         info!(
@@ -1948,12 +1947,7 @@ impl EthApiServer for EthApiImpl {
             "eth_getBlockByNumber"
         );
 
-        // Update block state with current timestamp
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        self.state.block_state.set_current_block(block_num, timestamp);
+        self.state.block_state.set_current_block(block_num);
 
         match self.state.block_state.get_block_by_number(block_num) {
             Some(block) => Ok(Some(block.to_json(full_transactions))),
