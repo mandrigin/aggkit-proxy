@@ -12,3 +12,6 @@ description: |
 
   Usage:
     kurtosis run . --args-file params.yaml --enclave miden-cdk
+
+replace:
+  github.com/0xPolygon/kurtosis-cdk: ../../../kurtosis-cdk

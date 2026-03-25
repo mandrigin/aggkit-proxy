@@ -27,6 +27,16 @@ RUN git rev-parse HEAD > /tmp/miden-client-commit.txt && \
 RUN sed -i 's|format!("127.0.0.1:{}", self.rpc_port)|format!("0.0.0.0:{}", self.rpc_port)|' \
     crates/testing/node-builder/src/lib.rs
 
+# Fetch dependencies first so we can patch them
+RUN cargo fetch
+
+# Patch: Add logging for FailedNote errors in ntx-builder so we can debug CLAIM failures
+RUN NTX_DIR=$(find /usr/local/cargo/registry/src -name 'miden-node-ntx-builder-*' -type d | head -1) && \
+    echo "Patching ntx-builder at: $NTX_DIR" && \
+    ls "$NTX_DIR/src/actor/" && \
+    sed -i 's|Err(NtxError::AllNotesFailed(failed))|{ for f in \&failed { tracing::error!("note {} failed: {:?}", f.note.id(), f.error); } Err(NtxError::AllNotesFailed(failed)) }|' \
+    "$NTX_DIR/src/actor/execute.rs"
+
 # Build the testing-node-builder binary
 RUN cargo build --release --package node-builder
 
