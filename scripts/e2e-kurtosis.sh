@@ -20,7 +20,7 @@
 #   - Docker running
 #   - Miden images built:
 #       docker build -t miden-infra/miden-node:agglayer-v0.1 -f Dockerfile.miden-node .
-#       docker build -t miden-infra/miden-proxy:latest .
+#       docker build https://github.com/gateway-fm/miden-agglayer.git#feat/l2-l1 -t miden-infra/miden-proxy:latest
 
 set -euo pipefail
 
@@ -93,12 +93,10 @@ check_prerequisites() {
     success "Miden node image found"
 
     if ! docker image inspect miden-infra/miden-proxy:latest &>/dev/null; then
-        log "Building miden-proxy image..."
-        docker build -t miden-infra/miden-proxy:latest -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR"
-        success "Miden proxy image built"
-    else
-        success "Miden proxy image found"
+        fail "miden-infra/miden-proxy:latest image not found. Build from miden-agglayer:
+    docker build https://github.com/gateway-fm/miden-agglayer.git#feat/l2-l1 -t miden-infra/miden-proxy:latest"
     fi
+    success "Miden proxy image found (miden-agglayer)"
 
     if ! command -v cast &>/dev/null; then
         warn "foundry (cast) not found - deposit test will be skipped"

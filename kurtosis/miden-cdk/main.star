@@ -87,13 +87,10 @@ MIDEN_DEFAULTS = {
     "miden_node_image": "miden-infra/miden-node:agglayer-v0.1",
     "miden_node_port": 57291,
 
-    # Miden proxy configuration
+    # Miden proxy configuration (miden-agglayer)
     "miden_proxy_image": "miden-infra/miden-proxy:latest",
     "miden_proxy_port": 8546,
     "miden_proxy_external_port": 8123,
-
-    # Bridge faucet ID for claim transactions
-    "bridge_faucet_id": "0x000000000000000000000000000001",
 
     # Aggkit deployment (enabled - required for GER injection)
     # The aggoracle component injects Global Exit Root updates from L1 to L2
@@ -130,6 +127,11 @@ def run(plan, args={}):
     # makes 4_createRollup.ts run during deploy_agglayer_contracts_on_l1 instead.
     miden_cdk_overrides = {
         "sequencer_type": "cdk-erigon",
+        # Point AggLayer's full-node-rpc to our Miden proxy (not non-existent cdk-erigon)
+        "l2_fullnode_rpc_url": "http://miden-proxy{}:{}".format(
+            miden_args.get("deployment_suffix", "-001"),
+            miden_args.get("miden_proxy_port", 8546),
+        ),
     }
     miden_cdk_overrides.update(args.get("args", {}))
     cdk_args = {

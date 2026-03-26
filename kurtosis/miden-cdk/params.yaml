@@ -41,14 +41,10 @@ miden:
   miden_node_image: "miden-infra/miden-node:agglayer-v0.1"
   miden_node_port: 57291
 
-  # Miden RPC proxy image
-  # Build with: docker build -t miden-infra/miden-proxy:latest .
+  # Miden RPC proxy image (miden-agglayer)
+  # Build with: docker build https://github.com/gateway-fm/miden-agglayer.git#feat/l2-l1 -t miden-infra/miden-proxy:latest
   miden_proxy_image: "miden-infra/miden-proxy:latest"
   miden_proxy_port: 8546
-
-  # Bridge faucet ID for claim transactions
-  # This account ID is used by the proxy to mint tokens for claims
-  bridge_faucet_id: "0x000000000000000000000000000001"
 
   # Deploy web UI for sending deposits (bridge ETH from L1 to Miden)
   deploy_web_ui: true

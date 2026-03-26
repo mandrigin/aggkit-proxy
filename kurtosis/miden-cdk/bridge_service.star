@@ -224,8 +224,8 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
                     artifact_names=[config_artifact, aggoracle_keystore],
                 ),
             },
-            # Only run aggoracle for now (aggsender needs more config)
-            cmd=["run", "--cfg=/etc/aggkit/config.toml", "--components=aggoracle"],
+            # Run aggoracle (GER injection) and aggsender (L2→L1 certificate submission)
+            cmd=["run", "--cfg=/etc/aggkit/config.toml", "--components=aggoracle,aggsender"],
             # Docker Desktop grouping label
             labels={
                 DOCKER_PROJECT_LABEL: BRIDGE_PROJECT_GROUP,
@@ -372,7 +372,54 @@ Password = "{{.l2_keystore_password}}"
 URL = "{{.l2_rpc_url}}"
 L1ChainID = {{.l2_chain_id}}
 
-# AggSender
+# AggSender — submits certificates to AggLayer for L2→L1 bridging
 [AggSender]
 AggSenderPrivateKey = {Path = "/etc/aggkit/aggoracle.keystore", Password = "{{.l2_keystore_password}}"}
+Mode = "PessimisticProof"
+CheckStatusCertificateInterval = "1s"
+TriggerCertMode = "ASAP"
+
+[AggSender.StorageRetainCertificatesPolicy]
+RetryCertAfterInError = true
+
+[AggSender.AggkitProverClient]
+UseTLS = false
+
+[AggSender.AgglayerClient]
+
+[[AggSender.AgglayerClient.APIRateLimits]]
+MethodName = "SendCertificate"
+
+[AggSender.AgglayerClient.APIRateLimits.RateLimit]
+NumRequests = 0
+
+[AggSender.AgglayerClient.GRPC]
+URL = "{{.agglayer_url}}"
+MinConnectTimeout = "5s"
+RequestTimeout = "300s"
+UseTLS = false
+
+[AggSender.AgglayerClient.GRPC.Retry]
+InitialBackoff = "1s"
+MaxBackoff = "10s"
+BackoffMultiplier = 2.0
+MaxAttempts = 20
+
+# BridgeL2Sync — syncs BridgeEvent logs from L2 proxy for AggSender deposit tree
+[BridgeL2Sync]
+BridgeAddr = "{{.l2_bridge_address}}"
+BlockFinality = "LatestBlock"
+# Disable debug_traceTransaction calls — Miden proxy synthetic txns don't have call traces
+SyncFromInBridges = "false"
+
+[ReorgDetectorL2]
+FinalizedBlock = "LatestBlock"
+
+# L1InfoTreeSync — syncs L1 info tree for certificate building
+[L1InfoTreeSync]
+InitialBlock = "{{.rollup_manager_block_number}}"
+
+# L2GERSync — syncs L2 GER for AggSender
+[L2GERSync]
+BlockFinality = "LatestBlock"
 """
