@@ -212,7 +212,7 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
     return plan.add_service(
         name=service_name,
         config=ServiceConfig(
-            image=cdk_args.get("aggkit_image", "ghcr.io/0xpolygon/aggkit:latest"),
+            image=cdk_args.get("aggkit_image", "ghcr.io/agglayer/aggkit:0.9.0-rc3"),
             ports={
                 "rpc": PortSpec(
                     number=5576,
