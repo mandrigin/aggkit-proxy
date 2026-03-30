@@ -140,6 +140,49 @@ deploy_miden_cdk() {
 }
 
 #######################################
+# Fix Proposer Mismatch
+#######################################
+
+fix_proposer() {
+    step "Fixing AggLayer Proposer"
+
+    # The aggkit uses 0x0b68058E... as its signing key (from aggoracle.keystore).
+    # The AggLayer and L1 rollup contract default to a different address.
+    # Fix both so certificate submission works.
+    local AGGKIT_ADDR="0x0b68058E5b2592b1f472AdFe106305295A332A7C"
+    local ROLLUP_ADDR="0x414e9E227e4b589aF92200508aF5399576530E4e"
+
+    # 1. Update L1 trustedSequencer
+    if [[ -n "$L1_RPC" ]]; then
+        cast send "$ROLLUP_ADDR" "setTrustedSequencer(address)" "$AGGKIT_ADDR" \
+            --private-key "$KURTOSIS_PRIVATE_KEY" --rpc-url "$L1_RPC" --gas-limit 100000 --json > /dev/null 2>&1 \
+            && success "L1 trustedSequencer → $AGGKIT_ADDR" \
+            || warn "Failed to update L1 trustedSequencer"
+    fi
+
+    # 2. Update AggLayer proof-signers config
+    kurtosis service exec "$ENCLAVE_NAME" agglayer \
+        "sed -i 's|\"0x[a-fA-F0-9]*\"|\"$AGGKIT_ADDR\"|' /etc/agglayer/config.toml" 2>/dev/null \
+        && success "AggLayer proof-signers → $AGGKIT_ADDR" \
+        || warn "Failed to update AggLayer config"
+
+    # 3. Update AggLayer full-node-rpcs to point to our proxy
+    kurtosis service exec "$ENCLAVE_NAME" agglayer \
+        "sed -i 's|http://cdk-erigon-rpc-001:8545|http://miden-l2-forwarder-001:8545|' /etc/agglayer/config.toml" 2>/dev/null \
+        && success "AggLayer full-node-rpcs → miden forwarder" \
+        || warn "Failed to update AggLayer RPC endpoint"
+
+    # 4. Restart agglayer + aggkit
+    kurtosis service stop "$ENCLAVE_NAME" agglayer > /dev/null 2>&1
+    sleep 2
+    kurtosis service start "$ENCLAVE_NAME" agglayer > /dev/null 2>&1
+    kurtosis service stop "$ENCLAVE_NAME" aggkit-001 > /dev/null 2>&1
+    sleep 2
+    kurtosis service start "$ENCLAVE_NAME" aggkit-001 > /dev/null 2>&1
+    success "Restarted agglayer + aggkit"
+}
+
+#######################################
 # Get Service URLs
 #######################################
 
@@ -304,6 +347,7 @@ main() {
     deploy_miden_cdk
     get_service_urls
     test_proxy
+    fix_proposer
 
     if ! $SKIP_DEPOSIT; then
         send_test_deposit

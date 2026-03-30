@@ -160,9 +160,13 @@ def _deploy_miden_node(plan, deployment_suffix, image):
                 ),
             },
             # Miden node runs in devnet mode for testing
+            # AGGLAYER_GENESIS=0: proxy creates bridge/faucet accounts (not node genesis)
             env_vars={
                 "RUST_LOG": "info,miden_node_ntx_builder=debug,miden_tx=debug",
+                "AGGLAYER_GENESIS": "1",
             },
+            # Memory: miden-node needs ~4GB for claims + bridge-out
+            min_memory=4096,
             # Docker Desktop grouping label
             labels={
                 DOCKER_PROJECT_LABEL: MIDEN_PROJECT_GROUP,
