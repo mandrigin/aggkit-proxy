@@ -160,9 +160,9 @@ fix_proposer() {
             || warn "Failed to update L1 trustedSequencer"
     fi
 
-    # 2. Update AggLayer proof-signers config
+    # 2. Update AggLayer proof-signers config (only the proof-signers line, not all addresses)
     kurtosis service exec "$ENCLAVE_NAME" agglayer \
-        "sed -i 's|\"0x[a-fA-F0-9]*\"|\"$AGGKIT_ADDR\"|' /etc/agglayer/config.toml" 2>/dev/null \
+        "sed -i '/\[proof-signers\]/{n;s|\"0x[a-fA-F0-9]*\"|\"'$AGGKIT_ADDR'\"|;}' /etc/agglayer/config.toml" 2>/dev/null \
         && success "AggLayer proof-signers → $AGGKIT_ADDR" \
         || warn "Failed to update AggLayer config"
 
