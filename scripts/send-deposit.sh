@@ -81,8 +81,8 @@ if [[ -z "$BRIDGE_ADDRESS" ]]; then
     exit 1
 fi
 
-# Destination network (Miden = 2)
-DEST_NETWORK=2
+# Destination network (Miden = rollup 1 in the bridge, NOT chainId=2)
+DEST_NETWORK=1
 
 # Get L1 RPC - try Docker first (faster), then kurtosis
 L1_RPC="${L1_RPC:-}"

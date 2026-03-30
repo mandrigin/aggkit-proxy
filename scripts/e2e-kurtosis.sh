@@ -212,14 +212,15 @@ send_test_deposit() {
     # Distinctive amount: 0.1 ETH (scaled to 8 decimals for Miden)
     local amount="100000000000000000"  # 0.1 ETH
 
-    log "Deposit: 0.1 ETH to Miden (network 2)"
+    log "Deposit: 0.1 ETH to Miden (network 1)"
     log "From: $KURTOSIS_ADDRESS"
     log "Bridge: $BRIDGE_ADDRESS"
 
     # Encode bridgeAsset call
+    # NOTE: dest_net=1 (bridge rollup index), NOT chainId=2
     local calldata
     calldata=$(cast calldata "bridgeAsset(uint32,address,uint256,address,bool,bytes)" \
-        2 \
+        1 \
         "0x0000000000000000000000000000000000000001" \
         "$amount" \
         "0x0000000000000000000000000000000000000000" \
