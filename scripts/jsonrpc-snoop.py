@@ -10,12 +10,15 @@ LISTEN_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 9999
 LOG_FILE = sys.argv[3] if len(sys.argv) > 3 else "/tmp/jsonrpc-snoop.log"
 
 KNOWN_EVENTS = {
+    # keccak256("InsertGlobalExitRoot(bytes32,bytes32)") — sovereign chain GER injection
     "0x65d3bf36615f1f02a134d12dfa9ea6b1d4a52386e825973cd27ddb70895c2319":
         ("InsertGlobalExitRoot", ["bytes32 newGER", "bytes32 lastBlockHash"]),
-    "0x501781209a1f8899323b96b4ef08b168df93e0a90c673d1e4cce39f97571d4d7":
+    # keccak256("ClaimEvent(uint256,uint32,address,address,uint256)") — from log_synthesis.rs
+    "0x1df3f2a973a00d6635911755c260704e95e8a5876997546798770f76396fda4d":
         ("ClaimEvent", ["uint256 globalIndex", "uint32 originNet", "address originAddr", "address destAddr", "uint256 amount"]),
-    "0x1df3f2a973a00d6635911755601dddce2f2ab16e48b52ef7b55c8d2c7c730a70":
-        ("UpdateL1InfoTreeV2", []),
+    # keccak256("BridgeEvent(uint8,uint32,address,uint32,address,uint256,bytes,uint32)") — from log_synthesis.rs
+    "0x501781209a1f8899323b96b4ef08b168df93e0a90c673d1e4cce39366cb62f9b":
+        ("BridgeEvent", ["uint8 leafType", "uint32 originNet", "address originAddr", "uint32 destNet", "address destAddr", "uint256 amount"]),
 }
 
 log_lock = threading.Lock()
@@ -84,7 +87,7 @@ class SnoopHandler(BaseHTTPRequestHandler):
 
         try:
             upstream_req = Request(UPSTREAM, data=body, headers={"Content-Type": "application/json"}, method="POST")
-            with urlopen(upstream_req, timeout=30) as resp:
+            with urlopen(upstream_req, timeout=120) as resp:
                 resp_body = resp.read()
                 status = resp.status
         except Exception as e:
