@@ -176,14 +176,18 @@ done
 echo "✓ All minted and approved"
 echo ""
 
-# Bridge amount: 100 tokens each (scaled by decimals)
-BRIDGE_BASE="100"
+# Bridge amount per token: 0.1, 0.2, ... 1.0 tokens (scaled by decimals)
+BRIDGE_AMOUNTS=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0
+                0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 
 echo "--- Step 4: Bridging tokens one by one ---"
+TOKEN_IDX=0
 for TOKEN_INFO in "${TOKENS[@]}"; do
     IFS=: read -r ADDR NAME SYM DEC <<< "$TOKEN_INFO"
 
-    BRIDGE_WEI="${BRIDGE_BASE}$(printf '%0*d' "$DEC" 0)"
+    BRIDGE_AMT="${BRIDGE_AMOUNTS[$TOKEN_IDX]}"
+    # Use cast to-wei with the token's decimals for precise conversion
+    BRIDGE_WEI=$(cast to-wei "$BRIDGE_AMT" "$DEC")
 
     # bridgeAsset(uint32 destNet, address destAddr, uint256 amount, address token, bool forceUpdate, bytes permit)
     CALLDATA=$(cast calldata "bridgeAsset(uint32,address,uint256,address,bool,bytes)" \
@@ -206,11 +210,12 @@ for TOKEN_INFO in "${TOKENS[@]}"; do
     BLOCK=$(echo "$RESULT" | jq -r '.blockNumber // "?"')
 
     if [[ "$STATUS" == "0x1" ]]; then
-        echo "  ✓ $SYM: bridged $BRIDGE_BASE tokens, block=$((BLOCK)), tx=${TX:0:18}..."
+        echo "  ✓ $SYM: bridged $BRIDGE_AMT tokens (${DEC}dec, ${BRIDGE_WEI}wei), block=$((BLOCK)), tx=${TX:0:18}..."
     else
         echo "  ✗ $SYM: FAILED — $(echo "$RESULT" | head -1)"
     fi
     NONCE=$((NONCE + 1))
+    TOKEN_IDX=$((TOKEN_IDX + 1))
 done
 echo ""
 
