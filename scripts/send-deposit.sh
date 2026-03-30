@@ -53,8 +53,8 @@ AMOUNT_ETH="${1:-0.01}"
 # Destination: optional Miden address
 DEST_MIDEN="${2:-}"
 
-# Convert to wei
-AMOUNT_WEI=$(echo "$AMOUNT_ETH * 1000000000000000000" | bc | cut -d'.' -f1)
+# Convert to wei (use cast to avoid floating point precision issues)
+AMOUNT_WEI=$(cast to-wei "$AMOUNT_ETH" ether)
 
 # Kurtosis funded account
 PRIVATE_KEY="0x12d7de8621a77640c9241b2595ba78ce443d05e94090365ab3bb5e19df82c625"
