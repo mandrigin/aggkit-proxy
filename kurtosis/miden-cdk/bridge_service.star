@@ -174,11 +174,20 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
     """
     service_name = "aggkit" + deployment_suffix
 
-    # Get aggoracle keystore from contracts service
+    # Get aggoracle keystore from contracts service (for GER injection)
     aggoracle_keystore = plan.store_service_files(
         name="aggoracle-keystore" + deployment_suffix,
         service_name="contracts" + deployment_suffix,
         src="/opt/keystores/aggoracle.keystore",
+    )
+
+    # Get sequencer keystore from contracts service (for certificate signing)
+    # The sequencer address is registered as the proposer in the L1 validator committee.
+    # The aggsender must sign certificates with this key for the AggLayer to accept them.
+    sequencer_keystore = plan.store_service_files(
+        name="sequencer-keystore" + deployment_suffix,
+        service_name="contracts" + deployment_suffix,
+        src="/opt/keystores/sequencer.keystore",
     )
 
     # Generate aggkit config
@@ -221,7 +230,7 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
             },
             files={
                 "/etc/aggkit": Directory(
-                    artifact_names=[config_artifact, aggoracle_keystore],
+                    artifact_names=[config_artifact, aggoracle_keystore, sequencer_keystore],
                 ),
             },
             # Run aggoracle (GER injection) and aggsender (L2→L1 certificate submission)
@@ -321,7 +330,7 @@ L1URL = "{{.l1_rpc_url}}"
 L2URL = "{{.l2_rpc_url}}"
 AggLayerURL = "{{.agglayer_url}}"
 AggchainProofURL = ""
-SequencerPrivateKeyPath = "/etc/aggkit/aggoracle.keystore"
+SequencerPrivateKeyPath = "/etc/aggkit/sequencer.keystore"
 SequencerPrivateKeyPassword = "{{.l2_keystore_password}}"
 
 # Block numbers (top-level, resolved by aggkit config renderer)
@@ -374,7 +383,7 @@ L1ChainID = {{.l2_chain_id}}
 
 # AggSender — submits certificates to AggLayer for L2→L1 bridging
 [AggSender]
-AggSenderPrivateKey = {Path = "/etc/aggkit/aggoracle.keystore", Password = "{{.l2_keystore_password}}"}
+AggSenderPrivateKey = {Path = "/etc/aggkit/sequencer.keystore", Password = "{{.l2_keystore_password}}"}
 Mode = "PessimisticProof"
 CheckStatusCertificateInterval = "1s"
 TriggerCertMode = "ASAP"
