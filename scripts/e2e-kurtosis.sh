@@ -221,7 +221,7 @@ send_test_deposit() {
     local calldata
     calldata=$(cast calldata "bridgeAsset(uint32,address,uint256,address,bool,bytes)" \
         1 \
-        "0x0000000000000000000000000000000000000001" \
+        "0x00000000a417929a101b89100dda63bf4f692800" \
         "$amount" \
         "0x0000000000000000000000000000000000000000" \
         true \
