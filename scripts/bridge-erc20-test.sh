@@ -122,7 +122,7 @@ NONCE=$(cast nonce "$FROM_ADDRESS" --rpc-url "$L1_RPC")
 TOKENS=()
 NAMES=("ALPHA" "BETA" "GAMMA" "DELTA" "EPSILON" "ZETA" "ETA" "THETA" "IOTA" "KAPPA"
        "LAMBDA" "MU" "NU" "XI" "OMICRON" "PI" "RHO" "SIGMA" "TAU" "UPSILON")
-DECIMALS=(18 18 6 8 18 6 8 18 6 18 18 8 6 18 18 6 8 18 18 6)
+DECIMALS=(18 18 8 8 18 10 8 18 12 18 18 8 10 18 18 9 8 18 18 12)
 
 BYTECODE=$(jq -r '.bytecode.object' "$TMPDIR/out/TestToken.sol/TestToken.json")
 
