@@ -1,0 +1,551 @@
+diff --git a/src/claim.rs b/src/claim.rs
+index 5104c2f..195cad9 100644
+--- a/src/claim.rs
++++ b/src/claim.rs
+@@ -212,6 +212,14 @@ async fn publish_claim_internal(
+     store: &dyn Store,
+     latest_block_num: BlockNumber,
+ ) -> anyhow::Result<PublishClaimTxn> {
++    let gi = format!("{}", params.globalIndex);
++    tracing::info!(
++        global_index = %gi,
++        "[publish_claim_internal] ENTER — inside MidenClient closure (lock held)"
++    );
++
++    tracing::info!(global_index = %gi, "[publish_claim_internal] step 1/8: find_or_create_faucet");
++    let faucet_start = std::time::Instant::now();
+     let faucet = find_or_create_faucet(
+         params.originTokenAddress,
+         params.originNetwork,
+@@ -221,9 +229,15 @@ async fn publish_claim_internal(
+         accounts,
+     )
+     .await?;
++    tracing::info!(
++        global_index = %gi,
++        elapsed_ms = faucet_start.elapsed().as_millis(),
++        faucet_id = %crate::accounts_config::AccountIdBech32(faucet.id),
++        "[publish_claim_internal] step 1/8: find_or_create_faucet DONE"
++    );
+ 
+     tracing::info!(
+-        global_index = %params.globalIndex,
++        global_index = %gi,
+         origin_network = %params.originNetwork,
+         dest_address = %params.destinationAddress,
+         amount = %params.amount,
+@@ -233,34 +247,38 @@ async fn publish_claim_internal(
+         "creating CLAIM note"
+     );
+ 
++    tracing::info!(global_index = %gi, "[publish_claim_internal] step 2/8: create_claim");
+     let claim_note = create_claim(params.clone(), faucet, accounts, store, client.rng()).await?;
+     let claim_note_id = claim_note.id().to_string();
++    tracing::info!(global_index = %gi, claim_note_id = %claim_note_id, "[publish_claim_internal] step 2/8: create_claim DONE");
+ 
+     const EXPIRATION_DELTA: u16 = 10;
+     let expires_at = latest_block_num + EXPIRATION_DELTA as u64;
+ 
+     // Wait for the NTX builder to consume the UpdateGerNote on the bridge account.
+-    // The CLAIM note's FPI calls assert_valid_ger which checks the bridge account's
+-    // GER storage. If we submit the CLAIM before the GER is stored, it will fail.
+-    // Typically the GER note is consumed within ~5s (2-3 blocks). We wait 5 cycles
+-    // of 3s (15s total) which gives the NTX builder plenty of time while keeping
+-    // the overall claim latency reasonable.
+-    tracing::info!("waiting for GER to propagate to bridge account before submitting CLAIM...");
++    tracing::info!(global_index = %gi, "[publish_claim_internal] step 3/8: GER propagation wait (5 x 3s = 15s)");
+     for i in 0..5 {
+         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+         client.sync_state().await?;
+-        tracing::debug!(cycle = i, "GER propagation sync cycle");
++        tracing::info!(global_index = %gi, cycle = i, "[publish_claim_internal] GER propagation sync cycle done");
+     }
+-    tracing::info!("GER propagation wait complete, submitting CLAIM note");
++    tracing::info!(global_index = %gi, "[publish_claim_internal] step 3/8: GER propagation wait DONE");
+ 
++    tracing::info!(global_index = %gi, "[publish_claim_internal] step 4/8: execute_transaction");
++    let exec_start = std::time::Instant::now();
+     let txn_request = TransactionRequestBuilder::new()
+         .own_output_notes([OutputNote::Full(claim_note); 1])
+         .build()?;
+ 
+-    // Execute and check the output notes before submission
+     let tx_result = client
+         .execute_transaction(accounts.service.0, txn_request)
+         .await?;
++    tracing::info!(
++        global_index = %gi,
++        elapsed_ms = exec_start.elapsed().as_millis(),
++        "[publish_claim_internal] step 4/8: execute_transaction DONE"
++    );
++
+     let exec_tx = tx_result.executed_transaction();
+     for (i, note) in exec_tx.output_notes().iter().enumerate() {
+         let variant = match note {
+@@ -275,7 +293,15 @@ async fn publish_claim_internal(
+         tracing::info!(note_idx = i, variant = %variant, "executed tx output note");
+     }
+ 
++    tracing::info!(global_index = %gi, "[publish_claim_internal] step 5/8: prove_transaction");
++    let prove_start = std::time::Instant::now();
+     let proven_tx = client.prove_transaction(&tx_result).await?;
++    tracing::info!(
++        global_index = %gi,
++        elapsed_ms = prove_start.elapsed().as_millis(),
++        "[publish_claim_internal] step 5/8: prove_transaction DONE"
++    );
++
+     for (i, note) in proven_tx.output_notes().iter().enumerate() {
+         let variant = match note {
+             miden_protocol::transaction::OutputNote::Full(n) => {
+@@ -289,6 +315,8 @@ async fn publish_claim_internal(
+         tracing::info!(note_idx = i, variant = %variant, "proven tx output note");
+     }
+ 
++    tracing::info!(global_index = %gi, "[publish_claim_internal] step 6/8: submit_proven_transaction");
++    let submit_start = std::time::Instant::now();
+     let txn_id = tx_result.executed_transaction().id();
+     let _submission_height = client
+         .submit_proven_transaction(proven_tx, &tx_result)
+@@ -296,8 +324,15 @@ async fn publish_claim_internal(
+     client
+         .apply_transaction(&tx_result, _submission_height)
+         .await?;
+-    tracing::info!("submitted claim note txn: {txn_id}, claim_note_id: {claim_note_id}");
++    tracing::info!(
++        global_index = %gi,
++        elapsed_ms = submit_start.elapsed().as_millis(),
++        txn_id = %txn_id,
++        claim_note_id = %claim_note_id,
++        "[publish_claim_internal] step 6/8: submit_proven_transaction DONE"
++    );
+ 
++    tracing::info!(global_index = %gi, "[publish_claim_internal] step 7/8: wait_for_transaction_commit (up to 20s)");
+     let committed = crate::miden_client::wait_for_transaction_commit(
+         client,
+         txn_id,
+@@ -306,14 +341,17 @@ async fn publish_claim_internal(
+     )
+     .await?;
+     if committed {
+-        tracing::info!("claim tx {txn_id} committed to block");
++        tracing::info!(global_index = %gi, txn_id = %txn_id, "[publish_claim_internal] step 7/8: transaction COMMITTED");
+     } else {
++        tracing::error!(global_index = %gi, txn_id = %txn_id, "[publish_claim_internal] step 7/8: transaction NOT committed in 20s");
+         anyhow::bail!("claim tx {txn_id} was submitted but not committed within 20s");
+     }
+ 
++    tracing::info!(global_index = %gi, "[publish_claim_internal] step 8/8: encoding ClaimEvent and returning");
+     let event = ClaimEvent::from(params);
+     let log = event.encode_log_data();
+ 
++    tracing::info!(global_index = %gi, "[publish_claim_internal] EXIT — returning PublishClaimTxn to caller");
+     Ok(PublishClaimTxn {
+         txn_id,
+         expires_at,
+@@ -329,21 +367,44 @@ pub async fn publish_claim(
+     store: Arc<dyn Store>,
+     latest_block_num: BlockNumber,
+ ) -> anyhow::Result<PublishClaimTxn> {
++    let gi = format!("{}", params.globalIndex);
++    tracing::info!(
++        global_index = %gi,
++        "[publish_claim] ENTER — about to call MidenClient::with (will queue on channel)"
++    );
++    let overall_start = std::time::Instant::now();
++
+     let result = Arc::new(OnceLock::<PublishClaimTxn>::new());
+     let result_inner = result.clone();
++    let gi_inner = gi.clone();
+ 
+     client
+         .with(move |client| {
+             Box::new(async move {
++                tracing::info!(
++                    global_index = %gi_inner,
++                    "[publish_claim] MidenClient closure START — lock acquired"
++                );
+                 let value =
+                     publish_claim_internal(params, client, &accounts.0, &*store, latest_block_num)
+                         .await?;
++                tracing::info!(
++                    global_index = %gi_inner,
++                    txn_id = %value.txn_id,
++                    "[publish_claim] MidenClient closure END — setting result"
++                );
+                 let _ = result_inner.set(value);
+                 Ok(())
+             })
+         })
+         .await?;
+ 
++    tracing::info!(
++        global_index = %gi,
++        elapsed_ms = overall_start.elapsed().as_millis(),
++        "[publish_claim] EXIT — MidenClient::with returned"
++    );
++
+     result
+         .get()
+         .cloned()
+diff --git a/src/miden_client.rs b/src/miden_client.rs
+index f9d2888..4845f9d 100644
+--- a/src/miden_client.rs
++++ b/src/miden_client.rs
+@@ -283,8 +283,25 @@ impl MidenClient {
+             tokio::select! {
+                 receiver_result = receiver.recv() => {
+                     let Some(request) = receiver_result else { break };
++                    let closure_start = std::time::Instant::now();
+                     let result = (request.closure)(&mut client).await;
+-                    request.response_sender.send(result).unwrap_or(());
++                    let closure_elapsed = closure_start.elapsed();
++                    let is_ok = result.is_ok();
++                    if request.response_sender.send(result).is_err() {
++                        tracing::error!(
++                            elapsed_ms = closure_elapsed.as_millis(),
++                            success = is_ok,
++                            "!!!! MidenClient: closure completed but CALLER IS GONE (response_sender dropped). \
++                             The caller's future was cancelled while the closure was running. \
++                             Any post-closure work (like recording ClaimEvent) will NOT happen."
++                        );
++                    } else {
++                        tracing::debug!(
++                            elapsed_ms = closure_elapsed.as_millis(),
++                            success = is_ok,
++                            "MidenClient: closure completed and result delivered to caller"
++                        );
++                    }
+                 },
+                 _ = sync_interval.tick() => {
+                     tokio::select! {
+@@ -310,6 +327,8 @@ impl MidenClient {
+     {
+         let (response_sender, response_receiver) = oneshot::channel::<anyhow::Result<()>>();
+ 
++        tracing::debug!("MidenClient::with: about to send request to channel (capacity=1, may block if another op is running)");
++        let send_start = std::time::Instant::now();
+         let request = Request {
+             response_sender,
+             closure: Box::new(|client| Box::into_pin(closure(client))),
+@@ -317,10 +336,30 @@ impl MidenClient {
+         if self.sender.send(request).await.is_err() {
+             anyhow::bail!("MidenClient::with: failed to queue a request - receiver is closed");
+         }
++        let send_elapsed = send_start.elapsed();
++        if send_elapsed > Duration::from_millis(100) {
++            tracing::warn!(
++                elapsed_ms = send_elapsed.as_millis(),
++                "MidenClient::with: channel send took {send_elapsed:?} (was blocked waiting for previous op to complete)"
++            );
++        } else {
++            tracing::debug!(
++                elapsed_ms = send_elapsed.as_millis(),
++                "MidenClient::with: channel send completed in {send_elapsed:?}"
++            );
++        }
+ 
++        tracing::debug!("MidenClient::with: waiting for closure execution result...");
++        let wait_start = std::time::Instant::now();
+         let Ok(result) = response_receiver.await else {
+             anyhow::bail!("MidenClient::with: failed to get a response - receiver is closed");
+         };
++        let wait_elapsed = wait_start.elapsed();
++        tracing::info!(
++            elapsed_ms = wait_elapsed.as_millis(),
++            success = result.is_ok(),
++            "MidenClient::with: closure completed in {wait_elapsed:?}"
++        );
+         result
+     }
+ }
+diff --git a/src/service_send_raw_txn.rs b/src/service_send_raw_txn.rs
+index 2a2f77a..8c54ee9 100644
+--- a/src/service_send_raw_txn.rs
++++ b/src/service_send_raw_txn.rs
+@@ -9,6 +9,47 @@ use alloy::consensus::transaction::SignerRecoverable;
+ use alloy::eips::Decodable2718;
+ use alloy::primitives::{Address, LogData, TxHash};
+ use alloy_core::sol_types::SolCall;
++use std::sync::atomic::{AtomicU64, Ordering};
++
++/// Monotonic request counter for correlating logs across the claim lifecycle.
++static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
++
++/// Drop guard that logs when a claim handler future is dropped (cancelled).
++/// This is the KEY diagnostic: if we see "DROPPED" without a preceding
++/// "SUCCEEDED" or "FAILED", the HTTP client disconnected mid-flight.
++struct ClaimDropGuard {
++    req_id: u64,
++    global_index: String,
++    completed: bool,
++}
++
++impl ClaimDropGuard {
++    fn new(req_id: u64, global_index: &str) -> Self {
++        Self {
++            req_id,
++            global_index: global_index.to_string(),
++            completed: false,
++        }
++    }
++
++    fn mark_completed(&mut self) {
++        self.completed = true;
++    }
++}
++
++impl Drop for ClaimDropGuard {
++    fn drop(&mut self) {
++        if !self.completed {
++            tracing::error!(
++                req_id = self.req_id,
++                global_index = %self.global_index,
++                "!!!! CLAIM HANDLER DROPPED (CANCELLED) — HTTP client likely disconnected. \
++                 publish_and_record_claim was still in-flight when the future was cancelled. \
++                 ClaimEvent will NOT be recorded in the store."
++            );
++        }
++    }
++}
+ 
+ struct TransactionData {
+     pub hash: TxHash,
+@@ -129,6 +170,18 @@ async fn handle_claim_asset(
+     txn_envelope: TxEnvelope,
+     signer: Address,
+ ) -> anyhow::Result<TxHash> {
++    let req_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
++
++    tracing::info!(
++        req_id,
++        global_index = %params.globalIndex,
++        origin_token = %params.originTokenAddress,
++        amount = %params.amount,
++        dest_address = %params.destinationAddress,
++        tx_hash = %txn_hash,
++        ">> handle_claim_asset ENTER"
++    );
++
+     // Only claims where destinationNetwork matches our network_id are processed.
+     if params.destinationNetwork != service.network_id as u32 {
+         anyhow::bail!(
+@@ -141,7 +194,7 @@ async fn handle_claim_asset(
+     // Skip zero-amount claims (e.g., genesis batch deposit). These create
+     // CLAIM notes that crash the NTX builder's faucet actor.
+     if params.amount.is_zero() {
+-        tracing::info!("skipping zero-amount claim (genesis batch)");
++        tracing::info!(req_id, "skipping zero-amount claim (genesis batch)");
+         record_local_immediate_success(service, txn_hash, txn_envelope, signer, vec![]).await?;
+         service
+             .store
+@@ -150,20 +203,57 @@ async fn handle_claim_asset(
+         return Ok(txn_hash);
+     }
+ 
++    // Install drop guard BEFORE try_claim — if this future is cancelled at any
++    // point after this, we'll see the DROPPED log.
++    let mut drop_guard = ClaimDropGuard::new(req_id, &format!("{}", params.globalIndex));
++
+     // Lock the claim index. All error paths after this MUST unclaim.
++    tracing::info!(
++        req_id,
++        global_index = %params.globalIndex,
++        "handle_claim_asset: calling try_claim..."
++    );
+     service.store.try_claim(params.globalIndex).await?;
++    tracing::info!(
++        req_id,
++        global_index = %params.globalIndex,
++        "handle_claim_asset: try_claim lock acquired, calling publish_and_record_claim"
++    );
++
+     let result =
+-        publish_and_record_claim(service, params.clone(), txn_hash, txn_envelope, signer).await;
+-    if let Err(err) = result {
+-        let _ = service.store.unclaim(&params.globalIndex).await;
+-        tracing::error!("claim failed after lock: {err:#?}");
+-        return Err(err);
++        publish_and_record_claim(service, params.clone(), txn_hash, txn_envelope, signer, req_id).await;
++    match &result {
++        Ok(()) => {
++            tracing::info!(
++                req_id,
++                global_index = %params.globalIndex,
++                "handle_claim_asset: publish_and_record_claim SUCCEEDED"
++            );
++            drop_guard.mark_completed();
++        }
++        Err(err) => {
++            tracing::error!(
++                req_id,
++                global_index = %params.globalIndex,
++                error = %err,
++                "handle_claim_asset: publish_and_record_claim FAILED, unclaiming"
++            );
++            drop_guard.mark_completed(); // intentional failure, not a cancellation
++            let _ = service.store.unclaim(&params.globalIndex).await;
++            return Err(anyhow::anyhow!("{err:#}"));
++        }
+     }
+ 
+     service
+         .store
+         .nonce_increment(&format!("{signer:#x}"))
+         .await?;
++
++    tracing::info!(
++        req_id,
++        global_index = %params.globalIndex,
++        "<< handle_claim_asset EXIT OK"
++    );
+     Ok(txn_hash)
+ }
+ 
+@@ -177,23 +267,82 @@ async fn publish_and_record_claim(
+     txn_hash: TxHash,
+     txn_envelope: TxEnvelope,
+     signer: Address,
++    req_id: u64,
+ ) -> anyhow::Result<()> {
+-    let claim_result = claim::publish_claim(
+-        params,
++    tracing::info!(
++        req_id,
++        global_index = %params.globalIndex,
++        origin_token = %params.originTokenAddress,
++        "publish_and_record_claim ENTER: about to get latest_block"
++    );
++    let latest_block = service.store.get_latest_block_number().await?;
++    tracing::info!(
++        req_id,
++        global_index = %params.globalIndex,
++        latest_block,
++        "publish_and_record_claim: got latest_block, about to call publish_claim (this acquires MidenClient lock)"
++    );
++
++    let claim_result = match claim::publish_claim(
++        params.clone(),
+         &service.miden_client,
+         service.accounts.clone(),
+         service.store.clone(),
+-        service.store.get_latest_block_number().await?,
++        latest_block,
+     )
+-    .await?;
++    .await {
++        Ok(r) => {
++            tracing::info!(
++                req_id,
++                global_index = %params.globalIndex,
++                miden_tx = %r.txn_id,
++                "publish_and_record_claim: publish_claim SUCCEEDED"
++            );
++            r
++        }
++        Err(e) => {
++            tracing::error!(
++                req_id,
++                global_index = %params.globalIndex,
++                error = %e,
++                "publish_and_record_claim: publish_claim FAILED"
++            );
++            return Err(e);
++        }
++    };
++
++    // ---- CRITICAL SECTION: Everything below this line is what goes missing ----
++    // If the HTTP client disconnected while publish_claim was running, this code
++    // never executes. The MidenClient closure may have completed successfully on
++    // its background thread, but the caller's future was already dropped.
++    tracing::info!(
++        req_id,
++        global_index = %params.globalIndex,
++        "publish_and_record_claim: REACHED RECORDING SECTION (if you see this, cancellation is NOT the cause)"
++    );
+ 
+-    // Note: bridge-service will see this ClaimEvent from both ClaimTxManager and
+-    // L2 sync, causing a duplicate key error. See fixtures/bridge-db-patch.sql.
+     let txn_id = claim_result.txn_id;
+-    tracing::info!("published claim with eth txn: {txn_hash}; miden txn: {txn_id}");
++    tracing::info!(
++        req_id,
++        "published claim with eth txn: {txn_hash}; miden txn: {txn_id}"
++    );
+     let block_num = service.store.advance_block_number().await?;
+     let block_hash = service.block_state.get_block_hash(block_num);
+-    service
++
++    let log_topics: Vec<String> = claim_result.log.topics().iter().map(|t| format!("{t}")).collect();
++    let log_data_hex = format!("{:x}", claim_result.log.data);
++    tracing::info!(
++        req_id,
++        eth_tx = %txn_hash,
++        miden_tx = %txn_id,
++        block_num,
++        log_topics = ?log_topics,
++        log_data_len = log_data_hex.len(),
++        log_data_prefix = %&log_data_hex[..std::cmp::min(120, log_data_hex.len())],
++        "recording ClaimEvent in store"
++    );
++
++    if let Err(e) = service
+         .store
+         .txn_begin(
+             txn_hash,
+@@ -205,11 +354,23 @@ async fn publish_and_record_claim(
+                 logs: vec![claim_result.log],
+             },
+         )
+-        .await?;
+-    service
++        .await
++    {
++        tracing::error!(req_id, eth_tx = %txn_hash, error = %e, "txn_begin FAILED for ClaimEvent");
++        return Err(e.into());
++    }
++    tracing::info!(req_id, eth_tx = %txn_hash, "txn_begin OK");
++
++    if let Err(e) = service
+         .store
+         .txn_commit(txn_hash, Ok(()), block_num, block_hash)
+-        .await?;
++        .await
++    {
++        tracing::error!(req_id, eth_tx = %txn_hash, error = %e, "txn_commit FAILED for ClaimEvent");
++        return Err(e.into());
++    }
++
++    tracing::info!(req_id, eth_tx = %txn_hash, block_num, "ClaimEvent recorded successfully");
+     Ok(())
+ }
+ 
+@@ -234,11 +395,26 @@ pub async fn service_send_raw_txn(service: ServiceState, input: String) -> anyho
+     let txn = unwrap_txn_envelope(txn_envelope.clone())?;
+     let txn_hash = txn.hash;
+     let signer = txn_envelope.recover_signer()?;
+-    tracing::debug!(target: concat!(module_path!(), "::debug"), "raw transaction hash: {txn_hash}");
++
++    // Identify the method for the entry log
++    let method_name = if txn.input.starts_with(&claimAssetCall::SELECTOR) {
++        "claimAsset"
++    } else if txn.input.starts_with(&insertGlobalExitRootCall::SELECTOR) {
++        "insertGlobalExitRoot"
++    } else if txn.input.starts_with(&updateExitRootCall::SELECTOR) {
++        "updateExitRoot"
++    } else {
++        "unknown"
++    };
++    tracing::info!(
++        method = method_name,
++        tx_hash = %txn_hash,
++        signer = %signer,
++        ">> service_send_raw_txn ENTER"
++    );
+ 
+     let params_encoded = &txn.input;
+     if params_encoded.starts_with(&claimAssetCall::SELECTOR) {
+-        tracing::debug!("claimAsset call");
+         let params = claimAssetCall::abi_decode(params_encoded)?;
+         tracing::debug!(target: concat!(module_path!(), "::debug"), "claimAsset call params: {params:?}");
+         return handle_claim_asset(&service, params, txn_hash, txn_envelope, signer).await;
