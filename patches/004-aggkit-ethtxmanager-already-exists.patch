@@ -1,0 +1,58 @@
+diff --git a/aggoracle/chaingersender/evm.go b/aggoracle/chaingersender/evm.go
+index 7c84ef7..6b500fa 100644
+--- a/aggoracle/chaingersender/evm.go
++++ b/aggoracle/chaingersender/evm.go
+@@ -3,6 +3,7 @@ package chaingersender
+ import (
+ 	"context"
+ 	"fmt"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/0xPolygon/cdk-contracts-tooling/contracts/aggchain-multisig/agglayergerl2"
+@@ -17,6 +18,7 @@ import (
+ 	"github.com/ethereum/go-ethereum/accounts/abi"
+ 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+ 	"github.com/ethereum/go-ethereum/common"
++	ethTypes "github.com/ethereum/go-ethereum/core/types"
+ )
+ 
+ const (
+@@ -226,13 +228,33 @@ func (c *EVMChainGERSender) submitTransaction(
+ 		return fmt.Errorf("failed to pack %s call: %w", funcName, err)
+ 	}
+ 
+-	// Add the transaction to the transaction manager
++	// Add the transaction to the transaction manager.
++	// The tx ID is deterministic: hash(To, Value, Data). If the same GER is
++	// already queued (still in-flight from a previous attempt), Add returns
++	// ErrAlreadyExists. In that case we fall through to the monitoring loop
++	// so we wait for the existing tx instead of returning an error.
++	// Compute the expected ID ourselves so we can monitor even when Add
++	// returns a zero hash on ErrAlreadyExists (zkevm-ethtx-manager <= v0.2.17).
+ 	id, err := c.ethTxMan.Add(ctx, targetAddr, common.Big0, txInput, c.gasOffset, nil)
+ 	if err != nil {
+-		return fmt.Errorf("failed to add %s GER transaction: %w", action, err)
++		if strings.Contains(err.Error(), "already exists") {
++			c.logger.Infof("%s GER tx already in-flight, monitoring existing tx. GER: %s", action, ger.Hex())
++			// Use the deterministic ID to monitor the existing tx.
++			// On v0.2.17 Add returns zero hash on error, so we recompute
++			// the same way ethtxmanager does: hash of LegacyTx{To, Data}.
++			if id == (common.Hash{}) {
++				legacyTx := ethTypes.NewTx(&ethTypes.LegacyTx{
++					To:   targetAddr,
++					Data: txInput,
++				})
++				id = legacyTx.Hash()
++			}
++		} else {
++			return fmt.Errorf("failed to add %s GER transaction: %w", action, err)
++		}
++	} else {
++		c.logger.Infof("%s GER transaction submitted with ID: %s. GER: %s", action, id.Hex(), ger.Hex())
+ 	}
+-
+-	c.logger.Infof("%s GER transaction submitted with ID: %s. GER: %s", action, id.Hex(), ger.Hex())
+ 	c.logger.Debugf("monitoring every %s", c.waitPeriodMonitorTx)
+ 
+ 	// Monitor the transaction status
