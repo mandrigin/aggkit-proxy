@@ -78,8 +78,8 @@ args:
   # Images (can be overridden)
   # zkevm_bridge_service_image: "hermeznetwork/zkevm-bridge-service:v0.6.0-RC1"
   # Patched: fix ethtxmanager "already exists" stuck state (aggkit#1479)
-  # Build: cd /tmp/aggkit-patch && docker build -t ghcr.io/agglayer/aggkit:0.9.0-rc3-patched .
-  aggkit_image: "ghcr.io/agglayer/aggkit:0.9.0-rc3-patched"
+  # Build: cd /tmp/aggkit-patch && docker build -t ghcr.io/agglayer/aggkit:0.9.0-rc3-nugget1 .
+  aggkit_image: "ghcr.io/agglayer/aggkit:0.9.0-rc3-nugget1"
 
   # Agglayer configuration
   agglayer_prover_primary_prover: "mock-prover"
