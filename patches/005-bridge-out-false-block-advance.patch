@@ -15,7 +15,7 @@ index 8d7f2e1..a23481a 100644
                  .store
                  .is_note_processed(&note.id().to_string())
 diff --git a/src/ger.rs b/src/ger.rs
-index cabcd3e..6c4ed8e 100644
+index cabcd3e..483f7fc 100644
 --- a/src/ger.rs
 +++ b/src/ger.rs
 @@ -100,60 +100,85 @@ async fn submit_ger_to_miden(
@@ -146,18 +146,35 @@ index cabcd3e..6c4ed8e 100644
  #[allow(clippy::too_many_arguments)]
  pub async fn insert_ger(
      ger_bytes: [u8; 32],
-@@ -189,6 +214,14 @@ pub async fn insert_ger(
-         // Re-assign block number after the Miden TX has committed so
-         // current_block reflects the latest sync and +1 is genuinely ahead.
-         block_number = block_state.current_block_number() + 1;
-+        let store_latest = store.get_latest_block_number().await.unwrap_or(0);
+@@ -186,9 +211,15 @@ pub async fn insert_ger(
+             })
+             .await?;
+ 
+-        // Re-assign block number after the Miden TX has committed so
+-        // current_block reflects the latest sync and +1 is genuinely ahead.
+-        block_number = block_state.current_block_number() + 1;
++        // Use the store's sequential block counter so GER events and claim
++        // events never collide on the same block number.
++        block_number = store.advance_block_number().await?;
 +        tracing::info!(
 +            ger = %hex::encode(ger_bytes),
 +            block_number,
 +            miden_block = block_state.current_block_number(),
-+            store_latest,
-+            "GER commit done — writing event to block_number (miden+1), store latest_block for comparison"
++            "GER commit done — writing event to block (from store.advance)"
 +        );
          let block_hash = block_state.get_block_hash(block_number);
          let timestamp = block_state.get_block_timestamp(block_number);
  
+@@ -206,11 +237,7 @@ pub async fn insert_ger(
+             )
+             .await?;
+ 
+-        // Advance latest_block_number so bridge-service queries the new block
+-        let current_latest = store.get_latest_block_number().await.unwrap_or(0);
+-        if block_number > current_latest {
+-            store.set_latest_block_number(block_number).await?;
+-        }
++        // latest_block_number already advanced by advance_block_number() above
+     } else {
+         tracing::debug!(
+             ger = %hex::encode(ger_bytes),
