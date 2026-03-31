@@ -1,0 +1,130 @@
+diff --git a/src/service_send_raw_txn.rs b/src/service_send_raw_txn.rs
+index 2a2f77a..9c90ac0 100644
+--- a/src/service_send_raw_txn.rs
++++ b/src/service_send_raw_txn.rs
+@@ -151,13 +151,31 @@ async fn handle_claim_asset(
+     }
+ 
+     // Lock the claim index. All error paths after this MUST unclaim.
++    tracing::info!(
++        global_index = %params.globalIndex,
++        origin_token = %params.originTokenAddress,
++        amount = %params.amount,
++        "handle_claim_asset: try_claim lock acquired, calling publish_and_record_claim"
++    );
+     service.store.try_claim(params.globalIndex).await?;
+     let result =
+         publish_and_record_claim(service, params.clone(), txn_hash, txn_envelope, signer).await;
+-    if let Err(err) = result {
+-        let _ = service.store.unclaim(&params.globalIndex).await;
+-        tracing::error!("claim failed after lock: {err:#?}");
+-        return Err(err);
++    match &result {
++        Ok(()) => {
++            tracing::info!(
++                global_index = %params.globalIndex,
++                "handle_claim_asset: publish_and_record_claim SUCCEEDED"
++            );
++        }
++        Err(err) => {
++            tracing::error!(
++                global_index = %params.globalIndex,
++                error = %err,
++                "handle_claim_asset: publish_and_record_claim FAILED, unclaiming"
++            );
++            let _ = service.store.unclaim(&params.globalIndex).await;
++            return Err(anyhow::anyhow!("{err:#}"));
++        }
+     }
+ 
+     service
+@@ -178,14 +196,37 @@ async fn publish_and_record_claim(
+     txn_envelope: TxEnvelope,
+     signer: Address,
+ ) -> anyhow::Result<()> {
+-    let claim_result = claim::publish_claim(
+-        params,
++    tracing::info!(
++        global_index = %params.globalIndex,
++        origin_token = %params.originTokenAddress,
++        "publish_and_record_claim: calling publish_claim"
++    );
++    let latest_block = service.store.get_latest_block_number().await?;
++    let claim_result = match claim::publish_claim(
++        params.clone(),
+         &service.miden_client,
+         service.accounts.clone(),
+         service.store.clone(),
+-        service.store.get_latest_block_number().await?,
++        latest_block,
+     )
+-    .await?;
++    .await {
++        Ok(r) => {
++            tracing::info!(
++                global_index = %params.globalIndex,
++                miden_tx = %r.txn_id,
++                "publish_and_record_claim: publish_claim SUCCEEDED"
++            );
++            r
++        }
++        Err(e) => {
++            tracing::error!(
++                global_index = %params.globalIndex,
++                error = %e,
++                "publish_and_record_claim: publish_claim FAILED"
++            );
++            return Err(e);
++        }
++    };
+ 
+     // Note: bridge-service will see this ClaimEvent from both ClaimTxManager and
+     // L2 sync, causing a duplicate key error. See fixtures/bridge-db-patch.sql.
+@@ -193,7 +234,20 @@ async fn publish_and_record_claim(
+     tracing::info!("published claim with eth txn: {txn_hash}; miden txn: {txn_id}");
+     let block_num = service.store.advance_block_number().await?;
+     let block_hash = service.block_state.get_block_hash(block_num);
+-    service
++    
++    let log_topics: Vec<String> = claim_result.log.topics().iter().map(|t| format!("{t}")).collect();
++    let log_data_hex = format!("{:x}", claim_result.log.data);
++    tracing::info!(
++        eth_tx = %txn_hash,
++        miden_tx = %txn_id,
++        block_num,
++        log_topics = ?log_topics,
++        log_data_len = log_data_hex.len(),
++        log_data_prefix = %&log_data_hex[..std::cmp::min(120, log_data_hex.len())],
++        "recording ClaimEvent in store"
++    );
++    
++    if let Err(e) = service
+         .store
+         .txn_begin(
+             txn_hash,
+@@ -205,11 +259,22 @@ async fn publish_and_record_claim(
+                 logs: vec![claim_result.log],
+             },
+         )
+-        .await?;
+-    service
++        .await
++    {
++        tracing::error!(eth_tx = %txn_hash, error = %e, "txn_begin FAILED for ClaimEvent");
++        return Err(e.into());
++    }
++    
++    if let Err(e) = service
+         .store
+         .txn_commit(txn_hash, Ok(()), block_num, block_hash)
+-        .await?;
++        .await
++    {
++        tracing::error!(eth_tx = %txn_hash, error = %e, "txn_commit FAILED for ClaimEvent");
++        return Err(e.into());
++    }
++    
++    tracing::info!(eth_tx = %txn_hash, block_num, "ClaimEvent recorded successfully");
+     Ok(())
+ }
+ 
