@@ -71,8 +71,8 @@ args:
   # Deployment suffix
   deployment_suffix: "-001"
 
-  # Log level
-  log_level: "info"
+  # Log level (debug for aggoracle visibility)
+  log_level: "debug"
   log_format: "pretty"
 
   # Images (can be overridden)

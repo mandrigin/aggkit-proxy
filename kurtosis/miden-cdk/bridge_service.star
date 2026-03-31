@@ -281,7 +281,7 @@ GRPCPort = "{{.grpc_port}}"
 HTTPPort = "{{.rpc_port}}"
 DefaultPageLimit = 25
 MaxPageLimit = 1000
-FinalizedGEREnabled = true
+FinalizedGEREnabled = false
     [BridgeServer.DB]
     Database = "postgres"
         [BridgeServer.DB.PgStorage]
