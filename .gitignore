@@ -47,3 +47,4 @@ logs/
 .beads/
 .logs/
 miden-client
+logs/
