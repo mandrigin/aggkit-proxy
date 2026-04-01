@@ -1,0 +1,299 @@
+diff --git a/src/bin/bridge_out_tool.rs b/src/bin/bridge_out_tool.rs
+index 6ffd990..0993360 100644
+--- a/src/bin/bridge_out_tool.rs
++++ b/src/bin/bridge_out_tool.rs
+@@ -11,7 +11,7 @@
+ use std::path::PathBuf;
+ use std::sync::Arc;
+ 
+-use anyhow::{Context, anyhow};
++use anyhow::{anyhow, Context};
+ use clap::Parser;
+ use miden_base_agglayer::{B2AggNote, EthAddressFormat};
+ use miden_client::DebugMode;
+@@ -89,90 +89,61 @@ async fn main() -> anyhow::Result<()> {
+         args.dest_address, args.dest_network
+     );
+ 
+-    let store_path = args.store_dir.join("store.sqlite3");
+     let keystore_path = args.store_dir.join("keystore");
+-
+-    if !store_path.exists() {
+-        return Err(anyhow!("store not found at {}", store_path.display()));
+-    }
+     if !keystore_path.exists() {
+         return Err(anyhow!("keystore not found at {}", keystore_path.display()));
+     }
+ 
++    // Create a fresh temp directory for each launch. This avoids stale account
++    // state from previous runs (different nonce, corrupted vault). Only the
++    // keystore (private keys) is carried over from the source store-dir.
++    let work_dir = std::env::temp_dir().join(format!("miden-bridge-out-{}", std::process::id()));
++    std::fs::create_dir_all(&work_dir)?;
++    let work_keystore = work_dir.join("keystore");
++    std::fs::create_dir_all(&work_keystore)?;
++    // Copy all key files
++    for entry in std::fs::read_dir(&keystore_path)? {
++        let entry = entry?;
++        std::fs::copy(entry.path(), work_keystore.join(entry.file_name()))?;
++    }
++    let work_store = work_dir.join("store.sqlite3");
++    println!("[bridge-out] using fresh store: {}", work_dir.display());
++
+     // Parse node endpoint
+     let node_endpoint =
+         Endpoint::try_from(args.node_url.as_str()).map_err(|e| anyhow!("invalid node URL: {e}"))?;
+ 
+-    // Build miden client from existing store
+-    let keystore = FilesystemKeyStore::new(keystore_path)?;
++    // Build miden client with fresh store + existing keystore
++    let keystore = FilesystemKeyStore::new(work_keystore)?;
+     let mut client = ClientBuilder::new()
+         .grpc_client(&node_endpoint, Some(10_000))
+-        .sqlite_store(store_path)
++        .sqlite_store(work_store)
+         .authenticator(Arc::new(keystore))
+         .in_debug_mode(DebugMode::Enabled)
+         .build()
+         .await
+         .map_err(|e| anyhow!("failed to build miden client: {e}"))?;
+ 
+-    // Sync state
++    // Sync — fetches all account state fresh from the node.
++    // The wallet is a public account so sync_state will import it.
+     println!("[bridge-out] syncing state...");
+     client
+         .sync_state()
+         .await
+         .map_err(|e| anyhow!("sync failed: {e}"))?;
++    // Import the wallet account explicitly (public account, fetched from node)
++    client.import_account_by_id(wallet_id).await
++        .map_err(|e| anyhow!("failed to import wallet from node: {e}"))?;
++    client.sync_state().await
++        .map_err(|e| anyhow!("post-import sync failed: {e}"))?;
+     println!("[bridge-out] sync complete");
+ 
+-    // Try to consume any Expected/Committed notes for the wallet
+-    {
+-        use miden_client::store::NoteFilter;
+-        // Check for Expected notes (synced but not yet consumed)
+-        let expected = client
+-            .get_input_notes(NoteFilter::Expected)
+-            .await
+-            .unwrap_or_default();
+-        let committed = client
+-            .get_input_notes(NoteFilter::Committed)
+-            .await
+-            .unwrap_or_default();
+-        println!(
+-            "[bridge-out] notes: {} expected, {} committed",
+-            expected.len(),
+-            committed.len()
+-        );
++    // Note: we do NOT try to consume committed notes here.
++    // claim-note.sh handles P2ID note consumption separately.
++    // Attempting to consume here corrupts local state when notes
++    // target a different wallet or were already consumed elsewhere.
+ 
+-        // Try consuming committed notes first (standard path)
+-        let consumable = client
+-            .get_consumable_notes(Some(wallet_id))
+-            .await
+-            .unwrap_or_default();
+-        if !consumable.is_empty() {
+-            println!("[bridge-out] consuming {} notes...", consumable.len());
+-            let notes: Vec<miden_protocol::note::Note> = consumable
+-                .into_iter()
+-                .filter_map(|(rec, _)| rec.try_into().ok())
+-                .collect();
+-            if !notes.is_empty() {
+-                match TransactionRequestBuilder::new().build_consume_notes(notes) {
+-                    Ok(req) => {
+-                        match client.submit_new_transaction(wallet_id, req).await {
+-                            Ok(tx) => {
+-                                println!("[bridge-out] consumed notes: {tx}");
+-                                // Wait for commit
+-                                for _ in 0..10 {
+-                                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+-                                    client.sync_state().await.ok();
+-                                }
+-                            }
+-                            Err(e) => println!("[bridge-out] consume failed: {e}"),
+-                        }
+-                    }
+-                    Err(e) => println!("[bridge-out] build consume req failed: {e}"),
+-                }
+-            }
+-        }
+-    }
+-
+-    // Check wallet balance
++    // Check wallet balance (fresh store — should always work)
+     let balance = client
+         .account_reader(wallet_id)
+         .get_balance(faucet_id)
+@@ -191,12 +162,21 @@ async fn main() -> anyhow::Result<()> {
+     let l1_dest = EthAddressFormat::from_hex(&args.dest_address)
+         .map_err(|e| anyhow!("invalid dest address: {e}"))?;
+ 
+-    // Create B2AGG note
++    println!("[bridge-out] B2AGG note ready to create");
++
++    // Submit once. No retries — each submit_new_transaction call bumps the
++    // local nonce via apply_transaction. Retrying creates nonce N and N+1 TXs
++    // in the mempool, deadlocking both (N+1 can't commit until N does).
++    // If submit fails at RPC level, the nonce was NOT bumped (safe to retry
++    // from a fresh tool invocation).
++    println!("[bridge-out] submitting transaction...");
++    client.sync_state().await.ok();
++    client.import_account_by_id(bridge_id).await.ok();
++
+     let asset: Asset = FungibleAsset::new(faucet_id, args.amount)
+         .map_err(|e| anyhow!("invalid asset: {e}"))?
+         .into();
+     let note_assets = NoteAssets::new(vec![asset]).map_err(|e| anyhow!("note assets: {e}"))?;
+-
+     let b2agg = B2AggNote::create(
+         args.dest_network,
+         l1_dest,
+@@ -207,22 +187,11 @@ async fn main() -> anyhow::Result<()> {
+     )
+     .map_err(|e| anyhow!("B2AGG creation failed: {e}"))?;
+ 
+-    println!("[bridge-out] B2AGG note created");
+-
+-    // Re-import bridge account so the NoteScreener has the latest asset tree.
+-    // Without this, submit_new_transaction fails with FetchAssetWitnessFailed
+-    // after CLAIM modified the bridge account.
+-    if let Err(e) = client.import_account_by_id(bridge_id).await {
+-        eprintln!("[bridge-out] bridge re-import: {e} (may already be tracked)");
+-    }
+-
+-    // Submit transaction
+     let tx_request = TransactionRequestBuilder::new()
+         .own_output_notes(vec![OutputNote::Full(b2agg)])
+         .build()
+         .map_err(|e| anyhow!("tx request build failed: {e}"))?;
+ 
+-    println!("[bridge-out] submitting transaction...");
+     let tx_id = client
+         .submit_new_transaction(wallet_id, tx_request)
+         .await
+@@ -230,12 +199,39 @@ async fn main() -> anyhow::Result<()> {
+ 
+     println!("[bridge-out] transaction submitted: {tx_id}");
+ 
+-    // Wait a couple of sync cycles for the note to propagate
++    // Wait for transaction commitment. The TX is now in the node's mempool.
++    // The Miden node's block producer may fail a block due to NTX builder
++    // "asset vault error", but the TX remains in the mempool and will be
++    // included in a future block once the node recovers.
++    // We wait up to 3 minutes (60 × 3s) to account for multiple block failures.
+     println!("[bridge-out] waiting for confirmation...");
+-    for i in 1..=5 {
+-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
++    let mut committed = false;
++    for i in 1..=60u32 {
++        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+         client.sync_state().await.ok();
+-        println!("[bridge-out] sync cycle {i}/5");
++        let txns = client
++            .get_transactions(miden_client::store::TransactionFilter::All)
++            .await
++            .unwrap_or_default();
++        if txns.iter().any(|t| {
++            t.id == tx_id
++                && matches!(
++                    t.status,
++                    miden_client::transaction::TransactionStatus::Committed { .. }
++                )
++        }) {
++            committed = true;
++            println!("[bridge-out] transaction committed (cycle {i})");
++            break;
++        }
++        if i % 10 == 0 {
++            println!("[bridge-out] waiting... cycle {i}/60");
++        }
++    }
++    if !committed {
++        return Err(anyhow!(
++            "transaction {tx_id} not committed after 3 min — TX may be stuck in mempool"
++        ));
+     }
+ 
+     let new_balance = client
+@@ -244,7 +240,72 @@ async fn main() -> anyhow::Result<()> {
+         .await
+         .unwrap_or(0);
+     println!("[bridge-out] wallet balance after: {new_balance}");
+-    println!("[bridge-out] done");
+ 
++    // Wait for the NTX builder to consume our B2AGG note before returning.
++    // The NTX builder picks up B2AGG notes (NetworkAccountTarget::Always) and
++    // creates consumption TXs on the bridge account. If we return immediately,
++    // the next bridge-out may land in a block poisoned by the NTX builder's
++    // consumption TX ("asset vault error").
++    //
++    // We check if any of our output notes transitioned to consumed state.
++    // The B2AGG note is the only non-consumed output note we just created.
++    println!("[bridge-out] waiting for B2AGG note consumption...");
++    let mut consumed = false;
++    for i in 1..=30u32 {
++        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
++        client.sync_state().await.ok();
++        // Check if all our output notes are consumed
++        let pending = client
++            .get_output_notes(miden_client::store::NoteFilter::Committed)
++            .await
++            .unwrap_or_default();
++        if pending.is_empty() {
++            consumed = true;
++            println!("[bridge-out] B2AGG note consumed by bridge (cycle {i})");
++            break;
++        }
++        if i % 10 == 0 {
++            println!("[bridge-out] B2AGG note still pending, cycle {i}/30");
++        }
++    }
++    if !consumed {
++        println!("[bridge-out] note consumption timeout (60s), proceeding anyway");
++    }
++
++    // Wait 2 real Miden blocks after consumption so the bridge account's
++    // vault state fully settles before the next bridge-out TX is built.
++    // The NTX builder's consumption TX commits in block N; we wait until
++    // block N+2 to ensure no stale vault deltas remain in the pipeline.
++    if consumed {
++        let base_block = client
++            .sync_state()
++            .await
++            .map(|s| s.block_num)
++            .unwrap_or_default();
++        let target = base_block + 2;
++        println!(
++            "[bridge-out] waiting for 2 blocks to settle (current: {}, target: {})...",
++            base_block, target
++        );
++        for poll in 1..=30u32 {
++            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
++            match client.sync_state().await {
++                Ok(s) if s.block_num >= target => {
++                    println!(
++                        "[bridge-out] block {} reached (target was {}), state settled",
++                        s.block_num, target
++                    );
++                    break;
++                }
++                _ => {
++                    if poll % 10 == 0 {
++                        println!("[bridge-out] still waiting for block {target}...");
++                    }
++                }
++            }
++        }
++    }
++
++    println!("[bridge-out] done");
+     Ok(())
+ }

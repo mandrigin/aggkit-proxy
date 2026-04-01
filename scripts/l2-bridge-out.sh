@@ -82,14 +82,22 @@ if echo "$RESULT" | grep -q "done"; then
     # Save updated store back
     docker cp "$PROXY_CONTAINER:/tmp/claimer-store/store.sqlite3" "$STORE_PATH/store.sqlite3"
     echo ""
-    echo "Bridge-out submitted. Monitor with:"
+    echo "Bridge-out committed."
+    echo ""
+    echo "Waiting 15s for NTX builder to consume the B2AGG note..."
+    echo "(This prevents the next bridge-out from hitting a poisoned block)"
+    sleep 15
+    echo "Ready for next bridge-out."
+    echo ""
+    echo "Monitor with:"
     echo "  ./scripts/check-bridge-events.sh"
     echo "  ./scripts/check-certificates.sh"
     echo "  ./scripts/check-l2-deposits.sh"
 else
     echo ""
     echo "Bridge-out FAILED. Common causes:"
-    echo "  - 'storage error': stale store, try again (sync catches up)"
-    echo "  - 'RPC error': stale commitment, try again after a few seconds"
+    echo "  - 'not committed': NTX builder poisoned the block, retry in 15s"
+    echo "  - 'storage error': stale store, retry (sync catches up)"
+    echo "  - 'RPC error': stale commitment, retry after a few seconds"
     echo "  - 'insufficient balance': claim more P2ID notes first"
 fi
