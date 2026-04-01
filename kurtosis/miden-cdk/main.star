@@ -88,7 +88,7 @@ MIDEN_DEFAULTS = {
     "miden_node_port": 57291,
 
     # Miden proxy configuration (miden-agglayer)
-    "miden_proxy_image": "miden-infra/miden-proxy:latest",
+    "miden_proxy_image": "miden-infra/miden-proxy:main-deff036",
     "miden_proxy_port": 8546,
     "miden_proxy_external_port": 8123,
 

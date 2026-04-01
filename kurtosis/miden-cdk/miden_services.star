@@ -14,7 +14,7 @@ AGGLAYER_POSTGRES_PORT = 5432
 
 # Default images
 DEFAULT_MIDEN_NODE_IMAGE = "miden-infra/miden-node:agglayer-v0.1"
-DEFAULT_MIDEN_PROXY_IMAGE = "miden-infra/miden-proxy:latest"
+DEFAULT_MIDEN_PROXY_IMAGE = "miden-infra/miden-proxy:main-deff036"
 
 # Docker Desktop grouping label
 DOCKER_PROJECT_LABEL = "com.docker.compose.project"
