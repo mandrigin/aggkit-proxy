@@ -331,6 +331,10 @@ def _deploy_miden_proxy(plan, deployment_suffix, image, network_id, l1_rpc_url, 
         "NETWORK_ID": "1",
         "RUST_LOG": "info",
         "DATABASE_URL": database_url,
+        # claim submission path reads MIDEN_NODE_URL from env (not --miden-node CLI);
+        # main.rs:222 defaults it to "http://miden-node:57291" — wrong hostname in
+        # Kurtosis where the service is `miden-node{deployment_suffix}`.
+        "MIDEN_NODE_URL": miden_node_url,
     }
 
     # Bridge and L1 contract addresses
