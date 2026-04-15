@@ -9,7 +9,7 @@ NUM_DEPOSITS="${1:-150}"
 AMOUNT_WEI="1000000000000000"  # 0.001 ETH each
 PRIVATE_KEY="0x12d7de8621a77640c9241b2595ba78ce443d05e94090365ab3bb5e19df82c625"
 FROM_ADDRESS="0xE34aaF64b29273B7D567FCFc40544c014EEe9970"
-DEST_NETWORK=2
+DEST_NETWORK=1
 
 # Auto-detect ports
 L1_PORT=$(docker port $(docker ps --filter "name=el-1-geth" -q) 8545 | cut -d: -f2)
@@ -25,13 +25,24 @@ echo "Bridge:   $BRIDGE_ADDRESS"
 echo "Amount:   0.001 ETH per deposit"
 echo ""
 
-# Generate unique destination addresses (deterministic from index)
-# Each address: 0x00000000 + keccak256("stress_test_<i>")[0:16] + 00
+# Generate unique destination addresses (deterministic from index).
+# Each address must embed a valid Miden AccountId: zero-pad the derived
+# id with 4 leading zero bytes. Random keccak bytes fail Miden's AccountId
+# bit validation (version/type/storage mode bits), so we derive a real
+# AccountId via the claim-note binary instead of hashing.
+#
+# derive-address does NOT deploy the account — it only computes the id
+# locally from CLAIMER_SEED, so this is cheap (~1s per call).
+CLAIM_NOTE_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/release/claim-note"
+if [[ ! -x "$CLAIM_NOTE_BIN" ]]; then
+    echo "ERROR: $CLAIM_NOTE_BIN not found. Build it: cargo build --release --bin claim-note" >&2
+    exit 1
+fi
+
 generate_dest_address() {
     local idx=$1
-    # Use cast to compute keccak, take first 30 hex chars for the Miden part
-    local hash=$(cast keccak "stress_test_deposit_${idx}" 2>/dev/null | cut -c3-32)
-    echo "0x00000000${hash}00"
+    CLAIMER_SEED="stress_test_deposit_${idx}" "$CLAIM_NOTE_BIN" derive-address 2>/dev/null \
+        | awk '/Eth:/ {print $2}'
 }
 
 # Encode bridgeAsset calldata
@@ -118,9 +129,9 @@ EXPECTED=$((SENT + 2))  # +2 for the deposits already in the system
 
 for attempt in $(seq 1 60); do
     TOTAL_DEPS=$(docker exec $(docker ps --filter 'name=postgres' -q) psql -U bridge_user -d bridge_db -t -c \
-        "SELECT count(*) FROM sync.deposit WHERE dest_net = 2;" 2>/dev/null | tr -d ' ')
+        "SELECT count(*) FROM sync.deposit WHERE dest_net = 1;" 2>/dev/null | tr -d ' ')
     READY_DEPS=$(docker exec $(docker ps --filter 'name=postgres' -q) psql -U bridge_user -d bridge_db -t -c \
-        "SELECT count(*) FROM sync.deposit WHERE dest_net = 2 AND ready_for_claim = true;" 2>/dev/null | tr -d ' ')
+        "SELECT count(*) FROM sync.deposit WHERE dest_net = 1 AND ready_for_claim = true;" 2>/dev/null | tr -d ' ')
     NOT_READY=$((TOTAL_DEPS - READY_DEPS))
 
     echo "  [${attempt}0s] Deposits: $TOTAL_DEPS total, $READY_DEPS ready, $NOT_READY pending"
@@ -202,9 +213,9 @@ echo "  Send time:            ${SEND_TIME}s"
 echo ""
 echo "Bridge Sync:"
 FINAL_TOTAL=$(docker exec $(docker ps --filter 'name=postgres' -q) psql -U bridge_user -d bridge_db -t -c \
-    "SELECT count(*) FROM sync.deposit WHERE dest_net = 2;" 2>/dev/null | tr -d ' ')
+    "SELECT count(*) FROM sync.deposit WHERE dest_net = 1;" 2>/dev/null | tr -d ' ')
 FINAL_READY=$(docker exec $(docker ps --filter 'name=postgres' -q) psql -U bridge_user -d bridge_db -t -c \
-    "SELECT count(*) FROM sync.deposit WHERE dest_net = 2 AND ready_for_claim = true;" 2>/dev/null | tr -d ' ')
+    "SELECT count(*) FROM sync.deposit WHERE dest_net = 1 AND ready_for_claim = true;" 2>/dev/null | tr -d ' ')
 echo "  Deposits detected:    $FINAL_TOTAL"
 echo "  Ready for claim:      $FINAL_READY"
 echo "  Not ready:            $((FINAL_TOTAL - FINAL_READY))"
