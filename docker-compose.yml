@@ -16,7 +16,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # Miden node (agglayer-v0.1 - built from source)
+  # Miden node (v0.14.6 - built from source)
   miden-node:
     image: miden-infra/miden-node
     build:

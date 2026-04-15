@@ -84,7 +84,7 @@ MIDEN_DEFAULTS = {
     "miden_chain_id": 2,
 
     # Miden node configuration
-    "miden_node_image": "miden-infra/miden-node:agglayer-v0.1",
+    "miden_node_image": "miden-infra/miden-node:v0.14.6",
     "miden_node_port": 57291,
 
     # Miden proxy configuration (miden-agglayer)

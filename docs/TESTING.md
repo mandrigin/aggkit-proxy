@@ -54,7 +54,7 @@ Shows transaction results and logs.
 
 ### Dockerfile.miden-node
 
-Builds miden-node from source at the `agglayer-v0.1` tag. First build takes several minutes.
+Builds miden-node from source at the `v0.14.6` tag. First build takes several minutes.
 
 Features:
 - Clones from https://github.com/0xMiden/miden-node

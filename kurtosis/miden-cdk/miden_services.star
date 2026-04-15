@@ -13,7 +13,7 @@ WEB_UI_PORT = 80
 AGGLAYER_POSTGRES_PORT = 5432
 
 # Default images
-DEFAULT_MIDEN_NODE_IMAGE = "miden-infra/miden-node:agglayer-v0.1"
+DEFAULT_MIDEN_NODE_IMAGE = "miden-infra/miden-node:v0.14.6"
 DEFAULT_MIDEN_PROXY_IMAGE = "miden-infra/miden-proxy:release-0.1"
 
 # Docker Desktop grouping label

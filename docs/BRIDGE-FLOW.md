@@ -798,7 +798,7 @@ kurtosis-cdk (upstream)
 
 | Service | Image | Port | Purpose |
 |---------|-------|------|---------|
-| miden-node | `miden-infra/miden-node:agglayer-v0.1` | 57291 | Miden network node |
+| miden-node | `miden-infra/miden-node:v0.14.6` | 57291 | Miden network node |
 | miden-proxy | `miden-infra/miden-proxy:latest` | 8546 | This proxy |
 | miden-l2-forwarder | `nginx:alpine` | 8545 | TCP forwarding (bridge expects 8545) |
 | miden-bridge-ui | `miden-infra/bridge-ui:latest` | 80 | Deposit web UI |

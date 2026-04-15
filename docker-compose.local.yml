@@ -2,10 +2,10 @@
 # No external dependencies (postgres, bridge-service, l1-anvil)
 
 services:
-  # Miden node (agglayer-v0.1 - built from source)
+  # Miden node (v0.14.6 - built from source)
   # Image tag uses miden-node repo commit SHA, not proxy repo
   miden-node:
-    image: miden-infra/miden-node:${MIDEN_NODE_COMMIT:-agglayer-v0.1}
+    image: miden-infra/miden-node:${MIDEN_NODE_COMMIT:-v0.14.6}
     build:
       context: .
       dockerfile: Dockerfile.miden-node

@@ -90,9 +90,9 @@ and reuse them for all subsequent claims.
 
 - Rust 1.82 or later
 - Docker (for kurtosis-cdk integration)
-- Miden node **agglayer-v0.1** tag (required for compatibility)
+- Miden node **v0.14.6** tag (required for compatibility)
   - Built from source via `Dockerfile.miden-node`
-  - Source: https://github.com/0xPolygonMiden/miden-node (tag: agglayer-v0.1)
+  - Source: https://github.com/0xPolygonMiden/miden-node (tag: v0.14.6)
 - kurtosis-cdk deployment (for bridge-service integration)
 
 ## Building

@@ -19,7 +19,7 @@
 #   - kurtosis CLI: https://docs.kurtosis.com/install
 #   - Docker running
 #   - Miden images built:
-#       docker build -t miden-infra/miden-node:agglayer-v0.1 -f Dockerfile.miden-node .
+#       docker build -t miden-infra/miden-node:v0.14.6 -f Dockerfile.miden-node .
 #       docker build https://github.com/gateway-fm/miden-agglayer.git#release/0.1 -t miden-infra/miden-proxy:release-0.1
 
 set -euo pipefail
@@ -87,8 +87,8 @@ check_prerequisites() {
     fi
     success "Docker running"
 
-    if ! docker image inspect miden-infra/miden-node:agglayer-v0.1 &>/dev/null; then
-        fail "miden-infra/miden-node:agglayer-v0.1 image not found. Build it first."
+    if ! docker image inspect miden-infra/miden-node:v0.14.6 &>/dev/null; then
+        fail "miden-infra/miden-node:v0.14.6 image not found. Build it first."
     fi
     success "Miden node image found"
 

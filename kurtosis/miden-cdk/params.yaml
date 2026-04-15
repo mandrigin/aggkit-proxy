@@ -37,8 +37,8 @@ miden:
   miden_chain_id: 2
 
   # Miden node image
-  # Build with: docker build -t miden-infra/miden-node:agglayer-v0.1 -f Dockerfile.miden-node .
-  miden_node_image: "miden-infra/miden-node:agglayer-v0.1"
+  # Build with: docker build -t miden-infra/miden-node:v0.14.6 -f Dockerfile.miden-node .
+  miden_node_image: "miden-infra/miden-node:v0.14.6"
   miden_node_port: 57291
 
   # Miden RPC proxy image (miden-agglayer release/0.1 — the target under test)
