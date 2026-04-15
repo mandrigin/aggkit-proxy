@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use miden_agglayer::{
-    create_claim_note, ClaimNoteStorage, EthAddressFormat, EthAmount, ExitRoot, GlobalIndex,
+    create_claim_note, ClaimNoteStorage, EthAddress, EthAmount, ExitRoot, GlobalIndex,
     LeafData, MetadataHash, ProofData, SmtNode,
 };
 use miden_client::Client;
@@ -203,9 +203,9 @@ where
 
     let leaf_data = LeafData {
         origin_network: params.origin_network,
-        origin_token_address: EthAddressFormat::new(params.origin_token_address),
+        origin_token_address: EthAddress::new(params.origin_token_address),
         destination_network: params.destination_network,
-        destination_address: EthAddressFormat::new(params.destination_address),
+        destination_address: EthAddress::new(params.destination_address),
         amount: EthAmount::new(params.amount),
         metadata_hash: MetadataHash::new(params.metadata_hash),
     };
@@ -240,20 +240,14 @@ pub fn build_claim_transaction_request(
     output_notes: Vec<Note>,
 ) -> Result<miden_client::transaction::TransactionRequest, ClientError>
 {
-    use miden_client::transaction::{TransactionRequestBuilder, OutputNote};
+    use miden_client::transaction::TransactionRequestBuilder;
 
     info!(
         num_notes = output_notes.len(),
         "Building claim transaction request"
     );
 
-    // Convert Notes to OutputNotes for the builder
-    let output_notes: Vec<OutputNote> = output_notes
-        .into_iter()
-        .map(OutputNote::Full)
-        .collect();
-
-    // Build transaction request with output notes
+    // own_output_notes takes Vec<Note> directly in 0.14
     let tx_request = TransactionRequestBuilder::new()
         .own_output_notes(output_notes)
         .build()

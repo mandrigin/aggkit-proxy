@@ -45,8 +45,8 @@ fn format_asset(asset: &Asset) -> String {
         }
         Asset::NonFungible(non_fungible) => {
             format!(
-                "NonFungible {{ faucet_prefix: {:?} }}",
-                non_fungible.faucet_id_prefix()
+                "NonFungible {{ faucet: {} }}",
+                non_fungible.faucet_id()
             )
         }
     }
@@ -97,7 +97,7 @@ fn print_note_details(note: &InputNoteRecord, indent: &str) {
     if !storage_items.is_empty() {
         println!("{}Storage: {} item(s)", indent, storage_items.len());
         for (i, value) in storage_items.iter().enumerate() {
-            println!("{}  [{}]: 0x{:016x}", indent, i, value.as_int());
+            println!("{}  [{}]: 0x{:016x}", indent, i, value.as_canonical_u64());
         }
     }
 
@@ -106,7 +106,7 @@ fn print_note_details(note: &InputNoteRecord, indent: &str) {
     let script = recipient.script();
     let root = script.root();
     println!("{}Script:  0x{:016x}{:016x}{:016x}{:016x}", indent,
-        root[0].as_int(), root[1].as_int(), root[2].as_int(), root[3].as_int());
+        root[0].as_canonical_u64(), root[1].as_canonical_u64(), root[2].as_canonical_u64(), root[3].as_canonical_u64());
 }
 
 #[tokio::main]

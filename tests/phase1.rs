@@ -5,11 +5,11 @@
 //!
 //! Uses miden-client and miden-protocol from agglayer-v0.1 tag.
 
-use miden_client::account::component::{
-    AccountComponent, AuthRpoFalcon512, BasicFungibleFaucet, BasicWallet,
-};
+use miden_client::account::component::{AccountComponent, BasicFungibleFaucet, BasicWallet};
+use miden_protocol::account::auth::AuthScheme;
+use miden_standards::account::auth::AuthSingleSig;
 use miden_client::account::{AccountBuilder, AccountType};
-use miden_client::keystore::FilesystemKeyStore;
+use miden_client::keystore::{FilesystemKeyStore, Keystore};
 use miden_client::transaction::{PaymentNoteDescription, TransactionRequestBuilder};
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::AccountStorageMode;
@@ -36,12 +36,9 @@ async fn create_wallet(
     client.rng().fill_bytes(&mut init_seed);
 
     // Create key pair and auth component
-    let key_pair = AuthSecretKey::new_falcon512_rpo();
+    let key_pair = AuthSecretKey::new_falcon512_poseidon2();
     let auth_component: AccountComponent =
-        AuthRpoFalcon512::new(key_pair.public_key().to_commitment()).into();
-
-    // Add key to keystore
-    keystore.add_key(&key_pair)?;
+        AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Poseidon2).into();
 
     // Build account
     let account = AccountBuilder::new(init_seed)
@@ -53,6 +50,9 @@ async fn create_wallet(
 
     // Add account to client
     client.add_account(&account, false).await?;
+
+    // Add key to keystore (associated with account)
+    keystore.add_key(&key_pair, account.id()).await?;
 
     Ok(account)
 }
@@ -70,12 +70,9 @@ async fn create_faucet(
     client.rng().fill_bytes(&mut init_seed);
 
     // Create key pair and auth component
-    let key_pair = AuthSecretKey::new_falcon512_rpo();
+    let key_pair = AuthSecretKey::new_falcon512_poseidon2();
     let auth_component: AccountComponent =
-        AuthRpoFalcon512::new(key_pair.public_key().to_commitment()).into();
-
-    // Add key to keystore
-    keystore.add_key(&key_pair)?;
+        AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Poseidon2).into();
 
     // Create token symbol
     let token_symbol = TokenSymbol::new(symbol)?;
@@ -91,6 +88,9 @@ async fn create_faucet(
 
     // Add account to client
     client.add_account(&account, false).await?;
+
+    // Add key to keystore (associated with account)
+    keystore.add_key(&key_pair, account.id()).await?;
 
     Ok(account)
 }
@@ -312,7 +312,7 @@ mod tc_1_5_consumption {
             .expect("Failed to get notes");
 
         if !notes.is_empty() {
-            let notes_to_consume: Vec<_> = notes.into_iter().map(|(n, _)| n).collect();
+            let notes_to_consume: Vec<miden_protocol::note::Note> = notes.into_iter().map(|(n, _)| n.try_into().unwrap()).collect();
             let tx_request = TransactionRequestBuilder::new()
                 .build_consume_notes(notes_to_consume)
                 .expect("Failed to build consume request");
@@ -372,7 +372,7 @@ mod tc_1_6_p2id {
             .expect("Failed to get Alice's notes");
 
         if !alice_notes.is_empty() {
-            let notes_to_consume: Vec<_> = alice_notes.into_iter().map(|(n, _)| n).collect();
+            let notes_to_consume: Vec<miden_protocol::note::Note> = alice_notes.into_iter().map(|(n, _)| n.try_into().unwrap()).collect();
             let consume_request = TransactionRequestBuilder::new()
                 .build_consume_notes(notes_to_consume)
                 .expect("Failed to build consume request");
@@ -434,7 +434,7 @@ mod tc_1_6_p2id {
         // Alice consumes mint note
         let alice_notes = client.get_consumable_notes(Some(alice.id())).await.unwrap();
         if !alice_notes.is_empty() {
-            let notes_to_consume: Vec<_> = alice_notes.into_iter().map(|(n, _)| n).collect();
+            let notes_to_consume: Vec<miden_protocol::note::Note> = alice_notes.into_iter().map(|(n, _)| n.try_into().unwrap()).collect();
             let consume_request = TransactionRequestBuilder::new()
                 .build_consume_notes(notes_to_consume)
                 .unwrap();
@@ -458,7 +458,7 @@ mod tc_1_6_p2id {
         // Bob consumes P2ID note
         let bob_notes = client.get_consumable_notes(Some(bob.id())).await.unwrap();
         if !bob_notes.is_empty() {
-            let notes_to_consume: Vec<_> = bob_notes.into_iter().map(|(n, _)| n).collect();
+            let notes_to_consume: Vec<miden_protocol::note::Note> = bob_notes.into_iter().map(|(n, _)| n.try_into().unwrap()).collect();
             let consume_request = TransactionRequestBuilder::new()
                 .build_consume_notes(notes_to_consume)
                 .unwrap();

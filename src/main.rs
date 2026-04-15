@@ -32,7 +32,7 @@ use alloy_primitives::{Address, Bytes};
 use miden_protocol::account::{AccountId, AccountIdV0};
 
 // Miden agglayer function for AccountId -> 20-byte destination conversion
-use miden_agglayer::{EthAddressFormat, EthAmount, ExitRoot, UpdateGerNote};
+use miden_agglayer::{EthAddress as MidenEthAddress, EthAmount, EthEmbeddedAccountId, ExitRoot, MetadataHash, UpdateGerNote};
 
 /// Get chain ID from environment variable, defaults to 2 (agglayer Miden network ID)
 fn get_chain_id() -> u64 {
@@ -759,7 +759,7 @@ async fn submit_claim_to_miden(
     claim_data: ClaimSubmissionData,
 ) -> Result<ClaimSubmissionResult, ClientError> {
     use miden_client::transaction::TransactionRequestBuilder;
-    use miden_protocol::crypto::rand::RpoRandomCoin;
+    use miden_protocol::crypto::rand::RandomCoin as RpoRandomCoin;
     use miden_protocol::Felt;
     use miden_rpc_proxy::{create_bridge_claim_note, BridgeClaimParams};
 
@@ -847,7 +847,7 @@ async fn submit_claim_to_miden(
 
                 // Generate key pair for signing
                 info!("  Generating Falcon512 key pair for signing...");
-                let key_pair = AuthSecretKey::new_falcon512_rpo();
+                let key_pair = AuthSecretKey::new_falcon512_poseidon2();
                 info!("  Public key commitment generated");
 
                 // Build the ephemeral account first (need ID for keystore)
@@ -859,7 +859,7 @@ async fn submit_claim_to_miden(
                 let ephemeral_account = AccountBuilder::new(init_seed)
                     .account_type(AccountType::RegularAccountUpdatableCode)
                     .storage_mode(AccountStorageMode::Public)
-                    .with_auth_component(AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Rpo))
+                    .with_auth_component(AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Poseidon2))
                     .with_component(BasicWallet)
                     .build()
                     .map_err(|e| {
@@ -917,7 +917,9 @@ async fn submit_claim_to_miden(
                 // TODO: bridge_admin_id and ger_manager_id should come from genesis config
                 let dummy_admin_id = submitter_account_id;
                 let dummy_ger_manager_id = submitter_account_id;
-                let origin_token_address = miden_agglayer::EthAddressFormat::new([0u8; 20]);
+                let origin_token_address = MidenEthAddress::new([0u8; 20]);
+                // MetadataHash from raw L1 metadata bytes — matches L1 bridge's getTokenMetadata
+                let metadata_hash = MetadataHash::from_abi_encoded(&claim_data.metadata);
                 let faucet_result = create_and_deploy_agglayer_faucet(
                     &mut client,
                     &config.bridge_faucet_id_hex,
@@ -926,6 +928,7 @@ async fn submit_claim_to_miden(
                     &origin_token_address,
                     0,  // origin_network: mainnet
                     10, // scale: 18 - 8 = 10 decimal places
+                    metadata_hash,
                 ).await?;
                 faucet_result.faucet_id
             };
@@ -1022,7 +1025,7 @@ async fn submit_claim_to_miden(
             let claim_script_root = claim_script.root();
             info!("  → CLAIM script root: {:?}", claim_script_root);
             info!("  → CLAIM script root hex: 0x{}", claim_script_root.iter()
-                .map(|f| format!("{:016x}", f.as_int()))
+                .map(|f| format!("{:016x}", f.as_canonical_u64()))
                 .collect::<Vec<_>>()
                 .join(""));
 
@@ -1041,10 +1044,8 @@ async fn submit_claim_to_miden(
             info!("    - Output: CLAIM note (faucet will auto-consume)");
 
             // Build transaction request with CLAIM note as output
-            use miden_client::transaction::OutputNote;
-            let claim_output_note = OutputNote::Full(claim_note.clone());
             let tx_request = TransactionRequestBuilder::new()
-                .own_output_notes(vec![claim_output_note])
+                .own_output_notes(vec![claim_note.clone()])
                 .build()
                 .map_err(|e| ClientError::TransactionError(format!(
                     "Failed to build claim request: {}", e
@@ -1093,7 +1094,7 @@ async fn submit_ger_to_miden(
     global_exit_root: [u8; 32],
 ) -> Result<u64, ClientError> {
     use miden_client::transaction::{OutputNote, TransactionRequestBuilder};
-    use miden_protocol::crypto::rand::RpoRandomCoin;
+    use miden_protocol::crypto::rand::RandomCoin as RpoRandomCoin;
     use miden_protocol::Felt;
 
     let ger_hex = hex::encode(&global_exit_root);
@@ -1184,7 +1185,7 @@ async fn submit_ger_to_miden(
 
             // Submit as output note from GER manager
             let tx_request = TransactionRequestBuilder::new()
-                .own_output_notes(vec![OutputNote::Full(update_ger_note)])
+                .own_output_notes(vec![update_ger_note])
                 .build()
                 .map_err(|e| {
                     ClientError::TransactionError(format!(
@@ -1241,8 +1242,8 @@ fn bytes_to_account_id(bytes: &[u8; 15]) -> Result<AccountId, String> {
 ///
 /// Each Felt holds 4 bytes (as u32) from the hash
 fn bytes_to_felts_32(bytes: &[u8; 32]) -> [miden_protocol::Felt; 8] {
-    use miden_protocol::{Felt, FieldElement};
-    let mut felts = [<Felt as FieldElement>::ZERO; 8];
+    use miden_protocol::{Felt, ZERO};
+    let mut felts = [ZERO; 8];
     for (i, chunk) in bytes.chunks(4).enumerate() {
         let value = u32::from_le_bytes(chunk.try_into().unwrap_or([0; 4]));
         felts[i] = Felt::new(value as u64);
@@ -1792,7 +1793,7 @@ impl EthApiServer for EthApiImpl {
         };
 
         // Log the round-trip conversion for debugging (using miden-agglayer functions)
-        let dest_bytes_20 = EthAddressFormat::from_account_id(miden_account_id.inner()).into_bytes();
+        let dest_bytes_20 = EthEmbeddedAccountId::from_account_id(miden_account_id.inner()).to_bytes();
         debug!(
             miden_account_id = %miden_account_id,
             destination_bytes_20 = hex::encode(&dest_bytes_20),
@@ -2601,7 +2602,7 @@ async fn initialize_miden_accounts(
 
             // Generate key pair for signing
             info!("  Generating Falcon512 key pair for signing...");
-            let key_pair = AuthSecretKey::new_falcon512_rpo();
+            let key_pair = AuthSecretKey::new_falcon512_poseidon2();
             info!("  Public key commitment generated");
 
             // Build the ephemeral account first (need ID for keystore)
@@ -2613,7 +2614,7 @@ async fn initialize_miden_accounts(
             let ephemeral_account = AccountBuilder::new(init_seed)
                 .account_type(AccountType::RegularAccountUpdatableCode)
                 .storage_mode(AccountStorageMode::Public)
-                .with_auth_component(AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Rpo))
+                .with_auth_component(AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Poseidon2))
                 .with_component(BasicWallet)
                 .build()
                 .map_err(|e| {
@@ -2652,7 +2653,9 @@ async fn initialize_miden_accounts(
             // TODO: bridge_admin_id and ger_manager_id should come from genesis config
             let dummy_admin_id = ephemeral_account_id;
             let dummy_ger_manager_id = ephemeral_account_id;
-            let origin_token_address = miden_agglayer::EthAddressFormat::new([0u8; 20]);
+            let origin_token_address = MidenEthAddress::new([0u8; 20]);
+            // Empty metadata matches L1 bridge convention for native ETH
+            let metadata_hash = MetadataHash::from_abi_encoded(&[]);
             let faucet_result = create_and_deploy_agglayer_faucet(
                 &mut client,
                 &bridge_faucet_id_hex,
@@ -2661,6 +2664,7 @@ async fn initialize_miden_accounts(
                 &origin_token_address,
                 0,  // origin_network: mainnet
                 10, // scale: 18 - 8 = 10 decimal places
+                metadata_hash,
             ).await?;
             info!("  ✓ Bridge account ID: {}", faucet_result.bridge_account_id);
             info!("  ✓ Agglayer faucet ID: {}", faucet_result.faucet_id);

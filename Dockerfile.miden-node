@@ -1,8 +1,10 @@
-# Build stage for testing-node-builder (from miden-client workspace)
-FROM rust:1.91-slim-bookworm AS builder
+# Build miden-node + miden-genesis from 0xMiden/node v0.14.6 (production release).
+# This replaces the earlier testing-node-builder from miden-client; the agglayer
+# bridge is now seeded via miden-genesis + validator bootstrap --genesis-config-file.
+# The faucet is NOT created in genesis — the proxy deploys it at first claim.
+FROM rust:1.93-slim-bookworm AS builder
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     libsqlite3-dev \
@@ -10,86 +12,94 @@ RUN apt-get update && apt-get install -y \
     git \
     cmake \
     clang \
+    llvm \
+    libclang-dev \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
-# Clone miden-client from agglayer-integration-tests branch (PR #1882)
-# Source: https://github.com/0xMiden/miden-client
-RUN git clone --depth 1 --branch agglayer-integration-tests \
-    https://github.com/0xMiden/miden-client.git .
+# Clone the production node repo pinned to v0.14.6.
+# Matches the miden-node-* 0.14.6 transitive deps our proxy's Cargo.lock resolves.
+RUN git clone --depth 1 --branch v0.14.6 https://github.com/0xMiden/node.git . && \
+    git rev-parse HEAD > /tmp/miden-node-commit.txt && \
+    echo "Tag: v0.14.6" >> /tmp/miden-node-commit.txt
 
-# Save the commit SHA for labeling
-RUN git rev-parse HEAD > /tmp/miden-client-commit.txt && \
-    echo "Miden-client commit: $(cat /tmp/miden-client-commit.txt)"
+# Build both binaries we need.
+RUN cargo build --release --locked --bin miden-node && \
+    cargo build --release --locked --bin miden-genesis
 
-# Patch: bind RPC to 0.0.0.0 instead of 127.0.0.1 for Docker port forwarding
-RUN sed -i 's|format!("127.0.0.1:{}", self.rpc_port)|format!("0.0.0.0:{}", self.rpc_port)|' \
-    crates/testing/node-builder/src/lib.rs
-
-# Fetch dependencies first so we can patch them
-RUN cargo fetch
-
-# Patch: Add logging for FailedNote errors in ntx-builder so we can debug CLAIM failures
-RUN NTX_DIR=$(find /usr/local/cargo/registry/src -name 'miden-node-ntx-builder-*' -type d | head -1) && \
-    echo "Patching ntx-builder at: $NTX_DIR" && \
-    ls "$NTX_DIR/src/actor/" && \
-    sed -i 's|Err(NtxError::AllNotesFailed(failed))|{ for f in \&failed { tracing::error!("note {} failed: {:?}", f.note.id(), f.error); } Err(NtxError::AllNotesFailed(failed)) }|' \
-    "$NTX_DIR/src/actor/execute.rs"
-
-# Build the testing-node-builder binary
-RUN cargo build --release --package node-builder
-
-# Runtime stage
+# Runtime
 FROM debian:bookworm-slim
 
-# Copy the commit SHA from builder
-COPY --from=builder /tmp/miden-client-commit.txt /app/miden-client-commit.txt
-
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
     libsqlite3-0 \
+    sqlite3 \
     curl \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=builder /build/target/release/testing-node-builder /usr/local/bin/
+COPY --from=builder /build/target/release/miden-node /usr/local/bin/miden-node
+COPY --from=builder /build/target/release/miden-genesis /usr/local/bin/miden-genesis
+COPY --from=builder /tmp/miden-node-commit.txt /app/miden-node-commit.txt
 
-# Add label with source info
-LABEL org.opencontainers.image.source="https://github.com/0xMiden/miden-client" \
-      org.opencontainers.image.ref.name="agglayer-integration-tests"
+LABEL org.opencontainers.image.source="https://github.com/0xMiden/node" \
+      org.opencontainers.image.ref.name="v0.14.6"
 
-# gRPC port
 EXPOSE 57291
 
-# Create data directory
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /app/accounts /app/genesis
 
-# Create entrypoint script
-# testing-node-builder uses ./data as its data dir and AGGLAYER_GENESIS=1
-# to enable agglayer genesis accounts (bridge_admin, ger_manager, bridge, faucet).
-# The .mac files are written to ./data/ alongside the node database.
-RUN printf '%s\n' \
-    '#!/bin/bash' \
-    'set -e' \
-    '' \
-    '# Log version info' \
-    'echo "=== Miden Testing Node Startup ==="' \
-    'if [ -f /app/miden-client-commit.txt ]; then' \
-    '    echo "Miden-client commit: $(cat /app/miden-client-commit.txt)"' \
-    'fi' \
-    '' \
-    '# Enable agglayer genesis accounts by default' \
-    'export AGGLAYER_GENESIS="${AGGLAYER_GENESIS:-1}"' \
-    'echo "AGGLAYER_GENESIS=$AGGLAYER_GENESIS"' \
-    '' \
-    'echo "Starting testing-node-builder..."' \
-    'exec testing-node-builder "$@"' \
-    > /usr/local/bin/entrypoint.sh && \
-    chmod +x /usr/local/bin/entrypoint.sh
+# Bootstrap flow:
+#   1. miden-genesis → writes bridge.mac, bridge_admin.mac, ger_manager.mac, genesis.toml
+#      to /app/genesis
+#   2. miden-node validator bootstrap → consumes genesis.toml, emits genesis.dat into /app/data
+#      and copies .mac files into /app/accounts
+#   3. miden-node store bootstrap → initializes store DB in /app/data
+#   4. miden-node bundled start → runs the node
+#
+# On subsequent starts (volumes persisted), /app/data/genesis.dat exists so we skip
+# bootstrap and go straight to start.
+#
+# Validator key: we rely on miden-node's INSECURE_VALIDATOR_KEY_HEX default for dev.
+COPY <<'EOF' /usr/local/bin/entrypoint.sh
+#!/bin/bash
+set -euo pipefail
+
+echo "=== miden-node (v0.14.6 production) ==="
+cat /app/miden-node-commit.txt
+
+DATA_DIR="${DATA_DIR:-/app/data}"
+ACCOUNTS_DIR="${ACCOUNTS_DIR:-/app/accounts}"
+GENESIS_DIR="${GENESIS_DIR:-/app/genesis}"
+RPC_URL="${RPC_URL:-http://0.0.0.0:57291}"
+
+if [ ! -f "${DATA_DIR}/genesis.dat" ]; then
+  echo "First boot — running full bootstrap"
+  # validator bootstrap refuses non-empty dirs; start from scratch.
+  rm -rf "${DATA_DIR}" "${ACCOUNTS_DIR}" "${GENESIS_DIR}"
+  mkdir -p "${DATA_DIR}" "${ACCOUNTS_DIR}" "${GENESIS_DIR}"
+
+  echo "[1/2] miden-genesis → ${GENESIS_DIR}"
+  miden-genesis --output-dir "${GENESIS_DIR}"
+  ls -la "${GENESIS_DIR}"
+
+  echo "[2/2] bundled bootstrap (validator + store in one shot)"
+  miden-node bundled bootstrap --data-directory "${DATA_DIR}" --accounts-directory "${ACCOUNTS_DIR}" --genesis-config-file "${GENESIS_DIR}/genesis.toml"
+
+  echo "Bootstrap complete"
+else
+  echo "Existing genesis.dat found — skipping bootstrap"
+fi
+
+echo "Starting miden-node bundled..."
+exec miden-node bundled start --rpc.url "${RPC_URL}" --data-directory "${DATA_DIR}" "$@"
+EOF
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD []

@@ -23,16 +23,19 @@ alloy-rlp = "0.3"
 alloy-rpc-types = "0.8"
 alloy-consensus = { version = "0.8", features = ["k256"] }
 
-# Miden crates (agglayer-integration-tests branch, PR #1882)
-miden-client = { git = "https://github.com/0xMiden/miden-client", branch = "agglayer-integration-tests", features = ["testing", "tonic"] }
-miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client", branch = "agglayer-integration-tests", package = "miden-client-sqlite-store" }
+# miden-client (pinned by rev to ajl-agglayer-integration-tests-v0.14.0 branch head for reproducibility)
+miden-client = { git = "https://github.com/0xMiden/miden-client.git", rev = "f7cdf263781999e8f81ba608f9c5a91218747d98", default-features = false, features = ["testing", "tonic"] }
+miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client.git", rev = "f7cdf263781999e8f81ba608f9c5a91218747d98" }
 
-# Miden base crates (0.14-alpha, matching miden-client agglayer-integration-tests branch)
-miden-protocol = { version = "0.14.0-alpha", features = ["std"] }
-miden-standards = { version = "0.14.0-alpha" }
-miden-agglayer = { version = "0.14.0-alpha" }
-miden-tx = { version = "0.14.0-alpha" }
-miden-assembly = "0.20"
+# miden-base — loose caret pins. Pinning to `=0.14.4` exactly caused a runtime
+# STARK verification regression in the miden-node NTX builder; the 0.14.6
+# transitive node deps that cargo picks when left alone are what actually work
+# with miden-client @ f7cdf26 in practice. Keep the caret; rely on the git rev
+# pin above for reproducibility.
+miden-protocol = { version = "0.14", default-features = false, features = ["std"] }
+miden-standards = { version = "0.14", default-features = false }
+miden-agglayer = { version = "0.14" }
+miden-tx = { version = "0.14", default-features = false }
 
 # Additional dependencies
 sha3 = "0.10"
@@ -69,7 +72,7 @@ tempfile = "3"
 rand = "0.9"
 k256 = "0.13"
 # Enable testing feature for miden-protocol in tests (for AccountId::dummy)
-miden-protocol = { version = "0.14.0-alpha", features = ["std", "testing"] }
+miden-protocol = { version = "0.14", default-features = false, features = ["std", "testing"] }
 
 [[bin]]
 name = "verify-notes"

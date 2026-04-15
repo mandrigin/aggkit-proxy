@@ -20,7 +20,7 @@
 #   - Docker running
 #   - Miden images built:
 #       docker build -t miden-infra/miden-node:agglayer-v0.1 -f Dockerfile.miden-node .
-#       docker build https://github.com/gateway-fm/miden-agglayer.git#feat/l2-l1 -t miden-infra/miden-proxy:latest
+#       docker build https://github.com/gateway-fm/miden-agglayer.git#release/0.1 -t miden-infra/miden-proxy:release-0.1
 
 set -euo pipefail
 
@@ -92,9 +92,9 @@ check_prerequisites() {
     fi
     success "Miden node image found"
 
-    if ! docker image inspect miden-infra/miden-proxy:latest &>/dev/null; then
-        fail "miden-infra/miden-proxy:latest image not found. Build from miden-agglayer:
-    docker build https://github.com/gateway-fm/miden-agglayer.git#feat/l2-l1 -t miden-infra/miden-proxy:latest"
+    if ! docker image inspect miden-infra/miden-proxy:release-0.1 &>/dev/null; then
+        fail "miden-infra/miden-proxy:release-0.1 image not found. Build from miden-agglayer:
+    docker build https://github.com/gateway-fm/miden-agglayer.git#release/0.1 -t miden-infra/miden-proxy:release-0.1"
     fi
     success "Miden proxy image found (miden-agglayer)"
 
@@ -259,8 +259,13 @@ send_test_deposit() {
     log "From: $KURTOSIS_ADDRESS"
     log "Bridge: $BRIDGE_ADDRESS"
 
-    # Encode bridgeAsset call
-    # NOTE: dest_net=1 (bridge rollup index), NOT chainId=2
+    # Encode bridgeAsset call.
+    # dest_net=1: the rollup's l2NetworkID from rollup manager (rollupID), NOT the
+    # agglayer network ID (which is 2 in our setup). The bridge service's
+    # claimtxman calls UpdateL1DepositsStatus(ctx, ger.ExitRoots[0], tm.l2NetworkID, ...)
+    # where l2NetworkID is the rollupID. Depositing with dest_net=2 leaves the deposit
+    # stuck at ready_for_claim=false because the UPDATE's `dest_net = $2` clause never matches.
+    # destination_address uses the claimable address format.
     local calldata
     calldata=$(cast calldata "bridgeAsset(uint32,address,uint256,address,bool,bytes)" \
         1 \

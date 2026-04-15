@@ -5,11 +5,11 @@
 //!
 //! Uses miden-client and miden-protocol from agglayer-v0.1 tag.
 
-use miden_client::account::component::{
-    AccountComponent, AuthRpoFalcon512, BasicFungibleFaucet, BasicWallet,
-};
+use miden_client::account::component::{AccountComponent, BasicFungibleFaucet, BasicWallet};
+use miden_protocol::account::auth::AuthScheme;
+use miden_standards::account::auth::AuthSingleSig;
 use miden_client::account::{AccountBuilder, AccountType};
-use miden_client::keystore::FilesystemKeyStore;
+use miden_client::keystore::{FilesystemKeyStore, Keystore};
 use miden_client::transaction::TransactionRequestBuilder;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::AccountStorageMode;
@@ -34,11 +34,10 @@ async fn create_wallet(
     let mut init_seed = [0u8; 32];
     client.rng().fill_bytes(&mut init_seed);
 
-    let key_pair = AuthSecretKey::new_falcon512_rpo();
+    let key_pair = AuthSecretKey::new_falcon512_poseidon2();
     let auth_component: AccountComponent =
-        AuthRpoFalcon512::new(key_pair.public_key().to_commitment()).into();
+        AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Poseidon2).into();
 
-    keystore.add_key(&key_pair)?;
 
     let account = AccountBuilder::new(init_seed)
         .account_type(AccountType::RegularAccountUpdatableCode)
@@ -48,6 +47,9 @@ async fn create_wallet(
         .build()?;
 
     client.add_account(&account, false).await?;
+
+    // Add key to keystore (associated with account)
+    keystore.add_key(&key_pair, account.id()).await?;
     Ok(account)
 }
 
@@ -62,11 +64,10 @@ async fn create_faucet(
     let mut init_seed = [0u8; 32];
     client.rng().fill_bytes(&mut init_seed);
 
-    let key_pair = AuthSecretKey::new_falcon512_rpo();
+    let key_pair = AuthSecretKey::new_falcon512_poseidon2();
     let auth_component: AccountComponent =
-        AuthRpoFalcon512::new(key_pair.public_key().to_commitment()).into();
+        AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Poseidon2).into();
 
-    keystore.add_key(&key_pair)?;
 
     let token_symbol = TokenSymbol::new(symbol)?;
     let max_supply_felt = Felt::new(max_supply);
@@ -79,6 +80,9 @@ async fn create_faucet(
         .build()?;
 
     client.add_account(&account, false).await?;
+
+    // Add key to keystore (associated with account)
+    keystore.add_key(&key_pair, account.id()).await?;
     Ok(account)
 }
 
@@ -169,7 +173,7 @@ mod tc_2_2_claim_redemption {
 
         let notes = client.get_consumable_notes(Some(redeemer.id())).await.unwrap();
         if !notes.is_empty() {
-            let notes_to_consume: Vec<_> = notes.into_iter().map(|(n, _)| n).collect();
+            let notes_to_consume: Vec<miden_protocol::note::Note> = notes.into_iter().map(|(n, _)| n.try_into().unwrap()).collect();
             let consume_request = TransactionRequestBuilder::new()
                 .build_consume_notes(notes_to_consume)
                 .unwrap();
@@ -202,7 +206,7 @@ mod tc_2_2_claim_redemption {
         let notes = client.get_consumable_notes(Some(redeemer.id())).await.unwrap();
         if !notes.is_empty() {
             let ids: Vec<_> = notes.iter().map(|(n, _)| n.id()).collect();
-            let notes_to_consume: Vec<_> = notes.into_iter().map(|(n, _)| n).collect();
+            let notes_to_consume: Vec<miden_protocol::note::Note> = notes.into_iter().map(|(n, _)| n.try_into().unwrap()).collect();
             let consume_request = TransactionRequestBuilder::new()
                 .build_consume_notes(notes_to_consume)
                 .unwrap();

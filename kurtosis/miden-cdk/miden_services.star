@@ -14,7 +14,7 @@ AGGLAYER_POSTGRES_PORT = 5432
 
 # Default images
 DEFAULT_MIDEN_NODE_IMAGE = "miden-infra/miden-node:agglayer-v0.1"
-DEFAULT_MIDEN_PROXY_IMAGE = "miden-infra/miden-proxy:main-deff036"
+DEFAULT_MIDEN_PROXY_IMAGE = "miden-infra/miden-proxy:release-0.1"
 
 # Docker Desktop grouping label
 DOCKER_PROJECT_LABEL = "com.docker.compose.project"
@@ -288,6 +288,8 @@ CREATE TABLE bridge_out_processed (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 002_faucet_registry.sql — dynamic faucet registry for bridged tokens.
+-- Maps each L1 origin token to its Miden faucet account.
 CREATE TABLE IF NOT EXISTS faucet_registry (
     faucet_id       TEXT PRIMARY KEY,
     origin_address  BYTEA NOT NULL,
@@ -341,17 +343,11 @@ def _deploy_miden_proxy(plan, deployment_suffix, image, network_id, l1_rpc_url, 
     if l1_rpc_url:
         env_vars["L1_RPC_URL"] = l1_rpc_url
 
+    # NOTE: env var name is GER_L1_ADDRESS (L1 after GER), not L1_GER_ADDRESS.
+    # The release/0.1 proxy CLI uses this exact name; prior versions had it reversed.
     l1_ger_address = contract_addresses.get("l1_ger_address", "")
     if l1_ger_address:
-        env_vars["L1_GER_ADDRESS"] = l1_ger_address
-
-    rollup_manager_address = contract_addresses.get("rollup_manager_address", "")
-    if rollup_manager_address:
-        env_vars["ROLLUP_MANAGER_ADDRESS"] = rollup_manager_address
-
-    rollup_address = contract_addresses.get("rollup_address", "")
-    if rollup_address:
-        env_vars["ROLLUP_ADDRESS"] = rollup_address
+        env_vars["GER_L1_ADDRESS"] = l1_ger_address
 
     return plan.add_service(
         name=service_name,

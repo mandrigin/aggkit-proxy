@@ -4,7 +4,7 @@
 //! to the Miden network. The agglayer faucet is required for processing CLAIM notes
 //! that mint tokens to destination accounts.
 
-use miden_agglayer::{create_agglayer_faucet, create_bridge_account, EthAddressFormat};
+use miden_agglayer::{create_agglayer_faucet, create_bridge_account, EthAddress, MetadataHash};
 use miden_client::keystore::FilesystemKeyStore;
 use miden_client::transaction::TransactionRequestBuilder;
 use miden_client::Client;
@@ -40,9 +40,10 @@ pub async fn create_and_deploy_agglayer_faucet(
     configured_faucet_id_hex: &str,
     bridge_admin_id: AccountId,
     ger_manager_id: AccountId,
-    origin_token_address: &EthAddressFormat,
+    origin_token_address: &EthAddress,
     origin_network: u32,
     scale: u8,
+    metadata_hash: MetadataHash,
 ) -> Result<AgglayerFaucetResult, ClientError> {
     info!("╔══════════════════════════════════════════════════════════════════╗");
     info!("║  Creating bridge account                                         ║");
@@ -135,6 +136,7 @@ pub async fn create_and_deploy_agglayer_faucet(
         origin_token_address,
         origin_network,
         scale,
+        metadata_hash,
     );
 
     let agglayer_faucet_id = agglayer_faucet.id();

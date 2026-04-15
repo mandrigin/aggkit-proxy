@@ -54,7 +54,7 @@ fn derive_key_pair(seed: &[u8; 32]) -> AuthSecretKey {
     let mut rng = ChaCha20Rng::from_seed(key_seed);
 
     // Generate the key pair deterministically
-    AuthSecretKey::new_falcon512_rpo_with_rng(&mut rng)
+    AuthSecretKey::new_falcon512_poseidon2_with_rng(&mut rng)
 }
 
 /// Derive a deterministic init seed for account creation
@@ -77,7 +77,7 @@ async fn get_or_create_account(
 
     // Create auth component from the public key
     let auth_component: AccountComponent =
-        AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Rpo).into();
+        AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Poseidon2).into();
 
     // Build account
     let account = AccountBuilder::new(init_seed)
@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let init_seed = derive_init_seed(&seed);
 
             let auth_component: AccountComponent =
-                AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Rpo).into();
+                AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Poseidon2).into();
 
             let account = AccountBuilder::new(init_seed)
                 .account_type(AccountType::RegularAccountUpdatableCode)
@@ -312,7 +312,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let storage = details.storage();
                 println!("    Storage ({} items):", storage.num_items());
                 for (i, value) in storage.items().iter().enumerate() {
-                    println!("      [{}]: {}", i, value.as_int());
+                    println!("      [{}]: {}", i, value.as_canonical_u64());
                 }
                 println!();
             }
@@ -347,10 +347,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for (i, value) in storage.items().iter().enumerate() {
                     // Try to interpret first item as account ID (P2ID pattern)
                     if i == 0 {
-                        let bytes: [u8; 8] = value.as_int().to_le_bytes();
-                        println!("      [{}]: {} (raw: 0x{})", i, value.as_int(), hex::encode(bytes));
+                        let bytes: [u8; 8] = value.as_canonical_u64().to_le_bytes();
+                        println!("      [{}]: {} (raw: 0x{})", i, value.as_canonical_u64(), hex::encode(bytes));
                     } else {
-                        println!("      [{}]: {}", i, value.as_int());
+                        println!("      [{}]: {}", i, value.as_canonical_u64());
                     }
                 }
                 println!();
@@ -438,7 +438,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Script root: 0x{}", hex::encode(note.script().root().as_bytes()));
             println!("  Note storage ({}):", note.storage().num_items());
             for (i, val) in note.storage().items().iter().enumerate() {
-                println!("    [{}]: {}", i, val.as_int());
+                println!("    [{}]: {}", i, val.as_canonical_u64());
             }
             println!("═══════════════════════════════════════════════════════════════");
             println!();
