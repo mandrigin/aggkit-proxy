@@ -77,7 +77,14 @@ args:
 
   # Images (can be overridden)
   # zkevm_bridge_service_image: "hermeznetwork/zkevm-bridge-service:v0.6.0-RC1"
-  # aggkit_image: "ghcr.io/0xpolygon/aggkit:latest"
+
+  # RD-862: locally-built aggkit with UseUpdateExitRoot mode. Once
+  # agglayer/aggkit#1597 is merged + a tagged release ships, switch back
+  # to a public tag (e.g. ghcr.io/agglayer/aggkit:NEXT). This image must
+  # be present in the local docker daemon — built via `docker build .` in
+  # /Users/max/github/work/gateway/miden/aggkit on branch
+  # rd-862/update-exit-root-mode.
+  aggkit_image: "miden-agglayer/aggkit:rd-862"
 
   # Agglayer configuration
   agglayer_prover_primary_prover: "mock-prover"

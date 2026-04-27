@@ -201,7 +201,12 @@ def _apply_agglayer_migration(plan, deployment_suffix):
     """Run the miden-agglayer database migration."""
     service_name = "miden-agglayer-postgres" + deployment_suffix
 
-    # Migration SQL from miden-agglayer/migrations/001_initial.sql
+    # Migration SQL — inlined snapshot of miden-agglayer/migrations/*.sql.
+    # IMPORTANT: when miden-agglayer adds a new migration file, append it
+    # below in numeric order. Drift between this snapshot and the live
+    # `migrations/` dir produces `relation "..." does not exist` errors at
+    # miden-proxy startup. Long-term: swap to uploading the directory as a
+    # files-artifact and running `for f in *.sql; do psql -f $f; done`.
     migration_sql = """
 CREATE TABLE service_state (
     id                  INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -283,6 +288,21 @@ CREATE TABLE bridge_out_processed (
     deposit_count INT NOT NULL,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- migrations/002_faucet_registry.sql — dynamic faucet registry for bridged tokens.
+CREATE TABLE IF NOT EXISTS faucet_registry (
+    faucet_id       TEXT PRIMARY KEY,
+    origin_address  BYTEA NOT NULL,
+    origin_network  INT NOT NULL,
+    symbol          TEXT NOT NULL,
+    origin_decimals SMALLINT NOT NULL,
+    miden_decimals  SMALLINT NOT NULL,
+    scale           SMALLINT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_faucet_origin
+    ON faucet_registry (origin_address, origin_network);
 """
 
     plan.exec(

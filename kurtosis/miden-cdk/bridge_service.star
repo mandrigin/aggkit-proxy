@@ -212,7 +212,10 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
     return plan.add_service(
         name=service_name,
         config=ServiceConfig(
-            image=cdk_args.get("aggkit_image", "ghcr.io/0xpolygon/aggkit:latest"),
+            # Default to the locally-built RD-862 patched image. Override via
+            # `--arg miden.aggkit_image=...` once agglayer/aggkit#1597 is
+            # merged + a public tag ships.
+            image=cdk_args.get("aggkit_image", "miden-agglayer/aggkit:rd-862"),
             ports={
                 "rpc": PortSpec(
                     number=5576,
@@ -356,6 +359,11 @@ EnableAggOracleCommittee = false
 [AggOracle.EVMSender]
 GlobalExitRootL2 = "{{.l2_ger_address}}"
 WaitPeriodMonitorTx = "5s"
+# RD-862: forward both exit roots via updateExitRoot(rollup, mainnet) instead
+# of insertGlobalExitRoot(combined). Eliminates the L1-stale decomposition
+# race for sovereign chains (e.g. Miden) that can't reverse the keccak hash.
+# Requires aggkit built from agglayer/aggkit#1597 or later.
+UseUpdateExitRoot = true
 
 [AggOracle.EVMSender.EthTxManager]
 FrequencyToMonitorTxs = "1s"
