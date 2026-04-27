@@ -1,87 +1,31 @@
 [package]
 name = "miden-rpc-proxy"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.82"
-description = "JSON-RPC proxy server bridging Ethereum-style RPC to Miden network"
+description = "Stub library + miden-client integration test fixtures (proxy supplanted by gateway-fm/miden-agglayer)"
 license = "MIT"
 
 [dependencies]
-# RPC server
-jsonrpsee = { version = "0.26", features = ["server", "macros"] }
+# Miden crates — aligned with gateway-fm/miden-agglayer (the supplanting proxy
+# deployed in Kurtosis). Pinning to v0.14.4 matches the proto-build 0.14.9
+# schema (`repeated NoteHeader`) that miden-node v0.14.7+ speaks. Bumping
+# these MUST stay in lockstep with miden-agglayer's Cargo.toml or
+# sync_transactions fails with `invalid wire type` decode loops.
+miden-client = { git = "https://github.com/0xMiden/miden-client", tag = "v0.14.4", features = ["testing", "tonic"] }
+miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client", tag = "v0.14.4", package = "miden-client-sqlite-store" }
 
-# Async runtime
-tokio = { version = "1", features = ["full"] }
-
-# HTTP middleware
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors"] }
-
-# Ethereum types
-alloy-primitives = "0.8"
-alloy-rlp = "0.3"
-alloy-rpc-types = "0.8"
-alloy-consensus = { version = "0.8", features = ["k256"] }
-
-# Miden crates (agglayer-integration-tests branch, PR #1882)
-miden-client = { git = "https://github.com/0xMiden/miden-client", branch = "agglayer-integration-tests", features = ["testing", "tonic"] }
-miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client", branch = "agglayer-integration-tests", package = "miden-client-sqlite-store" }
-
-# Miden base crates (0.14-alpha, matching miden-client agglayer-integration-tests branch)
-miden-protocol = { version = "0.14.0-alpha", features = ["std"] }
-miden-standards = { version = "0.14.0-alpha" }
-miden-agglayer = { version = "0.14.0-alpha" }
-miden-tx = { version = "0.14.0-alpha" }
-miden-assembly = "0.20"
-
-# Additional dependencies
-sha3 = "0.10"
-dashmap = "6"
-rusqlite = { version = "0.37", features = ["bundled"] }
-alloy-sol-types = "0.8"
-
-# Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
-hex = "0.4"
-
-# Error handling and logging
-anyhow = "1"
-thiserror = "2"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Concurrency
-parking_lot = "0.12"
-
-# Random number generation
-rand = "0.9"
-rand_chacha = "0.9"
-
-# CLI parsing
-clap = { version = "4", features = ["derive", "env"] }
-dirs = "5"
+# Miden base crates — loose carets so cargo picks the exact subversion
+# miden-client v0.14.4 requires transitively.
+miden-protocol = { version = "0.14", features = ["std"] }
+miden-standards = { version = "0.14" }
+miden-tx = { version = "0.14" }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["full"] }
 tokio-test = "0.4"
 tempfile = "3"
 rand = "0.9"
-k256 = "0.13"
-# Enable testing feature for miden-protocol in tests (for AccountId::dummy)
-miden-protocol = { version = "0.14.0-alpha", features = ["std", "testing"] }
-
-[[bin]]
-name = "verify-notes"
-path = "src/bin/verify_notes.rs"
-
-[[bin]]
-name = "claim-note"
-path = "src/bin/claim_note.rs"
-
-[[example]]
-name = "gen_signed_tx"
-path = "examples/gen_signed_tx.rs"
 
 [profile.release]
 lto = true
