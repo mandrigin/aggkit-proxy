@@ -346,7 +346,7 @@ def _deploy_miden_proxy(plan, deployment_suffix, image, network_id, l1_rpc_url, 
 
     l1_ger_address = contract_addresses.get("l1_ger_address", "")
     if l1_ger_address:
-        env_vars["L1_GER_ADDRESS"] = l1_ger_address
+        env_vars["GER_L1_ADDRESS"] = l1_ger_address
 
     rollup_manager_address = contract_addresses.get("rollup_manager_address", "")
     if rollup_manager_address:
