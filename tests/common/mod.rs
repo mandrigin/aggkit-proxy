@@ -62,7 +62,7 @@ pub async fn create_test_client() -> Result<(TestClient, FilesystemKeyStore, Pat
     let client: TestClient = ClientBuilder::new()
         .grpc_client(&endpoint, Some(10_000))
         .store(Arc::new(store))
-        .filesystem_keystore(&keystore_path_str)
+        .filesystem_keystore(&keystore_path_str)?
         .build()
         .await?;
 

@@ -8,18 +8,17 @@ license = "MIT"
 
 [dependencies]
 # Miden crates — aligned with gateway-fm/miden-agglayer (the supplanting proxy
-# deployed in Kurtosis). Pinning to v0.14.4 matches the proto-build 0.14.9
-# schema (`repeated NoteHeader`) that miden-node v0.14.7+ speaks. Bumping
-# these MUST stay in lockstep with miden-agglayer's Cargo.toml or
-# sync_transactions fails with `invalid wire type` decode loops.
-miden-client = { git = "https://github.com/0xMiden/miden-client", tag = "v0.14.4", features = ["testing", "tonic"] }
-miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client", tag = "v0.14.4", package = "miden-client-sqlite-store" }
+# deployed in Kurtosis). Protocol 0.15.x migration: must stay in lockstep with
+# miden-agglayer's Cargo.toml. The matching miden-client (0.15.0) is not yet
+# tagged, so we track the upstream protocol-0.15 migration branch
+# (PR 0xMiden/miden-client#2224) until a v0.15.x tag ships; re-pin to the tag then.
+miden-client = { git = "https://github.com/0xMiden/miden-client", branch = "mmagician-claude/agglayer-v0.15", features = ["testing", "tonic"] }
+miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client", branch = "mmagician-claude/agglayer-v0.15", package = "miden-client-sqlite-store" }
 
-# Miden base crates — loose carets so cargo picks the exact subversion
-# miden-client v0.14.4 requires transitively.
-miden-protocol = { version = "0.14", features = ["std"] }
-miden-standards = { version = "0.14" }
-miden-tx = { version = "0.14" }
+# Miden base crates — released on crates.io at 0.15.2.
+miden-protocol = { version = "0.15", features = ["std"] }
+miden-standards = { version = "0.15" }
+miden-tx = { version = "0.15" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

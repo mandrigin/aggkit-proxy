@@ -6,16 +6,16 @@
 //! Uses miden-client and miden-protocol from agglayer-v0.1 tag.
 
 use miden_client::account::component::{
-    AccountComponent, AuthRpoFalcon512, BasicFungibleFaucet, BasicWallet,
+    AccountComponent, FungibleFaucet, BasicWallet,
 };
 use miden_client::account::{AccountBuilder, AccountType};
-use miden_client::keystore::FilesystemKeyStore;
+use miden_client::keystore::{FilesystemKeyStore, Keystore};
 use miden_client::transaction::{PaymentNoteDescription, TransactionRequestBuilder};
-use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::account::AccountStorageMode;
-use miden_protocol::asset::{Asset, FungibleAsset, TokenSymbol};
+use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
+use miden_protocol::asset::{Asset, AssetAmount, FungibleAsset, TokenSymbol};
 use miden_protocol::note::NoteType;
-use miden_protocol::Felt;
+use miden_standards::account::auth::AuthSingleSig;
+use miden_standards::account::faucets::TokenName;
 use rand::RngCore;
 
 mod common;
@@ -29,23 +29,22 @@ use common::{create_test_client, TestClient, TestError};
 async fn create_wallet(
     client: &mut TestClient,
     keystore: &FilesystemKeyStore,
-    storage_mode: AccountStorageMode,
+    storage_mode: AccountType,
 ) -> Result<miden_protocol::account::Account, TestError> {
     let mut init_seed = [0u8; 32];
     client.rng().fill_bytes(&mut init_seed);
 
-    let key_pair = AuthSecretKey::new_falcon512_rpo();
+    let key_pair = AuthSecretKey::new_falcon512_poseidon2();
     let auth_component: AccountComponent =
-        AuthRpoFalcon512::new(key_pair.public_key().to_commitment()).into();
-
-    keystore.add_key(&key_pair)?;
+        AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Poseidon2).into();
 
     let account = AccountBuilder::new(init_seed)
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(storage_mode)
+        .account_type(storage_mode)
         .with_auth_component(auth_component)
         .with_component(BasicWallet)
         .build()?;
+
+    keystore.add_key(&key_pair, account.id()).await?;
 
     client.add_account(&account, false).await?;
     Ok(account)
@@ -55,28 +54,33 @@ async fn create_wallet(
 async fn create_faucet(
     client: &mut TestClient,
     keystore: &FilesystemKeyStore,
-    storage_mode: AccountStorageMode,
+    storage_mode: AccountType,
     symbol: &str,
     max_supply: u64,
 ) -> Result<miden_protocol::account::Account, TestError> {
     let mut init_seed = [0u8; 32];
     client.rng().fill_bytes(&mut init_seed);
 
-    let key_pair = AuthSecretKey::new_falcon512_rpo();
+    let key_pair = AuthSecretKey::new_falcon512_poseidon2();
     let auth_component: AccountComponent =
-        AuthRpoFalcon512::new(key_pair.public_key().to_commitment()).into();
-
-    keystore.add_key(&key_pair)?;
+        AuthSingleSig::new(key_pair.public_key().to_commitment(), AuthScheme::Falcon512Poseidon2).into();
 
     let token_symbol = TokenSymbol::new(symbol)?;
-    let max_supply_felt = Felt::new(max_supply);
+    let max_supply_amount = AssetAmount::new(max_supply).expect("max supply is a valid asset amount");
+    let faucet_component = FungibleFaucet::builder()
+        .name(TokenName::new(symbol)?)
+        .symbol(token_symbol)
+        .decimals(8)
+        .max_supply(max_supply_amount)
+        .build()?;
 
     let account = AccountBuilder::new(init_seed)
-        .account_type(AccountType::FungibleFaucet)
-        .storage_mode(storage_mode)
+        .account_type(storage_mode)
         .with_auth_component(auth_component)
-        .with_component(BasicFungibleFaucet::new(token_symbol, 8, max_supply_felt)?)
+        .with_component(faucet_component)
         .build()?;
+
+    keystore.add_key(&key_pair, account.id()).await?;
 
     client.add_account(&account, false).await?;
     Ok(account)
@@ -94,11 +98,11 @@ mod tc_3_1_deposit_flow {
     async fn test_deposit_flow() {
         let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "DEP1", 1_000_000_000)
+        let faucet = create_faucet(&mut client, &keystore, AccountType::Public, "DEP1", 1_000_000_000)
             .await
             .expect("Failed to create faucet");
 
-        let user = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+        let user = create_wallet(&mut client, &keystore, AccountType::Public)
             .await
             .expect("Failed to create user");
 
@@ -116,11 +120,11 @@ mod tc_3_1_deposit_flow {
     async fn test_deposit_creates_note() {
         let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "DEP2", 1_000_000_000)
+        let faucet = create_faucet(&mut client, &keystore, AccountType::Public, "DEP2", 1_000_000_000)
             .await
             .unwrap();
 
-        let user = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+        let user = create_wallet(&mut client, &keystore, AccountType::Public)
             .await
             .unwrap();
 
@@ -149,15 +153,15 @@ mod tc_3_2_transfer_flow {
     async fn test_transfer_flow() {
         let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "TRF1", 1_000_000_000)
+        let faucet = create_faucet(&mut client, &keystore, AccountType::Public, "TRF1", 1_000_000_000)
             .await
             .unwrap();
 
-        let alice = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+        let alice = create_wallet(&mut client, &keystore, AccountType::Public)
             .await
             .unwrap();
 
-        let bob = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+        let bob = create_wallet(&mut client, &keystore, AccountType::Public)
             .await
             .unwrap();
 
@@ -173,7 +177,7 @@ mod tc_3_2_transfer_flow {
         // Alice consumes mint note
         let alice_notes = client.get_consumable_notes(Some(alice.id())).await.unwrap();
         if !alice_notes.is_empty() {
-            let notes_to_consume: Vec<_> = alice_notes.into_iter().map(|(n, _)| n).collect();
+            let notes_to_consume: Vec<_> = alice_notes.into_iter().map(|(n, _)| n.try_into().expect("consumable note has metadata")).collect();
             let consume_request = TransactionRequestBuilder::new()
                 .build_consume_notes(notes_to_consume)
                 .unwrap();
@@ -208,11 +212,11 @@ mod tc_3_3_withdrawal_flow {
     async fn test_withdrawal_preparation() {
         let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "WDR1", 1_000_000_000)
+        let faucet = create_faucet(&mut client, &keystore, AccountType::Public, "WDR1", 1_000_000_000)
             .await
             .unwrap();
 
-        let user = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+        let user = create_wallet(&mut client, &keystore, AccountType::Public)
             .await
             .unwrap();
 
@@ -226,7 +230,7 @@ mod tc_3_3_withdrawal_flow {
 
         let notes = client.get_consumable_notes(Some(user.id())).await.unwrap();
         if !notes.is_empty() {
-            let notes_to_consume: Vec<_> = notes.into_iter().map(|(n, _)| n).collect();
+            let notes_to_consume: Vec<_> = notes.into_iter().map(|(n, _)| n.try_into().expect("consumable note has metadata")).collect();
             let consume_request = TransactionRequestBuilder::new()
                 .build_consume_notes(notes_to_consume)
                 .unwrap();
@@ -248,13 +252,13 @@ mod tc_3_4_multi_user {
     async fn test_multi_user_scenario() {
         let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "MUSR", 10_000_000_000)
+        let faucet = create_faucet(&mut client, &keystore, AccountType::Public, "MUSR", 10_000_000_000)
             .await
             .unwrap();
 
         let mut users = Vec::new();
         for _ in 0..5 {
-            let user = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+            let user = create_wallet(&mut client, &keystore, AccountType::Public)
                 .await
                 .unwrap();
             users.push(user.id());
@@ -290,11 +294,11 @@ mod tc_3_5_error_recovery {
     async fn test_recovery_after_failure() {
         let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "RCV1", 1_000_000_000)
+        let faucet = create_faucet(&mut client, &keystore, AccountType::Public, "RCV1", 1_000_000_000)
             .await
             .unwrap();
 
-        let user = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+        let user = create_wallet(&mut client, &keystore, AccountType::Public)
             .await
             .unwrap();
 
@@ -325,11 +329,11 @@ mod tc_3_6_state_verification {
             client.get_sync_height().await.unwrap()
         };
 
-        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "STV1", 1_000_000_000)
+        let faucet = create_faucet(&mut client, &keystore, AccountType::Public, "STV1", 1_000_000_000)
             .await
             .unwrap();
 
-        let user = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+        let user = create_wallet(&mut client, &keystore, AccountType::Public)
             .await
             .unwrap();
 
@@ -361,12 +365,12 @@ mod tc_3_7_performance {
     async fn test_sequential_operations() {
         let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "PERF", 10_000_000_000)
+        let faucet = create_faucet(&mut client, &keystore, AccountType::Public, "PERF", 10_000_000_000)
             .await
             .unwrap();
 
         for i in 0..3 {
-            let user = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+            let user = create_wallet(&mut client, &keystore, AccountType::Public)
                 .await
                 .unwrap_or_else(|_| panic!("Failed to create user {}", i));
 
@@ -395,11 +399,11 @@ mod tc_3_8_edge_cases {
     async fn test_minimum_transfer() {
         let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "EDGE", 1_000_000_000)
+        let faucet = create_faucet(&mut client, &keystore, AccountType::Public, "EDGE", 1_000_000_000)
             .await
             .unwrap();
 
-        let user = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+        let user = create_wallet(&mut client, &keystore, AccountType::Public)
             .await
             .unwrap();
 
@@ -425,15 +429,15 @@ mod tc_3_9_full_cycle {
     async fn test_full_cycle() {
         let (mut client, keystore, _path) = create_test_client().await.expect("Failed to create client");
 
-        let faucet = create_faucet(&mut client, &keystore, AccountStorageMode::Public, "FULL", 10_000_000_000)
+        let faucet = create_faucet(&mut client, &keystore, AccountType::Public, "FULL", 10_000_000_000)
             .await
             .expect("Faucet creation");
 
-        let alice = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+        let alice = create_wallet(&mut client, &keystore, AccountType::Public)
             .await
             .expect("Alice creation");
 
-        let bob = create_wallet(&mut client, &keystore, AccountStorageMode::Public)
+        let bob = create_wallet(&mut client, &keystore, AccountType::Public)
             .await
             .expect("Bob creation");
 
@@ -450,7 +454,7 @@ mod tc_3_9_full_cycle {
         // Step 2: Alice consumes deposit
         let alice_notes = client.get_consumable_notes(Some(alice.id())).await.unwrap();
         if !alice_notes.is_empty() {
-            let notes_to_consume: Vec<_> = alice_notes.into_iter().map(|(n, _)| n).collect();
+            let notes_to_consume: Vec<_> = alice_notes.into_iter().map(|(n, _)| n.try_into().expect("consumable note has metadata")).collect();
             let consume_request = TransactionRequestBuilder::new()
                 .build_consume_notes(notes_to_consume)
                 .unwrap();
@@ -476,7 +480,7 @@ mod tc_3_9_full_cycle {
         // Step 4: Bob consumes transfer
         let bob_notes = client.get_consumable_notes(Some(bob.id())).await.unwrap();
         if !bob_notes.is_empty() {
-            let notes_to_consume: Vec<_> = bob_notes.into_iter().map(|(n, _)| n).collect();
+            let notes_to_consume: Vec<_> = bob_notes.into_iter().map(|(n, _)| n.try_into().expect("consumable note has metadata")).collect();
             let consume_request = TransactionRequestBuilder::new()
                 .build_consume_notes(notes_to_consume)
                 .unwrap();
