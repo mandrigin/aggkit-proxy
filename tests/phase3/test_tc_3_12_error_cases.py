@@ -15,10 +15,14 @@ class TestErrorCases:
 
     def test_invalid_method(self, proxy_client):
         """TC-3.12.1: Invalid RPC method returns error."""
-        with pytest.raises(RPCError) as exc_info:
+        # Catch by JSON-RPC `.code`, not the RPCError class: pytest loads
+        # conftest as the top-level `conftest` module, so the fixture raises
+        # `conftest.MidenRPCError` while the imported `tests.conftest.RPCError`
+        # is a different class object and would not match `pytest.raises`.
+        with pytest.raises(Exception) as exc_info:
             proxy_client.rpc("invalid_method_name")
 
-        assert exc_info.value.code != 0
+        assert getattr(exc_info.value, "code", 0) != 0
 
     def test_invalid_params_type(self, proxy_client):
         """TC-3.12.2: Invalid parameter types return error."""

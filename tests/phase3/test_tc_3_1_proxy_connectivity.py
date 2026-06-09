@@ -43,10 +43,13 @@ class TestProxyConnectivity:
 
     def test_proxy_error_handling(self, proxy_client):
         """TC-3.1.4: Proxy returns proper errors for invalid methods."""
-        from tests.conftest import RPCError
-
-        with pytest.raises(RPCError) as exc_info:
+        # NB: catch by JSON-RPC `.code` rather than the RPCError class. pytest
+        # loads conftest.py as the top-level `conftest` module, so the fixture
+        # raises `conftest.MidenRPCError`, while `from tests.conftest import
+        # RPCError` would be a *different* class object — `pytest.raises` on it
+        # wouldn't match. Asserting the `.code` attribute is import-path-agnostic.
+        with pytest.raises(Exception) as exc_info:
             proxy_client.rpc("nonexistent_method_xyz", {})
 
-        # Should get a proper JSON-RPC error
-        assert exc_info.value.code != 0
+        # Should get a proper JSON-RPC error (-32601 = method not found)
+        assert getattr(exc_info.value, "code", 0) != 0
