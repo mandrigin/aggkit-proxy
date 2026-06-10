@@ -11,9 +11,15 @@ This eliminates the ~600 lines of shell post-provisioning in e2e-test.sh.
 
 # Import kurtosis-cdk modules for L1/agglayer infrastructure
 kurtosis_cdk = import_module("github.com/0xPolygon/kurtosis-cdk/main.star")
-kurtosis_cdk_input_parser = import_module("github.com/0xPolygon/kurtosis-cdk/src/package_io/input_parser.star")
-kurtosis_cdk_constants = import_module("github.com/0xPolygon/kurtosis-cdk/src/package_io/constants.star")
-kurtosis_cdk_contracts = import_module("github.com/0xPolygon/kurtosis-cdk/src/contracts/util.star")
+kurtosis_cdk_input_parser = import_module(
+    "github.com/0xPolygon/kurtosis-cdk/src/package_io/input_parser.star"
+)
+kurtosis_cdk_constants = import_module(
+    "github.com/0xPolygon/kurtosis-cdk/src/package_io/constants.star"
+)
+kurtosis_cdk_contracts = import_module(
+    "github.com/0xPolygon/kurtosis-cdk/src/contracts/util.star"
+)
 
 # Local modules
 miden_services = import_module("./miden_services.star")
@@ -63,6 +69,7 @@ def get_contract_addresses(plan):
         "l2_ger_address": result["extract.l2_ger_address"],
     }
 
+
 # Default deployment stages - skip OP Stack, deploy Miden instead
 DEFAULT_DEPLOYMENT_STAGES = {
     "deploy_l1": True,
@@ -82,24 +89,22 @@ MIDEN_DEFAULTS = {
     # Miden network ID (assigned by Agglayer)
     "miden_network_id": 2,
     "miden_chain_id": 2,
-
     # Miden node configuration
     "miden_node_image": "miden-infra/miden-node:agglayer-v0.1",
     "miden_node_port": 57291,
-
     # Miden proxy configuration (miden-agglayer)
     "miden_proxy_image": "miden-infra/miden-proxy:latest",
     "miden_proxy_port": 8546,
     "miden_proxy_external_port": 8123,
-
     # Aggkit deployment (enabled - required for GER injection)
     # The aggoracle component injects Global Exit Root updates from L1 to L2
     # This is required for deposits to become claimable
     "deploy_aggkit": True,
-
+    # Standalone L2->L1 auto-claimer (sponsors claimAsset on L1). Opt-in:
+    # enable with `miden: {deploy_autoclaimer: true}`.
+    "deploy_autoclaimer": False,
     # Web UI for sending deposits (bridge ETH from L1 to Miden)
     "deploy_web_ui": True,
-
     # pgweb for DB browsing (optional)
     "deploy_pgweb": True,
     "pgweb_port": 8082,
@@ -147,10 +152,14 @@ def run(plan, args={}):
     plan.print("Step 1: Deploying L1 + Agglayer infrastructure...")
 
     # Get parsed args from kurtosis-cdk for contract addresses
-    (parsed_stages, parsed_args, op_args) = kurtosis_cdk_input_parser.parse_args(plan, cdk_args)
+    (parsed_stages, parsed_args, op_args) = kurtosis_cdk_input_parser.parse_args(
+        plan, cdk_args
+    )
 
     # Deploy L1 using kurtosis-cdk's L1 launcher
-    l1_launcher = import_module("github.com/0xPolygon/kurtosis-cdk/src/l1/launcher.star")
+    l1_launcher = import_module(
+        "github.com/0xPolygon/kurtosis-cdk/src/l1/launcher.star"
+    )
     l1_context = None
     if deployment_stages.get("deploy_l1", False):
         plan.print("Deploying local L1...")
@@ -166,7 +175,9 @@ def run(plan, args={}):
     contract_setup_addresses = {}
     if deployment_stages.get("deploy_agglayer_contracts_on_l1", False):
         plan.print("Deploying agglayer contracts on L1...")
-        agglayer_contracts = import_module("github.com/0xPolygon/kurtosis-cdk/src/contracts/agglayer.star")
+        agglayer_contracts = import_module(
+            "github.com/0xPolygon/kurtosis-cdk/src/contracts/agglayer.star"
+        )
         agglayer_contracts.run(plan, parsed_args, deployment_stages, op_args)
         # Use our own address extraction with correct field names
         contract_setup_addresses = get_contract_addresses(plan)
@@ -174,7 +185,9 @@ def run(plan, args={}):
     # Deploy databases
     if deployment_stages.get("deploy_databases", False):
         plan.print("Deploying databases...")
-        databases = import_module("github.com/0xPolygon/kurtosis-cdk/src/chain/shared/databases.star")
+        databases = import_module(
+            "github.com/0xPolygon/kurtosis-cdk/src/chain/shared/databases.star"
+        )
         databases.run(plan, parsed_args)
 
     # Deploy agglayer
@@ -200,6 +213,7 @@ def run(plan, args={}):
         contract_setup_addresses,
         miden_context,
         deploy_aggkit=miden_args.get("deploy_aggkit", False),
+        deploy_autoclaimer=miden_args.get("deploy_autoclaimer", False),
     )
 
     # Step 4: Deploy optional services (pgweb)
@@ -263,8 +277,14 @@ def _print_summary(plan, l1_context, miden_context, bridge_context, miden_args):
     if miden_context.get("web_ui_url"):
         plan.print("  Bridge Web UI: " + str(miden_context.get("web_ui_url")))
     if miden_args.get("deploy_pgweb", False):
-        plan.print("  pgweb (DB): http://localhost:" + str(miden_args.get("pgweb_port", 8082)))
+        plan.print(
+            "  pgweb (DB): http://localhost:" + str(miden_args.get("pgweb_port", 8082))
+        )
     plan.print("")
     plan.print("Test proxy:")
-    plan.print('  curl -X POST ' + str(miden_context.get("proxy_url", "")) + ' -H "Content-Type: application/json" -d \'{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}\'')
+    plan.print(
+        "  curl -X POST "
+        + str(miden_context.get("proxy_url", ""))
+        + ' -H "Content-Type: application/json" -d \'{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}\''
+    )
     plan.print("")

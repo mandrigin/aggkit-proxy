@@ -5,6 +5,11 @@ Deploys the zkevm-bridge-service configured to use Miden proxy as L2.
 Also deploys aggkit components (aggsender, aggoracle) with Miden L2 configuration.
 """
 
+# kurtosis-cdk wallet helper (for funding the claim sponsor on L1).
+kurtosis_cdk_wallet = import_module(
+    "github.com/0xPolygon/kurtosis-cdk/src/wallet/wallet.star"
+)
+
 # Port definitions
 BRIDGE_RPC_PORT = 8080
 BRIDGE_GRPC_PORT = 9090
@@ -15,7 +20,14 @@ DOCKER_PROJECT_LABEL = "com.docker.compose.project"
 BRIDGE_PROJECT_GROUP = "miden"
 
 
-def deploy(plan, cdk_args, contract_setup_addresses, miden_context, deploy_aggkit=False):
+def deploy(
+    plan,
+    cdk_args,
+    contract_setup_addresses,
+    miden_context,
+    deploy_aggkit=False,
+    deploy_autoclaimer=False,
+):
     """
     Deploy bridge infrastructure configured for Miden L2.
 
@@ -25,6 +37,7 @@ def deploy(plan, cdk_args, contract_setup_addresses, miden_context, deploy_aggki
         contract_setup_addresses: Contract addresses from L1 deployment
         miden_context: Miden services context (contains L2 RPC URL)
         deploy_aggkit: Whether to deploy aggkit (disabled by default for Miden)
+        deploy_autoclaimer: Whether to deploy the standalone L2->L1 auto-claimer
 
     Returns:
         dict: Bridge service context
@@ -57,17 +70,36 @@ def deploy(plan, cdk_args, contract_setup_addresses, miden_context, deploy_aggki
             l2_rpc_url,
         )
 
-    bridge_url = "http://zkevm-bridge-service{}:{}".format(deployment_suffix, BRIDGE_RPC_PORT)
+    bridge_url = "http://zkevm-bridge-service{}:{}".format(
+        deployment_suffix, BRIDGE_RPC_PORT
+    )
+
+    # Standalone L2->L1 auto-claimer: sponsors claimAsset on L1 for ready exits.
+    autoclaim_service = None
+    if deploy_autoclaimer:
+        autoclaim_service = _deploy_autoclaimer(
+            plan,
+            deployment_suffix,
+            cdk_args,
+            contract_setup_addresses,
+            l1_rpc_url,
+            bridge_url,
+        )
 
     return {
         "bridge_service": bridge_service,
         "aggkit_service": aggkit_service,
+        "autoclaim_service": autoclaim_service,
         "rpc_url": bridge_url,
-        "grpc_url": "http://zkevm-bridge-service{}:{}".format(deployment_suffix, BRIDGE_GRPC_PORT),
+        "grpc_url": "http://zkevm-bridge-service{}:{}".format(
+            deployment_suffix, BRIDGE_GRPC_PORT
+        ),
     }
 
 
-def _deploy_bridge_service(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc_url, l2_rpc_url):
+def _deploy_bridge_service(
+    plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc_url, l2_rpc_url
+):
     """Deploy zkevm-bridge-service with Miden L2 configuration."""
     service_name = "zkevm-bridge-service" + deployment_suffix
 
@@ -75,7 +107,9 @@ def _deploy_bridge_service(plan, deployment_suffix, cdk_args, contract_addresses
     l1_bridge_address = contract_addresses.get("l1_bridge_address", "")
     l1_ger_address = contract_addresses.get("l1_ger_address", "")
     rollup_manager_address = contract_addresses.get("rollup_manager_address", "")
-    rollup_manager_block_number = contract_addresses.get("rollup_manager_block_number", "0")
+    rollup_manager_block_number = contract_addresses.get(
+        "rollup_manager_block_number", "0"
+    )
 
     # For Miden, we use synthetic L2 addresses (proxy handles the mapping)
     # These addresses are reported by the proxy's eth_call responses
@@ -110,7 +144,9 @@ def _deploy_bridge_service(plan, deployment_suffix, cdk_args, contract_addresses
                     "l1_ger_address": l1_ger_address,
                     "rollup_manager_address": rollup_manager_address,
                     "rollup_manager_block_number": rollup_manager_block_number,
-                    "rollup_address": contract_addresses.get("rollup_address", l1_bridge_address),
+                    "rollup_address": contract_addresses.get(
+                        "rollup_address", l1_bridge_address
+                    ),
                     "l2_bridge_address": l2_bridge_address,
                     "l2_ger_address": l2_ger_address,
                     "l2_keystore_password": cdk_args.get("l2_keystore_password", ""),
@@ -132,7 +168,10 @@ def _deploy_bridge_service(plan, deployment_suffix, cdk_args, contract_addresses
     return plan.add_service(
         name=service_name,
         config=ServiceConfig(
-            image=cdk_args.get("zkevm_bridge_service_image", "hermeznetwork/zkevm-bridge-service:v0.6.0-RC1"),
+            image=cdk_args.get(
+                "zkevm_bridge_service_image",
+                "hermeznetwork/zkevm-bridge-service:v0.6.0-RC1",
+            ),
             ports={
                 "rpc": PortSpec(
                     number=BRIDGE_RPC_PORT,
@@ -165,7 +204,9 @@ def _deploy_bridge_service(plan, deployment_suffix, cdk_args, contract_addresses
     )
 
 
-def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc_url, l2_rpc_url):
+def _deploy_aggkit(
+    plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc_url, l2_rpc_url
+):
     """
     Deploy aggkit aggoracle configured for Miden L2.
 
@@ -196,13 +237,29 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
                     "l2_chain_id": cdk_args.get("l2_chain_id", 2),
                     "l1_ger_address": contract_addresses.get("l1_ger_address", ""),
                     "l2_ger_address": contract_addresses.get("l2_ger_address", ""),
-                    "l1_bridge_address": contract_addresses.get("l1_bridge_address", ""),
-                    "l2_bridge_address": contract_addresses.get("l2_bridge_address", ""),
-                    "rollup_manager_address": contract_addresses.get("rollup_manager_address", ""),
-                    "rollup_manager_block_number": contract_addresses.get("rollup_manager_block_number", "1"),
-                    "rollup_address": contract_addresses.get("rollup_address", contract_addresses.get("l1_bridge_address", "")),
-                    "pol_token_address": contract_addresses.get("pol_token_address", ""),
-                    "agglayer_url": cdk_args.get("agglayer_grpc_url", "http://agglayer" + deployment_suffix + ":4443"),
+                    "l1_bridge_address": contract_addresses.get(
+                        "l1_bridge_address", ""
+                    ),
+                    "l2_bridge_address": contract_addresses.get(
+                        "l2_bridge_address", ""
+                    ),
+                    "rollup_manager_address": contract_addresses.get(
+                        "rollup_manager_address", ""
+                    ),
+                    "rollup_manager_block_number": contract_addresses.get(
+                        "rollup_manager_block_number", "1"
+                    ),
+                    "rollup_address": contract_addresses.get(
+                        "rollup_address",
+                        contract_addresses.get("l1_bridge_address", ""),
+                    ),
+                    "pol_token_address": contract_addresses.get(
+                        "pol_token_address", ""
+                    ),
+                    "agglayer_url": cdk_args.get(
+                        "agglayer_grpc_url",
+                        "http://agglayer" + deployment_suffix + ":4443",
+                    ),
                     "l2_keystore_password": cdk_args.get("l2_keystore_password", ""),
                 },
             ),
@@ -228,7 +285,11 @@ def _deploy_aggkit(plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc
                 ),
             },
             # Run aggoracle (GER injection) and aggsender (L2→L1 certificate submission)
-            cmd=["run", "--cfg=/etc/aggkit/config.toml", "--components=aggoracle,aggsender"],
+            cmd=[
+                "run",
+                "--cfg=/etc/aggkit/config.toml",
+                "--components=aggoracle,aggsender",
+            ],
             # Docker Desktop grouping label
             labels={
                 DOCKER_PROJECT_LABEL: BRIDGE_PROJECT_GROUP,
@@ -430,4 +491,102 @@ InitialBlock = "{{.rollup_manager_block_number}}"
 # L2GERSync — syncs L2 GER for AggSender
 [L2GERSync]
 BlockFinality = "LatestBlock"
+"""
+
+
+def _deploy_autoclaimer(
+    plan, deployment_suffix, cdk_args, contract_addresses, l1_rpc_url, bridge_url
+):
+    """
+    Deploy the standalone zkevm-autoclaimer for L2->L1 exits.
+
+    The claim lands on L1, so "L2RPC" points at the L1 node and
+    PolygonBridgeAddress at the L1 bridge. SourceNetworkID restricts sponsorship
+    to our own rollup's exits so we don't pay gas to claim co-tenant rollups on
+    a shared rollup manager.
+    """
+    service_name = "zkevm-autoclaimer" + deployment_suffix
+    l1_bridge_address = contract_addresses.get("l1_bridge_address", "")
+    source_network_id = cdk_args.get(
+        "zkevm_autoclaimer_source_network_id", cdk_args.get("l2_network_id", 1)
+    )
+
+    # The claim sponsor pays gas for claimAsset on L1, so it must hold L1 funds.
+    kurtosis_cdk_wallet.fund(
+        plan,
+        address=cdk_args.get("l2_claimsponsor_address"),
+        rpc_url=l1_rpc_url,
+        funder_private_key=cdk_args.get("l1_preallocated_private_key"),
+        value="10ether",
+    )
+
+    config_artifact = plan.render_templates(
+        name="autoclaim-config-artifact" + deployment_suffix,
+        config={
+            "autoclaim-config.toml": struct(
+                template=_get_autoclaim_config_template(),
+                data={
+                    "log_level": cdk_args.get("log_level", "info"),
+                    "bridge_url": bridge_url,
+                    "l1_rpc_url": l1_rpc_url,
+                    "l1_bridge_address": l1_bridge_address,
+                    "source_network_id": source_network_id,
+                    "l2_keystore_password": cdk_args.get("l2_keystore_password", ""),
+                },
+            ),
+        },
+    )
+
+    # Reuse the funded claim sponsor keystore from the contracts service.
+    claimsponsor_keystore = plan.store_service_files(
+        name="autoclaim-claimsponsor-keystore" + deployment_suffix,
+        service_name="contracts" + deployment_suffix,
+        src="/opt/keystores/claimsponsor.keystore",
+    )
+
+    return plan.add_service(
+        name=service_name,
+        config=ServiceConfig(
+            # Patched bridge-service image: fixes /pending-bridges rollup
+            # disambiguation + adds [AutoClaim].SourceNetworkID.
+            image=cdk_args.get(
+                "zkevm_autoclaimer_image",
+                "zkevm-bridge-service:v0.6.4-RC2-pendingbridges",
+            ),
+            files={
+                "/etc/zkevm": Directory(
+                    artifact_names=[config_artifact, claimsponsor_keystore],
+                ),
+            },
+            entrypoint=["/app/zkevm-autoclaimer"],
+            cmd=["run", "--cfg", "/etc/zkevm/autoclaim-config.toml"],
+            labels={
+                DOCKER_PROJECT_LABEL: BRIDGE_PROJECT_GROUP,
+            },
+        ),
+    )
+
+
+def _get_autoclaim_config_template():
+    """Return the autoclaim config template for the standalone L2->L1 claimer."""
+    return """
+# zkevm-autoclaimer config for Miden L2->L1 (auto-generated by miden-cdk)
+
+[Log]
+Level = "{{.log_level}}"
+Outputs = ["stderr"]
+
+[AutoClaim]
+AuthorizedClaimMessageAddresses = []
+AutoClaimInterval = "10s"
+MaxNumberOfClaimsPerGroup = 0
+BridgeURL = "{{.bridge_url}}"
+# Only sponsor bridges originating from our own rollup's network id.
+SourceNetworkID = {{.source_network_id}}
+
+[BlockchainManager]
+L2RPC = "{{.l1_rpc_url}}"
+PrivateKey = {Path = "/etc/zkevm/claimsponsor.keystore", Password = "{{.l2_keystore_password}}"}
+PolygonBridgeAddress = "{{.l1_bridge_address}}"
+ClaimCompressorAddress = "0x0000000000000000000000000000000000000000"
 """
