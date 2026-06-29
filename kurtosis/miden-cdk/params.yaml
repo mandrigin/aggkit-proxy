@@ -32,6 +32,10 @@ deployment_stages:
 
 # Miden-specific configuration
 miden:
+  # L1-snapshot-only: skip the L2 miden node/proxy + bridge services so fixture
+  # generation needs no miden-infra images. Flip to true (or drop) for a full
+  # in-kurtosis stack. main.star gates Steps 2-3 on this.
+  deploy_miden_services: false
   # Miden network ID (assigned by Agglayer)
   miden_network_id: 2
   miden_chain_id: 2

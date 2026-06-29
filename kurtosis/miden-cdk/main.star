@@ -196,28 +196,36 @@ def run(plan, args={}):
         agglayer = import_module("github.com/0xPolygon/kurtosis-cdk/src/agglayer.star")
         agglayer.run(plan, deployment_stages, parsed_args, contract_setup_addresses)
 
-    # Step 2: Deploy Miden services (node + proxy)
-    plan.print("Step 2: Deploying Miden services...")
-    miden_context = miden_services.deploy(
-        plan,
-        miden_args,
-        contract_setup_addresses,
-        parsed_args,
-    )
+    # Steps 2-3: Deploy the Miden L2 services + bridge. Skippable via
+    # `miden: {deploy_miden_services: false}` for L1-snapshot-only runs (fixture
+    # generation), which need only the kurtosis-cdk L1 + agglayer contracts and
+    # must not require the miden-infra proxy/node images to be present locally.
+    miden_context = {}
+    bridge_context = {}
+    if miden_args.get("deploy_miden_services", True):
+        plan.print("Step 2: Deploying Miden services...")
+        miden_context = miden_services.deploy(
+            plan,
+            miden_args,
+            contract_setup_addresses,
+            parsed_args,
+        )
 
-    # Step 3: Deploy bridge service configured to use Miden proxy
-    plan.print("Step 3: Deploying bridge services with Miden L2...")
-    bridge_context = bridge_service.deploy(
-        plan,
-        parsed_args,
-        contract_setup_addresses,
-        miden_context,
-        deploy_aggkit=miden_args.get("deploy_aggkit", False),
-        deploy_autoclaimer=miden_args.get("deploy_autoclaimer", False),
-    )
+        # Step 3: Deploy bridge service configured to use Miden proxy
+        plan.print("Step 3: Deploying bridge services with Miden L2...")
+        bridge_context = bridge_service.deploy(
+            plan,
+            parsed_args,
+            contract_setup_addresses,
+            miden_context,
+            deploy_aggkit=miden_args.get("deploy_aggkit", False),
+            deploy_autoclaimer=miden_args.get("deploy_autoclaimer", False),
+        )
+    else:
+        plan.print("Steps 2-3: Skipping Miden + bridge services (deploy_miden_services=false; L1-snapshot only)")
 
-    # Step 4: Deploy optional services (pgweb)
-    if miden_args.get("deploy_pgweb", False):
+    # Step 4: Deploy optional services (pgweb) — only when miden services are up
+    if miden_context and miden_args.get("deploy_pgweb", False):
         plan.print("Step 4: Deploying pgweb for DB browsing...")
         _deploy_pgweb(plan, parsed_args, miden_args)
 
