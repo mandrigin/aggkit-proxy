@@ -17,35 +17,26 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/topology.sh"
 
-# Auto-detect miden-proxy container if not specified
-if [[ -n "${1:-}" ]]; then
-    CONTAINER_NAME="$1"
-else
-    CONTAINER_NAME=$(docker ps --format '{{.Names}}' | grep -E '^miden-proxy' | head -1)
-    if [[ -z "$CONTAINER_NAME" ]]; then
-        echo "Error: No miden-proxy container found"
-        echo "Available containers:"
-        docker ps --format '  {{.Names}}' | grep -i miden || echo "  (none)"
-        exit 1
-    fi
+# Resolve the proxy container: explicit $1 wins, else the topology default
+# (compose: miden-agglayer-miden-agglayer-1, kurtosis: miden-proxy-001).
+PROXY_REF="${1:-$AGGLAYER_PROXY_CONTAINER}"
+CONTAINER_NAME=$(topology_cid "$PROXY_REF")
+if [[ -z "$CONTAINER_NAME" ]]; then
+    echo "Error: proxy container '$PROXY_REF' not found or not running (TOPOLOGY=$TOPOLOGY)"
+    echo ""
+    echo "Available containers:"
+    docker ps --format '  {{.Names}}' | grep -i miden || echo "  (none)"
+    exit 1
 fi
 
 echo "╔══════════════════════════════════════════════════════════════════╗"
 echo "║           CLAIM Note Verification Tool                           ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo ""
-echo "Proxy container: $CONTAINER_NAME"
+echo "Proxy container: $PROXY_REF ($CONTAINER_NAME) — TOPOLOGY=$TOPOLOGY"
 echo ""
-
-# Check if container exists
-if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    echo "Error: Container '$CONTAINER_NAME' not found or not running"
-    echo ""
-    echo "Available containers:"
-    docker ps --format '  {{.Names}}' | grep -i miden || echo "  (none)"
-    exit 1
-fi
 
 # Get logs and parse CLAIM notes
 echo "Parsing proxy logs for CLAIM notes..."

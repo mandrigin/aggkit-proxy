@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
 # List all notes from the Miden node's SQLite database.
-# Usage: ./scripts/list-notes.sh [enclave] [service]
-#   enclave  - Kurtosis enclave name (default: miden-cdk)
-#   service  - Miden node service name (default: miden-node-001)
+#
+# Works against both local stacks (see scripts/lib/topology.sh):
+#   TOPOLOGY=compose  ./scripts/list-notes.sh   # miden-agglayer docker-compose stack
+#   TOPOLOGY=kurtosis ./scripts/list-notes.sh   # kurtosis miden-cdk enclave
+# Auto-detects when omitted. Override node container / DB with MIDEN_NODE_CONTAINER / MIDEN_NODE_DB.
 
 set -euo pipefail
-
-ENCLAVE="${1:-miden-cdk}"
-SERVICE="${2:-miden-node-001}"
-DB_PATH="/app/data/miden-store.sqlite3"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/topology.sh"
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-CONTAINER=$(docker ps --filter "name=$SERVICE" --format '{{.ID}}' | head -1)
+CONTAINER=$(topology_cid "$MIDEN_NODE_CONTAINER")
 if [ -z "$CONTAINER" ]; then
-  echo "Error: container matching '$SERVICE' not found" >&2
+  echo "Error: miden-node container '$MIDEN_NODE_CONTAINER' not found (TOPOLOGY=$TOPOLOGY)" >&2
+  exit 1
+fi
+
+DB_PATH=$(topology_node_db)
+if [ -z "$DB_PATH" ]; then
+  echo "Error: could not locate miden-store.sqlite3 in $MIDEN_NODE_CONTAINER under $MIDEN_NODE_DATA_DIR" >&2
   exit 1
 fi
 
 # Copy DB + WAL + SHM for consistent read
-docker cp "$CONTAINER:$DB_PATH"     "$TMPDIR/miden-store.sqlite3"
+docker cp "$CONTAINER:$DB_PATH"       "$TMPDIR/miden-store.sqlite3"
 docker cp "$CONTAINER:${DB_PATH}-wal" "$TMPDIR/miden-store.sqlite3-wal" 2>/dev/null || true
 docker cp "$CONTAINER:${DB_PATH}-shm" "$TMPDIR/miden-store.sqlite3-shm" 2>/dev/null || true
 

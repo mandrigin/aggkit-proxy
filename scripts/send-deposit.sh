@@ -19,6 +19,8 @@
 #
 
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/topology.sh"
 
 # ============================================================================
 # Address conversion utilities (Miden <-> Eth)
@@ -81,8 +83,8 @@ if [[ -z "$BRIDGE_ADDRESS" ]]; then
     exit 1
 fi
 
-# Destination network (Miden = 2)
-DEST_NETWORK=2
+# Destination network — Miden L2 network id (kurtosis=2, compose=1; override via MIDEN_NETWORK_ID)
+DEST_NETWORK="${MIDEN_NETWORK_ID}"
 
 # Get L1 RPC - try Docker first (faster), then kurtosis
 L1_RPC="${L1_RPC:-}"

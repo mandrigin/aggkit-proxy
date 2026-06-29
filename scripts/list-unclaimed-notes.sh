@@ -2,22 +2,28 @@
 #
 # list-unclaimed-notes.sh - List unclaimed P2ID notes from the Miden node
 #
-# Usage: ./scripts/list-unclaimed-notes.sh [miden-node-container]
+# Usage: TOPOLOGY=compose|kurtosis ./scripts/list-unclaimed-notes.sh [miden-node-container]
 #
-# Queries the miden-node's SQLite store for notes that have assets
-# but have not been consumed (i.e., unclaimed P2ID notes from bridge deposits).
+# Queries the miden-node's SQLite store for notes that have assets but have not
+# been consumed (i.e., unclaimed P2ID notes from bridge deposits). Works against
+# both local stacks via scripts/lib/topology.sh; pass a container override as $1.
 
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/topology.sh"
 
-# Auto-detect miden-node container
-if [[ -n "${1:-}" ]]; then
-    NODE_CONTAINER="$1"
-else
-    NODE_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E '^miden-node' | head -1)
-    if [[ -z "$NODE_CONTAINER" ]]; then
-        echo "Error: No miden-node container found"
-        exit 1
-    fi
+# Resolve miden-node container (explicit $1 wins over the topology default)
+NODE_CONTAINER="${1:-$MIDEN_NODE_CONTAINER}"
+NODE_CID=$(topology_cid "$NODE_CONTAINER")
+if [[ -z "$NODE_CID" ]]; then
+    echo "Error: miden-node container '$NODE_CONTAINER' not found (TOPOLOGY=$TOPOLOGY)"
+    exit 1
+fi
+
+DB_PATH=$(MIDEN_NODE_CONTAINER="$NODE_CONTAINER" topology_node_db)
+if [[ -z "$DB_PATH" ]]; then
+    echo "Error: could not locate miden-store.sqlite3 in $NODE_CONTAINER under $MIDEN_NODE_DATA_DIR"
+    exit 1
 fi
 
 # Create temp dir for DB copy
@@ -25,9 +31,9 @@ TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
 # Copy SQLite DB with WAL (required for fresh data)
-docker cp "$NODE_CONTAINER:/app/data/miden-store.sqlite3" "$TMPDIR/miden-store.sqlite3" 2>/dev/null
-docker cp "$NODE_CONTAINER:/app/data/miden-store.sqlite3-wal" "$TMPDIR/miden-store.sqlite3-wal" 2>/dev/null || true
-docker cp "$NODE_CONTAINER:/app/data/miden-store.sqlite3-shm" "$TMPDIR/miden-store.sqlite3-shm" 2>/dev/null || true
+docker cp "$NODE_CID:$DB_PATH" "$TMPDIR/miden-store.sqlite3" 2>/dev/null
+docker cp "$NODE_CID:${DB_PATH}-wal" "$TMPDIR/miden-store.sqlite3-wal" 2>/dev/null || true
+docker cp "$NODE_CID:${DB_PATH}-shm" "$TMPDIR/miden-store.sqlite3-shm" 2>/dev/null || true
 
 DB="$TMPDIR/miden-store.sqlite3"
 

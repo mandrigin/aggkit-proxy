@@ -121,34 +121,37 @@ if [[ -n "$MIDEN_STORE_PATH" ]]; then
     export MIDEN_STORE_PATH
 fi
 
-BINARY="$PROJECT_ROOT/target/release/claim-note"
+# The claim-note Rust binary (src/bin/claim_note.rs) was removed when the
+# vibecoded proxy lib was supplanted by miden-agglayer. Claiming now happens in
+# the miden-agglayer service; this shim keeps the pure address helpers working
+# and redirects the binary-backed commands there.
+binary_gone() {
+    cat >&2 <<EOF
+claim-note: the '$1' command was removed — the proxy is now miden-agglayer.
 
-# Build if --rebuild flag or binary doesn't exist
-maybe_build() {
-    if [[ "$REBUILD" == "true" ]]; then
-        echo "Rebuilding claim-note binary..."
-        cargo build --release --bin claim-note --manifest-path "$PROJECT_ROOT/Cargo.toml" 2>&1 | grep -v "Compiling\|Downloading\|Downloaded" || true
-    elif [[ ! -f "$BINARY" ]]; then
-        echo "Binary not found, building..."
-        cargo build --release --bin claim-note --manifest-path "$PROJECT_ROOT/Cargo.toml" 2>&1 | grep -v "Compiling\|Downloading\|Downloaded" || true
-    fi
+Claims are handled by the miden-agglayer service:
+  - L1->L2 deposits are auto-claimed by the running service (no manual step).
+  - L2->L1 exits: use the 'bridge-autoclaim' binary, or claim manually with
+    'bridge-out-tool', from the miden-agglayer repo:
+        docker exec <miden-agglayer-proxy-container> bridge-out-tool --help
+  - Inspect notes on the node with:
+        ./scripts/list-notes.sh
+        ./scripts/list-unclaimed-notes.sh
+
+The address-conversion helpers still work here:
+  $0 miden-to-eth <addr>
+  $0 eth-to-miden <addr>
+EOF
+    exit 2
 }
 
 case "$COMMAND" in
     address|addr|whoami)
-        maybe_build
-        exec "$BINARY" derive-address
+        binary_gone "address"
         ;;
 
     claim)
-        if [[ $# -lt 1 ]]; then
-            echo "Usage: $0 claim <note-id>"
-            exit 1
-        fi
-        NOTE_ID="$1"
-
-        maybe_build
-        exec "$BINARY" claim "$NOTE_ID"
+        binary_gone "claim"
         ;;
 
     miden-to-eth|m2e)

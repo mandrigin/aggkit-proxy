@@ -46,3 +46,8 @@ logs/
 .claude/
 .beads/
 .logs/
+
+# Generated kurtosis aggkit runtime configs (keystores, env, inspect dumps)
+scripts/.aggkit-config/
+scripts/.aggkit-001-config/
+*.bak

@@ -507,8 +507,10 @@ def _deploy_autoclaimer(
     """
     service_name = "zkevm-autoclaimer" + deployment_suffix
     l1_bridge_address = contract_addresses.get("l1_bridge_address", "")
+    # Source = the network the L2->L1 exit originated from (the Miden L2). Default
+    # to l2_network_id, then to the kurtosis miden net id (2) — never a stray 1.
     source_network_id = cdk_args.get(
-        "zkevm_autoclaimer_source_network_id", cdk_args.get("l2_network_id", 1)
+        "zkevm_autoclaimer_source_network_id", cdk_args.get("l2_network_id", 2)
     )
 
     # The claim sponsor pays gas for claimAsset on L1, so it must hold L1 funds.
